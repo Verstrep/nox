@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --color-nox-base: #08090b;
+  --color-nox-surface: #0f1114;
+  --color-nox-border: #1e2228;
+  --color-nox-muted: #8b93a1;
+  --color-nox-accent: #5eead4;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-nox-base);
+  color: #e6e9ef;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: rgb(94 234 212 / 0.25);
+}

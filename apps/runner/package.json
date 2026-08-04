@@ -1,0 +1,17 @@
+{
+  "name": "@nox/runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runner local NOX - serveur HTTP minimal",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@nox/shared": "*"
+  }
+}
