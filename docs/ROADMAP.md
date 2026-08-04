@@ -21,25 +21,34 @@ Légende : ✅ terminée · 🟢 active · ⬜ non commencée
 - Scripts `lint`, `typecheck`, `build` opérationnels à la racine.
 
 **Terminée.** Voir [PROJECT_STATE.md](PROJECT_STATE.md) pour le détail des validations exécutées.
+Les scripts `test`, `db:generate`, `db:migrate` et `db:studio` ont été ajoutés à l'étape 2.
 
 ---
 
-## 🟢 2. Gestion locale des projets
-
-**Étape active.**
+## ✅ 2. Gestion locale des projets — `TASK-002`
 
 **Objectif** : créer un projet NOX et l'associer à un repository local.
 
-- Persistance locale (choix de la solution à consigner dans [DECISIONS.md](DECISIONS.md)).
-- Création, liste et consultation d'un projet.
-- Enregistrement et vérification du chemin d'un repository Git.
-- Premières routes d'API dans `apps/web`.
+- Persistance locale : Prisma + SQLite, dans `packages/database`
+  ([D-018](DECISIONS.md#d-018--prisma-comme-couche-daccès-aux-données),
+  [D-019](DECISIONS.md#d-019--sqlite-comme-persistance-locale-de-la-v1)).
+- Migration initiale versionnée, modèle `Project`.
+- Création, liste et consultation d'un projet depuis l'interface.
+- Vérification serveur du chemin d'un repository Git, avec enregistrement de la racine
+  canonique retournée par Git.
+- Création par Server Action ; lecture en Server Components.
 
-**Fin d'étape** : un projet créé depuis l'interface survit à un redémarrage du serveur.
+**Fin d'étape atteinte** : un projet créé depuis l'interface survit à un redémarrage du
+serveur — vérifié par un test fonctionnel réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
+
+Hors périmètre volontaire de cette étape : édition, suppression et archivage d'un projet
+([D-027](DECISIONS.md#d-027--ni-édition-ni-suppression-de-projet-dans-task-002)).
 
 ---
 
-## ⬜ 3. Documents Markdown
+## 🟢 3. Documents Markdown
+
+**Étape active.**
 
 **Objectif** : lire et écrire les documents de référence depuis NOX.
 

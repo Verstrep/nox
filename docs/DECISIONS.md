@@ -175,3 +175,146 @@ leurs données d'entraînement, en les renvoyant vers `node_modules/next/dist/do
 recrée à chaque démarrage : les ignorer produirait une modification non versionnée permanente.
 Leur contenu est utile aux sessions futures et ne contredit pas la [CLAUDE.md](../CLAUDE.md)
 racine, qui reste la référence pour les règles de projet.
+
+---
+
+## Décisions de TASK-002 — persistance et projets locaux
+
+### D-018 — Prisma comme couche d'accès aux données
+
+**Décision.** L'accès à la base passe par Prisma ORM (7.9.1), isolé dans `packages/database`.
+
+**Justification.** Trois besoins concrets : un schéma déclaratif qui reste lisible quand les
+modèles `Task`, `Run`, `Message` et `ProjectDocument` s'ajouteront ; des migrations versionnées
+dans Git, cohérentes avec [D-003](#d-003--documentation-markdown-versionnée-avec-git) ; et un
+client typé qui rend les requêtes vérifiables par `tsc` plutôt qu'à l'exécution. Écrire du SQL
+à la main aurait suffi pour un seul modèle, mais aurait imposé de construire à la main un
+système de migrations — soit précisément la partie que Prisma résout bien.
+
+### D-019 — SQLite comme persistance locale de la V1
+
+**Décision.** Le provider est SQLite, via le driver adapter `@prisma/adapter-better-sqlite3`
+(obligatoire depuis Prisma 7).
+
+**Justification.** NOX est un outil personnel qui s'exécute sur la machine de développement.
+SQLite ne demande ni serveur, ni conteneur, ni configuration : `npm install` suffit à obtenir
+une base fonctionnelle. PostgreSQL apporterait de la concurrence d'écriture et des types riches
+dont aucun besoin actuel ne dépend, au prix d'une dépendance d'infrastructure. Ce choix est
+réversible : Prisma abstrait le provider, et seul `packages/database` connaît SQLite.
+
+**Limite acceptée.** SQLite n'a pas d'enum natif : `Project.status` est stocké en `TEXT` et
+validé dans la couche applicative (voir [D-022](#d-022--statut-stocké-en-texte-validé-par-noxshared)).
+
+### D-020 — Base de développement à la racine, dans `data/`
+
+**Décision.** Le fichier SQLite est `<racine du monorepo>/data/nox-dev.db`. Le chemin est résolu
+par `packages/database/src/paths.ts`, qui remonte l'arborescence jusqu'au `package.json` dont le
+`name` vaut `nox`. `NOX_DATABASE_URL` permet de viser une autre base.
+
+**Justification.** Le CLI Prisma s'exécute avec `packages/database` comme répertoire courant,
+Next.js avec `apps/web`, les scripts npm depuis la racine. Un chemin relatif produirait donc
+trois bases différentes selon la commande. L'ancrage sur un marqueur de racine donne le même
+fichier absolu dans tous les cas, et l'échec est explicite (exception) plutôt que silencieux.
+`data/` à la racine reste visible et facile à supprimer pour repartir de zéro ; le dossier est
+versionné (via `.gitkeep`), son contenu ne l'est pas.
+
+### D-021 — Client Prisma généré, jamais versionné
+
+**Décision.** Le générateur `prisma-client` émet dans `packages/database/src/generated/prisma`,
+dossier ignoré par Git. `npm install` le régénère via le script `prepare`, et `npm run build`
+le régénère avant de compiler.
+
+**Justification.** Le client est un artefact dérivé du schéma : le versionner créerait un
+second point de vérité, sujet à divergence silencieuse. Le générer sous `src/` — et non à côté —
+le fait compiler par le même `tsc` que le reste du package : Prisma 7 émet du TypeScript, pas du
+JavaScript, et un dossier hors `rootDir` ne serait pas émis dans `dist/`.
+
+**Piège rencontré.** Le générateur déduit l'extension de ses imports du tsconfig le plus proche
+et bascule sur `.ts` dès que `allowImportingTsExtensions` est actif. `tsc` ne réécrivant pas ces
+extensions, le `dist/` produit était inexécutable. L'option `importFileExtension = "js"` est
+donc figée explicitement dans le schéma.
+
+### D-022 — Statut stocké en texte, validé par `@nox/shared`
+
+**Décision.** `Project.status` est une colonne `TEXT`. Aucun enum n'est déclaré dans le schéma
+Prisma. La valeur est validée par `isProjectStatus` lors de chaque lecture, dans
+`packages/database/src/projects.ts`.
+
+**Justification.** Les statuts sont déjà définis une seule fois dans `@nox/shared`
+([D-011](#d-011--statuts-métier-en-objets-constants-pas-en-enum)). Les redéclarer en enum Prisma
+créerait un doublon à maintenir — et SQLite ne les supporte de toute façon pas. Une ligne dont
+le statut est inconnu lève `InvalidProjectRecordError` : c'est une corruption de données, pas
+une erreur utilisateur, et elle doit être visible plutôt que masquée par un repli silencieux.
+
+### D-023 — Validation Git côté serveur, dans `apps/web`
+
+**Décision.** Le chemin saisi est validé exclusivement côté serveur, par
+`apps/web/lib/repository-path.ts`, qui exécute `git -C <chemin> rev-parse --show-toplevel` via
+`execFile` (jamais un shell), avec un délai maximal de 5 secondes.
+
+**Justification.** Le navigateur ne peut pas savoir si un chemin existe sur la machine, et une
+validation cliente serait de toute façon contournable. `execFile` reçoit un tableau d'arguments :
+la valeur utilisateur ne peut pas être interprétée comme une commande. Aucun fichier du
+repository n'est lu, et aucune commande Git modifiant le repository n'est lancée.
+
+**Écart assumé.** [ARCHITECTURE.md](ARCHITECTURE.md) posait « l'application web ne lance aucun
+processus système ». Cette frontière est franchie ici, sur instruction explicite de TASK-002 et
+pour un seul cas, en lecture seule. Le document a été mis à jour en conséquence : la
+responsabilité reviendra à `apps/runner` quand NOX séparera réellement l'interface de la machine
+d'exécution.
+
+### D-024 — Stockage du chemin canonique retourné par Git
+
+**Décision.** NOX enregistre la racine retournée par `git rev-parse --show-toplevel`, repassée
+par `fs.realpathSync.native()`, et non la chaîne saisie par l'utilisateur.
+
+**Justification.** Un même repository peut être désigné de plusieurs façons : sous-dossier,
+casse différente (`d:\projets` / `D:\Projets`), séparateurs mixtes, lien symbolique. Sans
+canonicalisation, la contrainte d'unicité serait contournable et le même repository pourrait
+être enregistré plusieurs fois. `realpath.native` est ce qui résout la casse réelle sous
+Windows ; c'est ce qui permet à la contrainte `@unique` de suffire, sans comparaison en mémoire.
+
+### D-025 — Server Action plutôt que Route Handler
+
+**Décision.** La création passe par une Server Action (`app/projects/new/actions.ts`) consommée
+par `useActionState`, et non par un Route Handler appelé en `fetch`.
+
+**Justification.** Un Route Handler aurait imposé d'écrire à la main la sérialisation de la
+requête, la gestion du `pending`, la redirection et le retour d'erreurs par champ. La Server
+Action fournit tout cela, reste soumise à la même validation serveur, et fonctionne même sans
+JavaScript — ce qui a d'ailleurs permis de tester le formulaire réel en HTTP. Un Route Handler
+redeviendra pertinent le jour où un client non-navigateur devra créer des projets.
+
+### D-026 — Client Prisma mis en cache sur `globalThis`
+
+**Décision.** `getDatabaseClient()` mémorise l'instance sous un `Symbol.for` global.
+`createDatabaseClient(url)` reste disponible pour créer un client explicite (tests).
+
+**Justification.** En développement, Next.js recharge les modules serveur à chaque modification.
+Sans cache, chaque rechargement ouvrirait une connexion SQLite supplémentaire jusqu'à épuiser
+les descripteurs de fichiers. Le cache est porté par `globalThis` parce qu'il survit au
+rechargement de module, contrairement à une variable de module.
+
+### D-027 — Ni édition ni suppression de projet dans TASK-002
+
+**Décision.** Un projet peut être créé, listé et consulté. Il ne peut être ni modifié, ni
+supprimé, ni archivé.
+
+**Justification.** Périmètre explicitement fermé par TASK-002. Ces opérations soulèvent des
+questions qui n'ont pas encore de réponse : que devient une tâche en cours si le chemin du
+repository change ? faut-il supprimer les exécutions passées avec le projet ? Y répondre avant
+que `Task` et `Run` n'existent reviendrait à décider à l'aveugle. La contrepartie assumée :
+retirer un projet mal saisi demande aujourd'hui de passer par Prisma Studio.
+
+### D-028 — Tests avec le test runner natif de Node
+
+**Décision.** `npm run test` lance `node --test`. Aucun framework de test n'est installé.
+
+**Justification.** Node fournit le runner, les assertions et le reporter. Vitest ou Jest
+apporteraient surtout du mocking de modules et une intégration navigateur, dont aucun test
+actuel n'a besoin. Les fichiers `.ts` sont exécutés directement grâce au type stripping natif,
+dans la continuité de [D-015](#d-015--type-stripping-natif-de-node-plutôt-que-tsx).
+
+Les tests de persistance visent une base SQLite temporaire, construite en rejouant les vraies
+migrations du projet : la base de développement n'est jamais touchée, et les migrations sont
+elles-mêmes vérifiées au passage.

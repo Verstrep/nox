@@ -3,150 +3,182 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 4 août 2026, à l'issue de `TASK-001`.
+**Dernière mise à jour** : 4 août 2026, à l'issue de `TASK-002`.
 
 ---
 
 ## 1. Phase actuelle
 
-**Socle technique posé.** Le repository est un monorepo npm fonctionnel, typé en mode strict
-et validable de bout en bout. Aucune fonctionnalité produit n'est implémentée : il n'y a ni
-persistance, ni API, ni intégration IA.
+**Première fonctionnalité produit livrée.** Le monorepo dispose d'une persistance locale
+opérationnelle et d'un premier parcours utilisateur complet : créer un projet, l'associer à un
+repository Git local, le retrouver après redémarrage.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 1 — socle monorepo (terminée)**.
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 2 — gestion locale des projets
+(terminée)**. L'étape 3 (documents Markdown) devient l'étape active.
 
 ## 2. Tâche active
 
-`TASK-001 — Initialisation du socle` : **terminée**, en attente de review humaine.
+`TASK-002 — Gestion locale des projets` : **terminée**, en attente de review humaine.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
 
 ## 3. Éléments terminés
 
-### 3.1 Workspace racine
+### 3.1 Persistance — `packages/database` (nouveau)
 
-- Workspaces npm : `apps/*` et `packages/*`, avec `private: true`.
-- `engines.node` : `>=22.18.0`.
-- Configuration TypeScript commune (`tsconfig.base.json`) en mode strict, complétée par
-  `noUncheckedIndexedAccess`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`
-  et `isolatedModules`.
-- Configuration ESLint unique à la racine (`eslint.config.mjs`), avec analyse typée.
-- `.gitignore` couvrant Node, Next.js, les sorties de build et les fichiers d'environnement.
-- `.env.example` sans aucune valeur réelle.
-- Scripts racine : `dev:web`, `dev:runner`, `start:runner`, `build`, `build:shared`, `lint`,
-  `typecheck`.
+- Prisma 7.9.1, provider SQLite, driver adapter `@prisma/adapter-better-sqlite3`.
+- Modèle `Project` : `id`, `name`, `description`, `repositoryPath` (unique), `status`,
+  `createdAt`, `updatedAt`.
+- Migration initiale versionnée : `prisma/migrations/20260804174608_init/`.
+- Base de développement : `data/nox-dev.db`. Le contenu de `data/` est ignoré par Git ; le
+  dossier est conservé via `.gitkeep`.
+- Chemin de la base résolu depuis la racine du monorepo (`src/paths.ts`), jamais depuis
+  `process.cwd()` : le CLI Prisma, les scripts npm et Next.js visent le même fichier.
+- Client Prisma généré dans `src/generated/prisma/`, ignoré par Git, régénéré par
+  `npm install` (script `prepare`) et par `npm run build`.
+- Fonctions d'accès : `listProjects`, `getProjectById`, `findProjectByRepositoryPath`,
+  `createProject`, `isUniqueConstraintError`. Le client est passé en paramètre, ce qui rend les
+  tests indépendants de la base de développement.
 
-### 3.2 `apps/web`
+### 3.2 Validation d'un repository — `apps/web/lib/repository-path.ts`
 
-- Next.js 16 avec App Router, React 19, TypeScript strict, Tailwind CSS 4.
-- Page d'accueil statique (`app/page.tsx`) : identité NOX et version, indicateur
-  « Système en phase d'initialisation », section « Projets » vide avec bouton
-  « Nouveau projet » désactivé, section « Socle en place », section
-  « Prochaines grandes étapes ».
-- Trois composants d'interface : `StatusBadge`, `SectionCard`, `EmptyState`.
-- Thème sombre, sobre, responsive (grille passant à une colonne sur petit écran).
-- Aucune donnée dynamique, aucune API, aucun formulaire fonctionnel.
-- `apps/web/AGENTS.md` et `apps/web/CLAUDE.md` sont générés par `next dev` et conservés dans le
-  repository (voir [D-017](DECISIONS.md#d-017--appswebagentsmd-et-appswebclaudemd-sont-versionnés)).
+Contrôles effectués, dans cet ordre, exclusivement côté serveur :
 
-### 3.3 `apps/runner`
+1. champ non vide ;
+2. chemin absolu ;
+3. chemin existant ;
+4. chemin pointant vers un dossier ;
+5. `git -C <chemin> rev-parse --show-toplevel` réussi ;
+6. sortie Git non vide ;
+7. unicité de la racine canonique (pré-contrôle applicatif + contrainte `@unique`).
 
-- Serveur HTTP basé uniquement sur `node:http`.
-- Écoute par défaut sur `127.0.0.1:4310`.
-- `NOX_RUNNER_PORT` et `NOX_RUNNER_HOST` permettent de changer le point d'écoute ; une valeur
-  de port invalide déclenche un avertissement et un repli sur `4310`.
-- `GET /health` → `200` avec `{ "service": "nox-runner", "status": "ok", "version": "0.1.0" }`.
-- Toute autre route → `404` JSON avec la méthode et le chemin demandés.
-- Arrêt propre sur `SIGINT` et `SIGTERM`, protégé contre les signaux répétés.
-- Message d'erreur explicite si le port est déjà occupé (`EADDRINUSE`).
+Garanties : `execFile` sans shell, délai maximal de 5 secondes, aucun fichier du repository lu,
+aucune commande Git modifiant le repository. Le chemin retenu est la racine retournée par Git,
+repassée par `fs.realpathSync.native()` — ce qui normalise la casse réelle sous Windows, les
+liens symboliques et les séparateurs.
 
-### 3.4 `packages/shared`
+### 3.3 Interface — `apps/web`
 
-- `ProjectStatus`, `TaskStatus`, `RunStatus` définis comme objets constants ; types union et
-  listes de valeurs **dérivés** de ces objets, sans duplication.
-- `createStatusGuard()` — fabrique générique de gardes de type — et les trois gardes
-  `isProjectStatus`, `isTaskStatus`, `isRunStatus`.
-- Constante `NOX_VERSION`.
-- Compilé vers `dist/` avec déclarations de types, exposé via le champ `exports`.
+- **`/`** : tableau de bord. Liste les projets lus en base, du plus récent au plus ancien.
+  Chaque carte affiche nom, description, statut, chemin du repository, date, et un lien vers le
+  projet. État vide conservé quand aucun projet n'existe. Le bouton « Nouveau projet » est
+  fonctionnel.
+- **`/projects/new`** : formulaire (nom, description facultative, chemin absolu). Erreurs
+  affichées sous le champ concerné, bloc distinct pour les erreurs non rattachées à un champ,
+  bouton désactivé et libellé modifié pendant la soumission, valeurs conservées après erreur,
+  lien de retour au tableau de bord.
+- **`/projects/[id]`** : nom, description, statut, chemin canonique, dates de création et de
+  modification, indicateur de validation du repository, et quatre sections vides annoncées
+  (Conversation, Documents, Tâches, Exécutions) — sans aucune donnée simulée.
+- Identifiant inconnu → `notFound()`, servi par `app/not-found.tsx` (HTTP 404).
+- Lecture en Server Components via `lib/projects.ts`, qui appelle `connection()` avant chaque
+  requête : sans cela, Next.js exécuterait SQLite pendant le build.
+- Création par Server Action. Aucun Client Component n'appelle Prisma.
 
-### 3.5 Liaison entre workspaces — vérifiée
+### 3.4 Outillage
 
-Le package partagé est réellement consommé par les deux applications :
+- `npm run test` (`node --test`) : 31 tests, 7 suites, aucun framework installé.
+- Nouveaux scripts racine : `test`, `db:generate`, `db:migrate`, `db:deploy`, `db:studio`,
+  `build:database`.
+- `apps/web` passe en `"type": "module"` : supprime l'avertissement
+  `MODULE_TYPELESS_PACKAGE_JSON` de Node lors des tests. Build et rendu vérifiés inchangés.
 
-- `apps/runner` importe `NOX_VERSION` (renvoyé par `/health`) et `RUN_STATUS` / `RunStatus`
-  (état de cycle de vie du runner, tracé dans les logs).
-- `apps/web` importe `NOX_VERSION`, `PROJECT_STATUS`, `PROJECT_STATUSES` et le type
-  `ProjectStatus`, affichés sur la page d'accueil.
-
-La liaison a été confirmée à l'exécution : le HTML rendu par le serveur de développement
-contient bien les valeurs issues de `PROJECT_STATUSES`, et la réponse `/health` contient la
-version issue de `@nox/shared`.
-
-### 3.6 Documentation
-
-- `docs/PROJECT_BRIEF.md`, `docs/V1_SCOPE.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
-  `docs/DECISIONS.md`, `docs/PROJECT_STATE.md`.
-- `CLAUDE.md` à la racine — règles permanentes des sessions Claude Code.
-- `README.md` réécrit : installation, commandes, lancement, test de `/health`, structure.
-
-### 3.7 Validations exécutées
+### 3.5 Validations exécutées
 
 | Commande | Résultat |
 | --- | --- |
-| `npm install` | Succès — 368 paquets, 0 vulnérabilité, aucun avertissement de dépendance de pair |
+| `npm install` | Succès — 533 paquets, 0 vulnérabilité, aucun avertissement de dépendance de pair |
+| `npm run db:generate` | Succès — client Prisma 7.9.1 généré |
+| `npm run db:migrate` | Succès — migration `init` créée puis appliquée |
+| `npm run db:deploy` | Succès — « No pending migrations to apply » |
+| `npm run test` | Succès — 31 tests, 31 passés, 0 échec |
 | `npm run lint` | Succès — aucune erreur, aucun avertissement |
-| `npm run typecheck` | Succès — les trois workspaces |
-| `npm run build` | Succès — `@nox/shared`, `@nox/runner`, puis `@nox/web` (routes `/` et `/_not-found` en statique) |
-| `GET /health` | `200` — payload conforme |
-| `GET /` et `GET /unknown` | `404` JSON |
-| `NOX_RUNNER_PORT=4311` | Port personnalisé pris en compte |
-| Arrêt sur `SIGINT` | Serveur fermé proprement, port libéré |
-| Runner depuis les sources TypeScript | `node src/index.ts` fonctionne sans transpileur tiers |
-| Page d'accueil (`npm run dev:web`) | Rendue sur `http://localhost:3000`, contenu et CSS Tailwind conformes |
+| `npm run typecheck` | Succès — les quatre workspaces |
+| `npm run build` | Succès — `/` et `/projects/[id]` dynamiques, `/projects/new` et `/_not-found` statiques |
+| Test fonctionnel complet | Succès — voir § 3.6 |
+
+### 3.6 Test fonctionnel réellement exécuté
+
+Scénario joué contre le serveur de production (`next start`), en soumettant le vrai formulaire
+par POST multipart — le chemin qu'emprunte un navigateur sans JavaScript, donc la Server Action
+réelle et non un raccourci vers la couche de données :
+
+| Étape | Résultat |
+| --- | --- |
+| Repository Git temporaire créé (nom contenant un espace) | ✅ |
+| Soumission d'un **sous-dossier** du repository | ✅ HTTP 303 vers `/projects/<id>` |
+| Chemin enregistré = racine Git, pas le sous-dossier | ✅ |
+| Même repository soumis une seconde fois | ✅ refus métier affiché, pas de redirection |
+| Chemin relatif | ✅ refusé |
+| Dossier inexistant | ✅ refusé |
+| Dossier hors repository Git | ✅ refusé |
+| Nom vide | ✅ refusé |
+| Projet visible sur le tableau de bord | ✅ |
+| Page de détail accessible, chemin et indicateur corrects | ✅ |
+| Identifiant inconnu | ✅ HTTP 404 |
+| **Serveur arrêté puis redémarré** | ✅ projet toujours présent, toutes les vérifications repassent |
+
+Nettoyage effectué après le test : la ligne créée a été supprimée de `data/nox-dev.db` (la base
+est revenue à 0 projet) et le repository temporaire a été effacé. Aucun repository existant n'a
+été touché.
 
 ## 4. Éléments non commencés
 
-- Persistance : aucune base de données, aucun stockage local.
-- API : aucun Route Handler dans `apps/web`.
-- Gestion des projets : aucune création, aucun enregistrement de chemin de repository.
-- Documents Markdown : non éditables depuis l'interface.
-- Backlog de tâches : aucun modèle, aucun écran.
-- Runner : aucune exécution de commande système, aucun accès Git, aucun flux SSE.
-- Intégration Claude Code CLI : absente.
-- Intégration OpenAI et orchestrateur conversationnel : absents.
-- Suivi des coûts et des limites d'utilisation : absent.
-- Tests automatisés : aucun framework de test installé (hors périmètre de TASK-001).
+- Édition, suppression, archivage d'un projet et changement de statut
+  ([D-027](DECISIONS.md#d-027--ni-édition-ni-suppression-de-projet-dans-task-002)).
+- Sélecteur natif de dossier, import automatique, clonage Git, GitHub.
+- Documents Markdown éditables depuis l'interface.
+- Backlog de tâches : aucun modèle `Task`, aucun écran.
+- Runner : aucune exécution de commande, aucun accès Git, aucun flux SSE.
+- Intégration Claude Code CLI et intégration OpenAI.
+- Suivi des coûts et des limites d'utilisation.
+- Authentification, multi-utilisateur, déploiement.
 
 ## 5. Blocages connus
 
 **Aucun blocage.** Toutes les validations passent.
 
-Points de vigilance, sans impact fonctionnel actuel :
+## 6. Dette technique et limites
 
-1. **TypeScript figé en 5.9.** La 7.x est stable mais incompatible avec `typescript-eslint@8`,
-   embarqué par `eslint-config-next@16`. Voir [D-012](DECISIONS.md#d-012--typescript-59-plutôt-que-7x).
-2. **ESLint figé en 9.x.** Les plugins de `eslint-config-next` déclarent un pair maximal `^9`.
-   Voir [D-013](DECISIONS.md#d-013--eslint-9-plutôt-que-10x).
-3. **Node ≥ 22.18 requis** pour `npm run dev:runner`, qui s'appuie sur le type stripping natif.
-   Le mode compilé (`npm run build` puis `npm run start:runner`) n'a pas cette contrainte.
-4. **Arrêt sur signal vérifié en déclenchant `SIGINT` dans le processus.** Windows ne permet pas
-   de délivrer un vrai `SIGINT` via `process.kill` : la remise du signal par le système
-   d'exploitation reste à confirmer manuellement avec `Ctrl+C`.
+1. **Le serveur web lance un processus Git.** Cela contredit l'intention initiale
+   d'ARCHITECTURE.md (« seul le runner touche aux processus »). L'exception est unique, en
+   lecture seule, documentée en [§ 5.2 d'ARCHITECTURE.md](ARCHITECTURE.md) et
+   [D-023](DECISIONS.md#d-023--validation-git-côté-serveur-dans-appsweb). À déplacer vers
+   `apps/runner` au plus tard à l'étape « runner contrôlé ».
+2. **Pré-contrôle d'unicité non atomique.** `findProjectByRepositoryPath` puis `createProject`
+   ne forment pas une transaction : deux soumissions simultanées peuvent franchir le
+   pré-contrôle. La contrainte `@unique` rattrape le cas et l'erreur `P2002` est traduite en
+   message métier. Sans conséquence pour un outil mono-utilisateur.
+3. **Statut figé à `DRAFT`.** Aucune transition n'est possible tant que les tâches n'existent
+   pas. Les cinq statuts de `ProjectStatus` sont affichés comme repère, pas comme filtre actif.
+4. **`prisma.config.ts` importe `./src/paths.ts`.** Cela fonctionne car le CLI Prisma transpile
+   le TypeScript, mais impose `allowImportingTsExtensions` dans le tsconfig du package — ce qui
+   a rendu nécessaire de figer `importFileExtension = "js"` dans le schéma
+   ([D-021](DECISIONS.md#d-021--client-prisma-généré-jamais-versionné)). À revérifier lors
+   d'une montée de version majeure de Prisma.
+5. **Aucun test de rendu React.** Les tests couvrent la validation, la persistance et — via le
+   test fonctionnel — le parcours HTTP complet. Les composants eux-mêmes ne sont pas testés
+   unitairement ; ce serait une dépendance supplémentaire pour un bénéfice faible à ce stade.
+6. **TypeScript figé en 5.9 et ESLint en 9.x**, inchangé depuis TASK-001
+   ([D-012](DECISIONS.md#d-012--typescript-59-plutôt-que-7x),
+   [D-013](DECISIONS.md#d-013--eslint-9-plutôt-que-10x)).
+7. **Node ≥ 22.18 requis** pour `npm run dev:runner` et `npm run test`, qui s'appuient sur le
+   type stripping natif.
 
-## 6. Prochaine tâche envisagée
+## 7. Prochaine tâche recommandée
 
-**`TASK-002` — Gestion locale des projets.**
+**`TASK-003` — Documents Markdown d'un projet.**
 
-Objectif : permettre de créer un projet NOX depuis l'interface, de lui associer le chemin d'un
-repository Git local, et de faire survivre cet état à un redémarrage du serveur.
+Objectif : lire et modifier depuis NOX les documents Markdown de référence présents dans le
+repository d'un projet, en remplissant la section « Documents » aujourd'hui vide de la page
+projet.
 
-Cela implique de trancher la solution de persistance et de consigner ce choix dans
-[DECISIONS.md](DECISIONS.md).
-
-## 7. État Git
+## 8. État Git
 
 - Aucun commit créé par Claude Code.
 - Aucun push effectué.
 - Historique Git non modifié.
-- Les modifications de `TASK-001` sont locales, non indexées, disponibles pour review.
+- Commit de départ : `607cf58` (`chore: scaffold NOX monorepo`), répertoire de travail propre
+  avant l'intervention.
+- Les modifications de `TASK-002` sont locales, non indexées, disponibles pour review.

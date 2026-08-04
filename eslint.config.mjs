@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 /**
  * Configuration ESLint unique pour l'ensemble du monorepo.
  *
- * Un seul fichier plat couvre les trois workspaces :
+ * Un seul fichier plat couvre les workspaces :
  * - les regles TypeScript s'appliquent partout ;
  * - les regles Next.js / React / accessibilite sont limitees a `apps/web`.
  *
@@ -26,15 +26,17 @@ export default tseslint.config(
       "**/.next/**",
       "**/next-env.d.ts",
       "**/*.tsbuildinfo",
+      // Client Prisma genere : reecrit a chaque `db:generate`.
+      "packages/database/src/generated/**",
     ],
   },
 
   js.configs.recommended,
   ...tseslint.configs.recommended,
 
-  // Runner, package partage et fichiers de configuration : contexte Node.js.
+  // Runner, packages et fichiers de configuration : contexte Node.js.
   {
-    files: ["apps/runner/**/*.ts", "packages/shared/**/*.ts", "**/*.mjs"],
+    files: ["apps/runner/**/*.ts", "packages/**/*.ts", "**/*.mjs"],
     languageOptions: { globals: globals.node },
   },
 

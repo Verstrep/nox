@@ -12,22 +12,28 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "prepare": "npm run build:shared",
+    "prepare": "npm run build:shared && npm run db:generate",
     "build:shared": "npm run build --workspace @nox/shared",
-    "dev:web": "npm run build:shared && npm run dev --workspace @nox/web",
+    "build:database": "npm run build --workspace @nox/database",
+    "dev:web": "npm run build:shared && npm run build:database && npm run dev --workspace @nox/web",
     "dev:runner": "npm run build:shared && npm run dev --workspace @nox/runner",
     "start:runner": "npm run start --workspace @nox/runner",
-    "build": "npm run build:shared && npm run build --workspace @nox/runner && npm run build --workspace @nox/web",
+    "build": "npm run build:shared && npm run db:generate && npm run build:database && npm run build --workspace @nox/runner && npm run build --workspace @nox/web",
+    "db:generate": "npm run db:generate --workspace @nox/database",
+    "db:migrate": "npm run db:migrate --workspace @nox/database",
+    "db:deploy": "npm run db:deploy --workspace @nox/database",
+    "db:studio": "npm run db:studio --workspace @nox/database",
+    "test": "npm run build:shared && npm run build:database && node --test",
     "lint": "eslint .",
-    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run build:shared && npm run db:generate && npm run build:database && npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@next/eslint-plugin-next": "^16.3.0",
     "@types/node": "^24.10.1",
     "eslint": "^9.39.5",
-    "globals": "^16.4.0",
     "eslint-config-next": "^16.3.0",
+    "globals": "^16.4.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.66.0"
   }

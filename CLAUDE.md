@@ -88,14 +88,24 @@ Contexte du projet : [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) ·
 | Application web | [apps/web/](apps/web/) — Next.js App Router, Tailwind CSS |
 | Runner local | [apps/runner/](apps/runner/) — Node.js natif, port `4310` par défaut |
 | Code partagé | [packages/shared/](packages/shared/) — types et statuts, sans dépendance |
+| Accès aux données | [packages/database/](packages/database/) — Prisma + SQLite |
+| Base locale | `data/nox-dev.db` — jamais versionnée |
 | Configuration TypeScript commune | [tsconfig.base.json](tsconfig.base.json) |
 | Configuration ESLint unique | [eslint.config.mjs](eslint.config.mjs) |
 
-Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run lint` ·
-`npm run typecheck` · `npm run build`.
+Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run test` ·
+`npm run lint` · `npm run typecheck` · `npm run build` · `npm run db:generate` ·
+`npm run db:migrate` · `npm run db:studio`.
 
 Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 
 - `packages/shared` n'importe ni Node, ni React, ni aucune dépendance runtime ;
-- `apps/web` ne lance aucun processus système ;
-- `apps/runner` n'appelle aucun fournisseur de modèle et n'écrit dans aucune base.
+- `packages/database` n'importe ni React ni Next.js, et concentre tout accès à la base ;
+- aucun Client Component n'appelle Prisma ;
+- `apps/runner` n'appelle aucun fournisseur de modèle et n'écrit dans aucune base ;
+- `apps/web` ne lance de processus système qu'en un point, documenté et en lecture seule :
+  la validation d'un chemin de repository Git ([ARCHITECTURE.md § 5.2](docs/ARCHITECTURE.md)).
+  Ne pas étendre cette exception ; toute nouvelle exécution de commande revient au runner.
+
+Le client Prisma et les dossiers `dist/` sont générés : ne jamais les modifier à la main, et ne
+jamais les versionner.

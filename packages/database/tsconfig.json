@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "noEmit": true,
+    // Les tests et `prisma.config.ts` sont executes tels quels (par `node --test`
+    // et par le CLI Prisma) : leurs imports relatifs portent l'extension `.ts`.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "prisma.config.ts"]
+}

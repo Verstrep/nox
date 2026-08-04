@@ -1,22 +1,20 @@
 import { NOX_VERSION, PROJECT_STATUS, PROJECT_STATUSES, type ProjectStatus } from "@nox/shared";
+import Link from "next/link";
 
 import { EmptyState } from "@/components/EmptyState";
+import { ProjectCard } from "@/components/ProjectCard";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { loadProjects } from "@/lib/projects";
 
 /**
- * Donnees statiques : TASK-001 ne prevoit ni API, ni base de donnees.
- * Tout ce qui est affiche ici est fige et sera remplace par des donnees reelles
- * dans les taches suivantes.
+ * Seule la liste des projets provient de la base. Les sections « Socle » et
+ * « Prochaines grandes etapes » restent des reperes statiques : elles decrivent
+ * l'avancement du produit, pas des donnees utilisateur.
  */
 const CURRENT_PHASE_STATUS: ProjectStatus = PROJECT_STATUS.DRAFT;
 
 const NEXT_STEPS = [
-  {
-    id: "projects",
-    title: "Gestion locale des projets",
-    description: "Creer un projet NOX et enregistrer le chemin d'un repository local.",
-  },
   {
     id: "documents",
     title: "Documents Markdown",
@@ -48,10 +46,12 @@ const FOUNDATION_ITEMS = [
   { id: "web", label: "Application web", detail: "Next.js App Router, TypeScript strict, Tailwind" },
   { id: "runner", label: "Runner local", detail: "Node.js natif, GET /health sur le port 4310" },
   { id: "shared", label: "Package partage", detail: "@nox/shared, statuts metier types" },
-  { id: "docs", label: "Documentation", detail: "Brief, perimetre V1, architecture, roadmap" },
+  { id: "database", label: "Persistance locale", detail: "Prisma + SQLite, modele Project" },
 ] as const;
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const projects = await loadProjects();
+
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-10 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-6 border-b border-zinc-800 pb-8">
@@ -75,29 +75,35 @@ export default function DashboardPage() {
           <span>Phase courante</span>
           <StatusBadge tone="neutral">{CURRENT_PHASE_STATUS}</StatusBadge>
           <span aria-hidden="true">&middot;</span>
-          <span>TASK-001 &mdash; socle monorepo</span>
+          <span>TASK-002 &mdash; gestion locale des projets</span>
         </div>
       </header>
 
       <main className="flex flex-col gap-8">
         <SectionCard
           title="Projets"
-          description="Chaque projet NOX pointera vers un repository local et disposera de sa propre conversation d'orchestration."
+          description="Chaque projet NOX pointe vers un repository Git local de cette machine."
           action={
-            <button
-              type="button"
-              disabled
-              title="Disponible dans une prochaine tache"
-              className="cursor-not-allowed rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-400 opacity-70"
+            <Link
+              href="/projects/new"
+              className="inline-block rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
             >
               Nouveau projet
-            </button>
+            </Link>
           }
         >
-          <EmptyState
-            title="Aucun projet pour le moment"
-            hint="La creation de projet sera activee lorsque la persistance locale et l'API seront en place."
-          />
+          {projects.length === 0 ? (
+            <EmptyState
+              title="Aucun projet pour le moment"
+              hint="Creez un projet et associez-le a un repository Git local pour commencer."
+            />
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {projects.map((project) => (
+                <ProjectCard key={project.id} project={project} />
+              ))}
+            </ul>
+          )}
 
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <span className="text-xs uppercase tracking-wider text-zinc-600">
@@ -113,7 +119,7 @@ export default function DashboardPage() {
 
         <SectionCard
           title="Socle en place"
-          description="Ce qui existe reellement dans le repository a l'issue de TASK-001."
+          description="Ce qui existe reellement dans le repository a ce stade."
         >
           <ul className="grid gap-3 sm:grid-cols-2">
             {FOUNDATION_ITEMS.map((item) => (
@@ -152,7 +158,7 @@ export default function DashboardPage() {
       </main>
 
       <footer className="mt-auto border-t border-zinc-800 pt-6 text-xs text-zinc-600">
-        NOX est en cours de developpement. Les donnees affichees sur cette page sont statiques.
+        NOX est en cours de developpement. Seule la liste des projets provient de la base locale.
       </footer>
     </div>
   );

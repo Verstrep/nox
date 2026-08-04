@@ -10,6 +10,13 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 
+# Client Prisma genere (regenerable par `npm run db:generate`)
+packages/database/src/generated/
+
+# Base SQLite locale : jamais versionnee, le dossier l'est
+/data/*
+!/data/.gitkeep
+
 # Variables d'environnement (le fichier d'exemple reste versionne)
 .env
 .env.*

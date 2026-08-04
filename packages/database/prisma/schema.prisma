@@ -1,0 +1,39 @@
+// Schema Prisma de NOX.
+//
+// L'URL de la source de donnees n'est PAS declaree ici : elle est resolue par
+// `prisma.config.ts`, qui calcule un chemin absolu a partir de la racine du
+// monorepo. Voir `src/paths.ts`.
+
+// Le client est genere sous `src/` (et non a cote) pour etre compile par `tsc`
+// avec le reste du package : le generateur `prisma-client` de Prisma 7 emet du
+// TypeScript, pas du JavaScript. Le dossier genere n'est pas versionne.
+//
+// `importFileExtension` est fige a "js" : sans cela, le generateur la deduit du
+// tsconfig le plus proche et emet des imports en `.ts` des que
+// `allowImportingTsExtensions` est actif. `tsc` ne reecrit pas ces extensions,
+// ce qui produirait un `dist/` invalide a l'execution.
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// Un projet NOX : un repository Git local suivi par l'application.
+///
+/// `status` est stocke sous forme de chaine : SQLite ne connait pas les enums,
+/// et les statuts sont deja definis une seule fois dans `@nox/shared`
+/// (`ProjectStatus`). La validation est faite dans la couche applicative par
+/// `isProjectStatus`, ce qui evite de dupliquer la liste ici.
+model Project {
+  id             String   @id @default(cuid())
+  name           String
+  description    String?
+  repositoryPath String   @unique
+  status         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}

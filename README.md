@@ -12,16 +12,19 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Étape terminée : **TASK-001 — socle monorepo**.
+Dernière étape terminée : **TASK-002 — gestion locale des projets**.
 
 | Élément | État |
 | --- | --- |
 | Monorepo npm workspaces | ✅ fonctionnel |
-| Application web (page d'accueil statique) | ✅ fonctionnelle |
 | Runner local avec `GET /health` | ✅ fonctionnel |
 | Package partagé `@nox/shared` | ✅ consommé par le web et le runner |
-| Lint / typecheck / build | ✅ passent |
-| Persistance, API, intégration IA | ⬜ non commencées |
+| Persistance locale (Prisma + SQLite) | ✅ fonctionnelle |
+| Création / liste / consultation d'un projet | ✅ fonctionnelles |
+| Validation serveur d'un repository Git | ✅ fonctionnelle |
+| Édition, suppression, archivage d'un projet | ⬜ non commencées |
+| Documents, tâches, exécutions, intégration IA | ⬜ non commencées |
+| Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
 
@@ -47,8 +50,14 @@ cd nox
 npm install
 ```
 
-`npm install` compile automatiquement `packages/shared` via le script `prepare` : les autres
-workspaces le consomment depuis `packages/shared/dist`.
+`npm install` déclenche le script `prepare`, qui compile `packages/shared` et génère le client
+Prisma. Les deux sont des artefacts dérivés : ils ne sont pas versionnés.
+
+Il reste ensuite à créer la base locale :
+
+```powershell
+npm run db:migrate
+```
 
 Optionnel — créer un fichier de configuration local à partir de l'exemple :
 
@@ -57,6 +66,49 @@ Copy-Item .env.example .env
 ```
 
 Le fichier `.env` n'est pas versionné et ne doit contenir aucun secret partagé.
+
+## Base de données locale
+
+NOX stocke ses données dans une base **SQLite** locale, gérée par Prisma.
+
+| | |
+| --- | --- |
+| Fichier | `data/nox-dev.db`, à la racine du repository |
+| Schéma | [packages/database/prisma/schema.prisma](packages/database/prisma/schema.prisma) |
+| Migrations | `packages/database/prisma/migrations/` — versionnées dans Git |
+| Client généré | `packages/database/src/generated/prisma/` — **non** versionné |
+
+Le chemin du fichier est résolu à partir de la racine du monorepo, pas du répertoire courant :
+les commandes Prisma, les scripts npm et l'application Next.js visent donc toujours la même
+base. La variable `NOX_DATABASE_URL` permet d'en viser une autre (voir `.env.example`).
+
+### Commandes
+
+```powershell
+# Créer la base et appliquer les migrations (première utilisation, ou après un changement de schéma)
+npm run db:migrate
+
+# Appliquer les migrations existantes sans en créer de nouvelle
+npm run db:deploy
+
+# Régénérer le client Prisma (fait automatiquement par npm install et npm run build)
+npm run db:generate
+
+# Explorer et modifier les données dans le navigateur
+npm run db:studio
+```
+
+### Repartir d'une base vide
+
+Il n'existe volontairement aucune commande qui supprime la base : l'opération est manuelle.
+
+```powershell
+Remove-Item data\nox-dev.db
+npm run db:migrate
+```
+
+> Cette commande supprime **uniquement** la base locale de développement. Elle ne touche à aucun
+> repository, ni au code, ni aux migrations.
 
 ## Commandes disponibles
 
@@ -67,10 +119,16 @@ Toutes les commandes se lancent depuis la racine du repository.
 | `npm run dev:web` | Démarre l'application web sur `http://localhost:3000` |
 | `npm run dev:runner` | Démarre le runner en mode surveillé sur `http://127.0.0.1:4310` |
 | `npm run start:runner` | Démarre le runner compilé (nécessite `npm run build` au préalable) |
-| `npm run build` | Compile `@nox/shared`, `@nox/runner` puis `@nox/web` |
+| `npm run build` | Génère le client Prisma puis compile tous les workspaces |
 | `npm run build:shared` | Compile uniquement le package partagé |
+| `npm run build:database` | Compile uniquement le package d'accès aux données |
+| `npm run test` | Lance les tests (`node --test`) |
 | `npm run lint` | Analyse ESLint de l'ensemble du repository |
-| `npm run typecheck` | Vérifie le typage des trois workspaces |
+| `npm run typecheck` | Vérifie le typage de tous les workspaces |
+| `npm run db:migrate` | Crée la base locale et applique les migrations |
+| `npm run db:deploy` | Applique les migrations existantes |
+| `npm run db:generate` | Régénère le client Prisma |
+| `npm run db:studio` | Ouvre Prisma Studio |
 
 ## Lancer l'application web
 
@@ -78,9 +136,40 @@ Toutes les commandes se lancent depuis la racine du repository.
 npm run dev:web
 ```
 
-Puis ouvrir <http://localhost:3000>. La page d'accueil présente le futur tableau de bord :
-indicateur d'initialisation, section « Projets » vide, état du socle et prochaines étapes.
-Toutes les données affichées sont statiques à ce stade.
+Puis ouvrir <http://localhost:3000>. Le tableau de bord liste les projets enregistrés en base.
+Les sections « Socle en place » et « Prochaines grandes étapes » restent des repères statiques
+sur l'avancement du produit.
+
+## Créer un premier projet
+
+1. Démarrer l'application : `npm run dev:web`.
+2. Ouvrir <http://localhost:3000> puis cliquer sur **Nouveau projet**.
+3. Renseigner un nom, éventuellement une description, et le **chemin absolu** d'un repository
+   Git déjà présent sur cette machine — par exemple `D:\Projets\mon-projet`.
+4. Valider. NOX vérifie le chemin côté serveur puis redirige vers la page du projet.
+
+Ce que fait NOX à la validation :
+
+- il exécute `git -C <chemin> rev-parse --show-toplevel`, en lecture seule ;
+- il enregistre la **racine** du repository, pas le chemin saisi — un sous-dossier est donc
+  accepté et ramené à sa racine ;
+- il refuse un chemin relatif, inexistant, pointant vers un fichier, hors repository Git, ou
+  déjà enregistré.
+
+NOX ne clone rien, ne lit aucun fichier du repository et n'exécute aucune commande qui le
+modifierait. Seul le chemin est stocké.
+
+### Limites actuelles de la gestion des projets
+
+| Possible aujourd'hui | Pas encore possible |
+| --- | --- |
+| Créer un projet | Modifier un projet existant |
+| Lister les projets | Supprimer ou archiver un projet |
+| Consulter la page d'un projet | Changer son statut |
+| | Sélectionner un dossier via une boîte de dialogue |
+
+Le statut d'un projet est toujours `DRAFT` : les transitions viendront avec la gestion des
+tâches. Pour retirer un projet créé par erreur, passer par `npm run db:studio`.
 
 ## Lancer le runner
 
@@ -144,23 +233,34 @@ try { Invoke-RestMethod http://127.0.0.1:4310/inconnu } catch { $_.ErrorDetails.
 ```text
 NOX/
 ├── apps/
-│   ├── web/                  Application Next.js (App Router, Tailwind CSS)
-│   │   ├── app/              Layout, page d'accueil, styles globaux
-│   │   ├── components/       Composants d'interface réutilisables
-│   │   └── public/           Fichiers statiques
+│   ├── web/                    Application Next.js (App Router, Tailwind CSS)
+│   │   ├── app/
+│   │   │   ├── page.tsx        Tableau de bord (liste des projets)
+│   │   │   └── projects/
+│   │   │       ├── new/        Formulaire + Server Action de création
+│   │   │       └── [id]/       Page de détail d'un projet
+│   │   ├── components/         Composants d'interface réutilisables
+│   │   ├── lib/                Validation serveur et lecture des données
+│   │   └── public/             Fichiers statiques
 │   │
-│   └── runner/               Runner local Node.js
-│       └── src/index.ts      Serveur HTTP natif, GET /health
+│   └── runner/                 Runner local Node.js
+│       └── src/index.ts        Serveur HTTP natif, GET /health
 │
 ├── packages/
-│   └── shared/               Types et constantes partagés (@nox/shared)
-│       └── src/statuses.ts   ProjectStatus, TaskStatus, RunStatus
+│   ├── shared/                 Types et constantes partagés (@nox/shared)
+│   │   └── src/statuses.ts     ProjectStatus, TaskStatus, RunStatus
+│   │
+│   └── database/               Accès aux données (@nox/database)
+│       ├── prisma/             Schéma et migrations versionnées
+│       ├── src/                Client, chemins, requêtes sur Project
+│       └── prisma.config.ts    Configuration du CLI Prisma
 │
-├── docs/                     Documentation de référence
-├── CLAUDE.md                 Règles permanentes des sessions Claude Code
-├── eslint.config.mjs         Configuration ESLint unique du monorepo
-├── tsconfig.base.json        Configuration TypeScript commune (mode strict)
-└── package.json              Workspaces et scripts racine
+├── data/                       Base SQLite locale (contenu non versionné)
+├── docs/                       Documentation de référence
+├── CLAUDE.md                   Règles permanentes des sessions Claude Code
+├── eslint.config.mjs           Configuration ESLint unique du monorepo
+├── tsconfig.base.json          Configuration TypeScript commune (mode strict)
+└── package.json                Workspaces et scripts racine
 ```
 
 ## Documentation
@@ -183,6 +283,7 @@ commité et poussé manuellement — NOX et Claude Code ne poussent jamais vers 
 Avant de considérer une tâche terminée :
 
 ```powershell
+npm run test
 npm run lint
 npm run typecheck
 npm run build

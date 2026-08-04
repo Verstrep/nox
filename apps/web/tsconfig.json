@@ -8,6 +8,9 @@
     "jsx": "preserve",
     "allowJs": true,
     "noEmit": true,
+    // Les fichiers de test sont executes tels quels par `node --test`, qui exige
+    // une extension explicite dans les imports relatifs.
+    "allowImportingTsExtensions": true,
     "incremental": true,
     "plugins": [{ "name": "next" }],
     "paths": {
