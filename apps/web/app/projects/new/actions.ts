@@ -9,8 +9,13 @@ import {
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { validateProjectDescription, validateProjectName } from "@/lib/project-input";
-import { validateRepositoryPath } from "@/lib/repository-path";
+import {
+  validateProjectDescription,
+  validateProjectName,
+  validateRepositoryPathInput,
+} from "@/lib/project-input";
+import { resolveRepositoryPath } from "@/lib/runner/client";
+import { describeRunnerFailure, isRunnerUnavailable } from "@/lib/runner/errors";
 
 import { NO_ERRORS, type CreateProjectErrors, type CreateProjectState } from "./form-state";
 
@@ -39,13 +44,14 @@ function withErrors(
 /**
  * Cree un projet a partir du formulaire.
  *
- * Toute la validation est faite ici, cote serveur : la validation legere du
- * navigateur (attribut `required`) n'est qu'un confort et n'est jamais la seule
- * barriere.
+ * Repartition des responsabilites depuis TASK-003 :
+ * - le web valide les regles metier (nom, description, champ renseigne) ;
+ * - le **runner** valide la machine (chemin, dossier, repository Git) et
+ *   retourne la racine canonique ;
+ * - le web verifie l'unicite en base et enregistre.
  *
  * Les erreurs metier remontent dans l'etat du formulaire ; les erreurs
- * techniques sont journalisees cote serveur et resumees a l'utilisateur sans
- * detail interne.
+ * techniques sont journalisees cote serveur et resumees sans detail interne.
  */
 export async function createProjectAction(
   _previousState: CreateProjectState,
@@ -59,24 +65,32 @@ export async function createProjectAction(
 
   const name = validateProjectName(values.name);
   const description = validateProjectDescription(values.description);
+  const pathInput = validateRepositoryPathInput(values.repositoryPath);
 
-  if (!name.ok || !description.ok) {
+  if (!name.ok || !description.ok || !pathInput.ok) {
     return withErrors(values, {
       name: name.ok ? null : name.message,
       description: description.ok ? null : description.message,
+      repositoryPath: pathInput.ok ? null : pathInput.message,
     });
   }
 
-  const repository = await validateRepositoryPath(values.repositoryPath);
-  if (!repository.ok) {
-    return withErrors(values, { repositoryPath: repository.message });
+  const resolved = await resolveRepositoryPath(pathInput.repositoryPath);
+  if (!resolved.ok) {
+    const message = describeRunnerFailure(resolved.failure);
+    // Une panne du runner n'est pas une erreur de saisie : elle s'affiche dans le
+    // bandeau du formulaire, pas sous le champ du chemin.
+    return isRunnerUnavailable(resolved.failure)
+      ? withErrors(values, { form: message })
+      : withErrors(values, { repositoryPath: message });
   }
 
+  const canonicalPath = resolved.value;
   const db = getDatabaseClient();
   let projectId: string;
 
   try {
-    const existing = await findProjectByRepositoryPath(db, repository.canonicalPath);
+    const existing = await findProjectByRepositoryPath(db, canonicalPath);
     if (existing !== null) {
       return withErrors(values, { repositoryPath: ALREADY_REGISTERED_MESSAGE });
     }
@@ -84,7 +98,7 @@ export async function createProjectAction(
     const project = await createProject(db, {
       name: name.name,
       description: description.description,
-      repositoryPath: repository.canonicalPath,
+      repositoryPath: canonicalPath,
     });
     projectId = project.id;
   } catch (error) {

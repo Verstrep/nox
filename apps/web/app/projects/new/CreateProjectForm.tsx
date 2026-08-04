@@ -87,8 +87,8 @@ export function CreateProjectForm() {
         </label>
         <p className="mt-1 text-xs text-zinc-500">
           Chemin <strong className="font-medium text-zinc-400">absolu</strong> vers un repository
-          Git deja present sur cette machine. Un sous-dossier est accepte : NOX enregistrera la
-          racine du repository.
+          Git deja present sur cette machine. Un sous-dossier est accepte : le runner renverra la
+          racine du repository, qui sera enregistree.
         </p>
         <input
           id="repositoryPath"
@@ -117,7 +117,7 @@ export function CreateProjectForm() {
         </button>
         {pending ? (
           <span aria-live="polite" className="text-xs text-zinc-500">
-            NOX interroge Git pour determiner la racine du repository.
+            Le runner local interroge Git pour determiner la racine du repository.
           </span>
         ) : null}
       </div>

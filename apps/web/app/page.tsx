@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/EmptyState";
 import { ProjectCard } from "@/components/ProjectCard";
+import { RunnerStatusBadge } from "@/components/RunnerStatusBadge";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { loadProjects } from "@/lib/projects";
@@ -44,8 +45,12 @@ const NEXT_STEPS = [
 
 const FOUNDATION_ITEMS = [
   { id: "web", label: "Application web", detail: "Next.js App Router, TypeScript strict, Tailwind" },
-  { id: "runner", label: "Runner local", detail: "Node.js natif, GET /health sur le port 4310" },
-  { id: "shared", label: "Package partage", detail: "@nox/shared, statuts metier types" },
+  {
+    id: "runner",
+    label: "Runner local",
+    detail: "API HTTP authentifiee, resolution des repositories Git",
+  },
+  { id: "shared", label: "Package partage", detail: "@nox/shared, statuts et contrat runner" },
   { id: "database", label: "Persistance locale", detail: "Prisma + SQLite, modele Project" },
 ] as const;
 
@@ -60,9 +65,12 @@ export default async function DashboardPage() {
             <h1 className="text-3xl font-semibold tracking-[0.2em] text-zinc-50">NOX</h1>
             <span className="font-mono text-xs text-zinc-600">v{NOX_VERSION}</span>
           </div>
-          <StatusBadge tone="accent" withDot>
-            Systeme en phase d&apos;initialisation
-          </StatusBadge>
+          <div className="flex flex-wrap items-center gap-2">
+            <RunnerStatusBadge />
+            <StatusBadge tone="accent" withDot>
+              Systeme en phase d&apos;initialisation
+            </StatusBadge>
+          </div>
         </div>
 
         <p className="max-w-2xl text-sm leading-relaxed text-zinc-400">

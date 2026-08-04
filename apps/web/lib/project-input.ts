@@ -60,3 +60,25 @@ export function validateProjectDescription(rawDescription: string): ProjectDescr
 
   return { ok: true, description: description === "" ? null : description };
 }
+
+export type RepositoryPathInputResult =
+  | { ok: true; repositoryPath: string }
+  | { ok: false; message: string };
+
+/**
+ * Verifie qu'un chemin a bien ete saisi, avant tout appel au runner.
+ *
+ * La validation reelle du chemin (existence, dossier, repository Git) appartient
+ * au runner : lui seul voit le systeme de fichiers. Ce controle-ci evite
+ * seulement d'annoncer « runner indisponible » a un utilisateur qui a simplement
+ * laisse le champ vide.
+ */
+export function validateRepositoryPathInput(rawPath: string): RepositoryPathInputResult {
+  const repositoryPath = rawPath.trim();
+
+  if (repositoryPath === "") {
+    return { ok: false, message: "Indiquez le chemin du repository Git local." };
+  }
+
+  return { ok: true, repositoryPath };
+}

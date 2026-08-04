@@ -12,16 +12,16 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-002 — gestion locale des projets**.
+Dernière étape terminée : **TASK-003 — connexion web ↔ runner**.
 
 | Élément | État |
 | --- | --- |
 | Monorepo npm workspaces | ✅ fonctionnel |
-| Runner local avec `GET /health` | ✅ fonctionnel |
-| Package partagé `@nox/shared` | ✅ consommé par le web et le runner |
 | Persistance locale (Prisma + SQLite) | ✅ fonctionnelle |
 | Création / liste / consultation d'un projet | ✅ fonctionnelles |
-| Validation serveur d'un repository Git | ✅ fonctionnelle |
+| API HTTP locale du runner, authentifiée | ✅ fonctionnelle |
+| Validation d'un repository Git par le runner | ✅ fonctionnelle |
+| Indicateur de disponibilité du runner | ✅ fonctionnel |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
 | Documents, tâches, exécutions, intégration IA | ⬜ non commencées |
 | Tests / lint / typecheck / build | ✅ passent |
@@ -59,13 +59,51 @@ Il reste ensuite à créer la base locale :
 npm run db:migrate
 ```
 
-Optionnel — créer un fichier de configuration local à partir de l'exemple :
+## Configuration : le jeton du runner
+
+NOX est composé de **deux processus** : l'application web et le runner local. Le runner exécute
+Git sur votre machine ; l'application web l'appelle en HTTP sur la boucle locale. Cet appel est
+authentifié par un jeton partagé, **obligatoire**.
+
+Créez le fichier de configuration à partir de l'exemple :
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Le fichier `.env` n'est pas versionné et ne doit contenir aucun secret partagé.
+Générez ensuite un jeton et collez-le dans `.env` :
+
+```powershell
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Variante PowerShell native, si vous préférez ne pas passer par Node :
+
+```powershell
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RNGCryptoServiceProvider]::new().GetBytes($bytes)
+($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
+```
+
+Le `.env` doit alors contenir :
+
+```env
+NOX_RUNNER_HOST=127.0.0.1
+NOX_RUNNER_PORT=4310
+NOX_RUNNER_URL=http://127.0.0.1:4310
+NOX_RUNNER_TOKEN=<votre-jeton-genere>
+```
+
+Points importants :
+
+- **Le runner et l'application web doivent utiliser exactement la même valeur.** Un seul `.env`,
+  à la racine, est lu par les deux — il n'y a rien à synchroniser tant que vous ne le dupliquez
+  pas.
+- **Le runner refuse de démarrer sans jeton.** Il n'en génère jamais automatiquement : une
+  valeur différente à chaque lancement empêcherait le web de s'y connecter.
+- **Le runner refuse d'écouter ailleurs que sur la boucle locale.** Il exécute des commandes sur
+  votre machine ; l'exposer au réseau reviendrait à offrir cette capacité à quiconque l'atteint.
+- Le fichier `.env` n'est pas versionné. Ne partagez jamais la valeur réelle de votre jeton.
 
 ## Base de données locale
 
@@ -129,6 +167,7 @@ Toutes les commandes se lancent depuis la racine du repository.
 | `npm run db:deploy` | Applique les migrations existantes |
 | `npm run db:generate` | Régénère le client Prisma |
 | `npm run db:studio` | Ouvre Prisma Studio |
+| `npm run runner:health` | Vérifie que le runner est joignable |
 
 ## Lancer l'application web
 
@@ -142,22 +181,29 @@ sur l'avancement du produit.
 
 ## Créer un premier projet
 
-1. Démarrer l'application : `npm run dev:web`.
-2. Ouvrir <http://localhost:3000> puis cliquer sur **Nouveau projet**.
-3. Renseigner un nom, éventuellement une description, et le **chemin absolu** d'un repository
+1. Démarrer le runner : `npm run dev:runner` (premier terminal).
+2. Démarrer l'application : `npm run dev:web` (second terminal).
+3. Ouvrir <http://localhost:3000>. L'en-tête doit afficher **Runner disponible**.
+4. Cliquer sur **Nouveau projet**.
+5. Renseigner un nom, éventuellement une description, et le **chemin absolu** d'un repository
    Git déjà présent sur cette machine — par exemple `D:\Projets\mon-projet`.
-4. Valider. NOX vérifie le chemin côté serveur puis redirige vers la page du projet.
+6. Valider. Le runner vérifie le chemin, puis l'application redirige vers la page du projet.
 
-Ce que fait NOX à la validation :
+Ce qui se passe à la validation :
 
-- il exécute `git -C <chemin> rev-parse --show-toplevel`, en lecture seule ;
-- il enregistre la **racine** du repository, pas le chemin saisi — un sous-dossier est donc
+- l'application web appelle `POST /repositories/resolve` sur le runner ;
+- le runner exécute `git -C <chemin> rev-parse --show-toplevel`, en lecture seule ;
+- la **racine** du repository est enregistrée, pas le chemin saisi — un sous-dossier est donc
   accepté et ramené à sa racine ;
-- il refuse un chemin relatif, inexistant, pointant vers un fichier, hors repository Git, ou
+- sont refusés : chemin relatif, inexistant, pointant vers un fichier, hors repository Git, ou
   déjà enregistré.
 
 NOX ne clone rien, ne lit aucun fichier du repository et n'exécute aucune commande qui le
 modifierait. Seul le chemin est stocké.
+
+**Sans runner démarré**, l'interface reste utilisable : la liste des projets et les pages projet
+s'affichent normalement, et le formulaire reste accessible. Seule la soumission échoue, avec un
+message indiquant qu'il faut démarrer le runner.
 
 ### Limites actuelles de la gestion des projets
 
@@ -185,9 +231,10 @@ Sortie attendue :
 [nox-runner] v0.1.0 - etat RUNNING
 [nox-runner] En ecoute sur http://127.0.0.1:4310
 [nox-runner] Sonde de sante : http://127.0.0.1:4310/health
+[nox-runner] Routes sensibles protegees par NOX_RUNNER_TOKEN.
 ```
 
-Le port et l'interface d'écoute sont configurables :
+Le port est configurable ; l'hôte doit rester une adresse de boucle locale :
 
 ```powershell
 $env:NOX_RUNNER_PORT = "4400"
@@ -196,9 +243,25 @@ npm run dev:runner
 
 Le runner s'arrête proprement sur `Ctrl+C` (`SIGINT`) ou sur `SIGTERM`.
 
-## Tester le endpoint `/health`
+L'application web et le runner tournent en parallèle, dans deux terminaux. Ils ne sont pas
+lancés ensemble : le runner peut être redémarré sans toucher au web, et inversement.
 
-Avec PowerShell :
+## API du runner
+
+| Route | Méthode | Authentification | Rôle |
+| --- | --- | --- | --- |
+| `/health` | `GET`, `HEAD` | aucune | Sonde de disponibilité |
+| `/repositories/resolve` | `POST` | `Bearer` obligatoire | Racine Git d'un chemin local |
+
+### Tester `/health`
+
+Le plus simple :
+
+```powershell
+npm run runner:health
+```
+
+Ou directement :
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:4310/health | ConvertTo-Json
@@ -214,19 +277,59 @@ Réponse attendue :
 }
 ```
 
-Toute autre route renvoie un `404` au format JSON :
+### Tester la route protégée
+
+`/repositories/resolve` exige le jeton. En PowerShell, en le lisant depuis `.env` pour ne jamais
+l'afficher à l'écran :
 
 ```powershell
-try { Invoke-RestMethod http://127.0.0.1:4310/inconnu } catch { $_.ErrorDetails.Message }
+$token = (Select-String -Path .env -Pattern '^NOX_RUNNER_TOKEN=(.*)$').Matches.Groups[1].Value
+$body = @{ repositoryPath = "D:\Projets\mon-projet" } | ConvertTo-Json
+
+Invoke-RestMethod -Method Post http://127.0.0.1:4310/repositories/resolve `
+  -Headers @{ Authorization = "Bearer $token" } `
+  -ContentType "application/json" -Body $body
 ```
+
+Réponse attendue — un sous-dossier est ramené à la racine du repository :
 
 ```json
 {
-  "service": "nox-runner",
-  "status": "not_found",
-  "error": "Route inconnue : GET /inconnu"
+  "ok": true,
+  "repository": { "canonicalPath": "D:\\Projets\\mon-projet" }
 }
 ```
+
+Sans jeton, la réponse est un `401` :
+
+```powershell
+try {
+  Invoke-RestMethod -Method Post http://127.0.0.1:4310/repositories/resolve `
+    -ContentType "application/json" -Body '{"repositoryPath":"D:\\Projets\\mon-projet"}'
+} catch { $_.ErrorDetails.Message }
+```
+
+```json
+{ "ok": false, "error": { "code": "UNAUTHORIZED" } }
+```
+
+Toutes les erreurs suivent cette forme : un code stable, jamais de message technique ni de trace
+d'exception. Une route inconnue renvoie `404` avec `ROUTE_NOT_FOUND`.
+
+## Erreurs fréquentes
+
+| Symptôme | Cause probable | Correction |
+| --- | --- | --- |
+| L'interface affiche « Runner indisponible » | Le runner n'est pas démarré | `npm run dev:runner` dans un second terminal |
+| La création échoue avec « le runner local ne répond pas » | Idem, ou port différent | Vérifier avec `npm run runner:health` |
+| Le runner répond `401` à l'application web | `NOX_RUNNER_TOKEN` différent entre les deux | Un seul `.env` à la racine ; redémarrer les deux processus après modification |
+| `NOX_RUNNER_TOKEN est absent` au démarrage du runner | Jeton non défini | Voir « Configuration : le jeton du runner » |
+| `NOX_RUNNER_HOST ... n'est pas une adresse de boucle locale` | Hôte non autorisé en V1 | Remettre `127.0.0.1` |
+| `Le port 4310 est deja utilise` | Un autre runner tourne déjà | L'arrêter, ou définir `NOX_RUNNER_PORT` **et** `NOX_RUNNER_URL` |
+| `GIT_NOT_AVAILABLE` / « Git est introuvable » | Git absent du `PATH` du runner | Installer Git, puis redémarrer le runner |
+
+Après toute modification du `.env`, **redémarrez les deux processus** : les variables sont lues
+au démarrage.
 
 ## Structure du repository
 
@@ -240,15 +343,23 @@ NOX/
 │   │   │       ├── new/        Formulaire + Server Action de création
 │   │   │       └── [id]/       Page de détail d'un projet
 │   │   ├── components/         Composants d'interface réutilisables
-│   │   ├── lib/                Validation serveur et lecture des données
+│   │   ├── lib/
+│   │   │   ├── runner/         Client HTTP du runner (serveur uniquement)
+│   │   │   └── ...             Validation métier et lecture des données
 │   │   └── public/             Fichiers statiques
 │   │
 │   └── runner/                 Runner local Node.js
-│       └── src/index.ts        Serveur HTTP natif, GET /health
+│       └── src/
+│           ├── index.ts        Démarrage et arrêt propre
+│           ├── config.ts       Configuration validée au démarrage
+│           ├── server.ts       Routage HTTP
+│           ├── http/           Authentification, corps JSON, réponses
+│           └── repositories/   Résolution Git (execFile, sans shell)
 │
 ├── packages/
 │   ├── shared/                 Types et constantes partagés (@nox/shared)
-│   │   └── src/statuses.ts     ProjectStatus, TaskStatus, RunStatus
+│   │   ├── src/statuses.ts     ProjectStatus, TaskStatus, RunStatus
+│   │   └── src/runner.ts       Contrat HTTP web ↔ runner
 │   │
 │   └── database/               Accès aux données (@nox/database)
 │       ├── prisma/             Schéma et migrations versionnées

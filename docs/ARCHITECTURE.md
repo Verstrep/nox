@@ -6,22 +6,23 @@ dans [PROJECT_STATE.md](PROJECT_STATE.md).
 ## 1. Chaîne d'exécution
 
 ```text
-Application web NOX
-        ↓
-API et orchestration
-        ↓
-Runner local
-        ↓
-Claude Code CLI
-        ↓
-Repository Git
+Navigateur
+    ↓
+Next.js  (interface, orchestration, persistance métier)
+    ↓ HTTP local authentifié
+Runner NOX
+    ↓
+Git et système de fichiers local
+    ↓
+Claude Code CLI          (à venir)
 ```
 
-Chaque étage n'appelle que l'étage immédiatement inférieur. L'application web ne parle jamais
-directement à Claude Code, et le runner ne connaît ni OpenAI ni la base de données.
+Chaque étage n'appelle que l'étage immédiatement inférieur. Le navigateur ne parle jamais au
+runner, l'application web ne parle jamais directement à Claude Code, et le runner ne connaît ni
+OpenAI ni la base de données.
 
 Cette contrainte a un but précis : **concentrer en un seul endroit ce qui touche au système de
-fichiers et aux processus**. Voir la section 5 pour l'état réel de cette frontière aujourd'hui.
+fichiers et aux processus**. Depuis TASK-003, cet endroit est le runner, sans exception.
 
 En parallèle de cette chaîne, l'application web dispose de sa propre persistance :
 
@@ -58,7 +59,11 @@ NOX/
 - Tableau de bord listant les projets, page de création, page de détail d'un projet.
 - Lecture des données en Server Components, via `lib/projects.ts`.
 - Création par Server Action (`app/projects/new/actions.ts`), avec validation serveur.
-- Validation d'un chemin de repository Git (`lib/repository-path.ts`) — voir section 5.
+- Client HTTP du runner (`lib/runner/`), strictement côté serveur, porteur du jeton partagé.
+- Indicateur de disponibilité du runner, calculé au rendu (`components/RunnerStatusBadge.tsx`).
+
+`apps/web` ne lance **aucun** processus système et ne lit **aucun** fichier de projet : toute
+opération locale passe par le runner.
 
 **À terme** :
 
@@ -74,7 +79,17 @@ modules dédiés décident.
 
 ### 3.2 `apps/runner` — exécution locale
 
-**Aujourd'hui** : serveur HTTP natif exposant `GET /health`.
+**Aujourd'hui** : API HTTP locale sur `node:http`, sans framework.
+
+- `GET /health` — sonde publique en local, sans authentification.
+- `POST /repositories/resolve` — authentifiée, résout la racine Git d'un chemin.
+- Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
+- Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
+- Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
+  trace d'exception.
+
+Organisation : `config.ts` (validation au démarrage), `server.ts` (routage, testable sans port
+fixe), `http/` (auth, corps, réponses), `repositories/` (logique Git, indépendante de HTTP).
 
 **À terme** :
 
@@ -86,10 +101,12 @@ modules dédiés décident.
 
 Contraintes permanentes du runner :
 
-- écoute sur la boucle locale uniquement ;
+- écoute sur la boucle locale uniquement — il **refuse de démarrer** sur toute autre adresse ;
+- toute route sensible exige le jeton partagé ;
 - n'agit que sur les chemins explicitement enregistrés ;
 - n'effectue **jamais** d'opération Git distante ;
-- ne réécrit **jamais** l'historique Git.
+- ne réécrit **jamais** l'historique Git ;
+- ne journalise jamais le jeton, ni même un fragment.
 
 Le runner est un process séparé — et non une route de Next.js — pour trois raisons : sa durée
 de vie ne dépend pas du cycle de rendu, il peut être redémarré sans toucher à l'interface, et
@@ -147,9 +164,13 @@ une exécution.
 
 Deux étapes prévues :
 
-1. **HTTP simple (aujourd'hui, et pour les premières tâches).** Requête/réponse JSON. Suffisant
-   pour la sonde de santé, l'état Git et le déclenchement d'une exécution.
-2. **Server-Sent Events (ensuite).** L'exécution de Claude Code produit un flux de sortie long ;
+1. **HTTP simple — en place depuis TASK-003.** Requête/réponse JSON, sur la boucle locale,
+   authentifiée par un jeton partagé transmis en `Authorization: Bearer`. Le contrat (formes de
+   messages et codes d'erreur) vit dans `@nox/shared` : ni le runner ni le web ne le redéclare.
+   Suffisant pour la sonde de santé, la résolution d'un repository, l'état Git et le
+   déclenchement d'une exécution.
+2. **Server-Sent Events (ensuite, hors périmètre de TASK-003).** L'exécution de Claude Code
+   produit un flux de sortie long ;
    SSE permet de le streamer vers l'interface sans dépendance supplémentaire et sans la
    complexité bidirectionnelle d'un WebSocket. La communication reste unidirectionnelle
    (runner → web), ce qui correspond exactement au besoin : le web pilote par HTTP, le runner
@@ -163,36 +184,39 @@ Les WebSockets ne sont pas retenus tant qu'aucun besoin bidirectionnel temps ré
 
 | Interdit | Pourquoi |
 | --- | --- |
+| `apps/web` lance un processus système | Le runner est la seule frontière avec la machine. |
+| `apps/web` lit ou écrit un fichier de projet | Même raison : tout passe par le runner. |
+| Le navigateur appelle le runner directement | Le jeton ne doit jamais quitter le serveur. |
+| Une route sensible du runner sans authentification | Le runner exécute des commandes locales. |
+| Le runner écoute hors de la boucle locale | Exposerait l'exécution de commandes au réseau. |
 | Le runner appelle un fournisseur de modèle | Le runner exécute ; il ne décide pas. |
+| Le runner écrit en base | Le runner reste sans état, donc redémarrable à tout moment. |
 | `packages/shared` importe Node ou React | Doit rester consommable par les deux environnements. |
 | `packages/database` importe React ou Next | Doit rester utilisable par un script ou un test. |
-| Le runner écrit en base | Le runner reste sans état, donc redémarrable à tout moment. |
 | Prisma appelé depuis un Client Component | Exposerait la couche données au navigateur. |
 | Un composant React contient de la logique métier | Rend la logique intestable et non réutilisable. |
 
-### 5.2 Exception en cours : la validation d'un chemin de repository
+### 5.2 Exception fermée : la validation d'un chemin de repository
 
-L'intention initiale était que **seul le runner** touche au système de fichiers et lance des
-processus. Cette frontière est aujourd'hui franchie en un point, et un seul.
+TASK-002 avait temporairement placé l'exécution de `git rev-parse --show-toplevel` dans
+`apps/web`, faute de canal vers le runner. **Cette exception est close depuis TASK-003.**
 
-`apps/web/lib/repository-path.ts` exécute `git -C <chemin> rev-parse --show-toplevel` depuis le
-serveur web local, pour vérifier qu'un chemin saisi appartient bien à un repository Git et en
-déduire sa racine.
+- `apps/web/lib/repository-path.ts` a été supprimé, avec ses tests.
+- La logique vit désormais dans `apps/runner/src/repositories/resolve-repository.ts`.
+- `apps/web` n'importe plus `node:child_process` : il appelle `POST /repositories/resolve`.
 
-Ce que fait cette exception :
+Le runner est désormais la frontière unique des opérations locales. Aucune exception n'est
+ouverte, et aucune nouvelle ne doit l'être : toute opération sur le système de fichiers ou sur
+Git ajoutée par la suite prend la forme d'une route authentifiée du runner.
 
-- lecture seule — aucune commande Git modifiant le repository ;
-- aucun fichier du repository n'est lu ni affiché ;
-- `execFile` sans shell, donc pas d'interprétation de la saisie utilisateur ;
-- délai maximal de 5 secondes.
+### 5.3 Répartition des validations
 
-Pourquoi elle est acceptable aujourd'hui : le serveur web et le runner tournent sur la même
-machine, et introduire un aller-retour HTTP vers le runner pour une seule commande en lecture
-seule aurait ajouté un couplage et un mode de panne supplémentaires avant que le runner ne sache
-faire quoi que ce soit d'autre.
+La distinction est structurante et vaut d'être explicite :
 
-**Quand la déplacer.** Cette responsabilité reviendra à `apps/runner` dès que NOX séparera
-réellement l'interface de la machine qui exécute Claude Code — c'est-à-dire au plus tard à
-l'étape « runner contrôlé » de la [roadmap](ROADMAP.md), où le runner exposera déjà des
-endpoints Git. Le module est volontairement sans dépendance à React ni à Next.js pour rendre ce
-déplacement mécanique.
+| Question | Qui répond | Pourquoi |
+| --- | --- | --- |
+| Ce chemin existe-t-il ? Est-ce un repository Git ? Quelle est sa racine ? | **Le runner** | Seul lui voit le système de fichiers de la machine. |
+| Le nom est-il renseigné ? La description est-elle trop longue ? | **Le web** | Règles métier, sans rapport avec la machine. |
+| Ce repository est-il déjà enregistré ? | **Le web** | Seul lui voit la base ; le runner reste sans état. |
+
+Le runner valide **la machine**. Le web valide **le métier**.

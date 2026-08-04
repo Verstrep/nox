@@ -6,6 +6,7 @@ import {
   PROJECT_NAME_MAX_LENGTH,
   validateProjectDescription,
   validateProjectName,
+  validateRepositoryPathInput,
 } from "./project-input.ts";
 
 describe("validateProjectName", () => {
@@ -59,5 +60,27 @@ describe("validateProjectDescription", () => {
   it("refuse une description trop longue", () => {
     const result = validateProjectDescription("x".repeat(PROJECT_DESCRIPTION_MAX_LENGTH + 1));
     assert.equal(result.ok, false);
+  });
+});
+
+describe("validateRepositoryPathInput", () => {
+  it("refuse un champ vide sans appeler le runner", () => {
+    for (const value of ["", "   ", "\t\n"]) {
+      const result = validateRepositoryPathInput(value);
+      assert.equal(result.ok, false, JSON.stringify(value));
+    }
+  });
+
+  it("normalise un chemin renseigne", () => {
+    assert.deepEqual(validateRepositoryPathInput("  D:\\Projets\\nox  "), {
+      ok: true,
+      repositoryPath: "D:\\Projets\\nox",
+    });
+  });
+
+  it("laisse passer un chemin relatif : c'est au runner de trancher", () => {
+    // Le web ne connait pas le systeme de fichiers du runner ; il ne prejuge
+    // donc pas de la validite d'un chemin non vide.
+    assert.equal(validateRepositoryPathInput("./relatif").ok, true);
   });
 });

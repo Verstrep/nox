@@ -1,27 +1,22 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { promisify } from "node:util";
 
-import {
-  validateRepositoryPath,
-  type GitOutcome,
-  type GitRunner,
-} from "./repository-path.ts";
+import { resolveRepository, runGitToplevel, type GitOutcome, type GitRunner } from "./resolve-repository.ts";
 
 const execFileAsync = promisify(execFile);
 
 /**
  * Tous les dossiers de travail sont crees sous le dossier temporaire du systeme
- * et supprimes en fin de suite. Aucun repository existant n'est touche, et aucun
+ * et supprimes en fin de suite. Aucun repository reel n'est touche et aucun
  * chemin propre a une machine n'est code en dur.
  */
 let workspace: string;
 
-/** Lanceur Git simule, pour les cas qu'on ne peut pas provoquer de facon fiable. */
 function stubGit(outcome: GitOutcome): GitRunner {
   return () => Promise.resolve(outcome);
 }
@@ -34,41 +29,37 @@ async function createGitRepository(directoryName: string): Promise<string> {
 }
 
 before(async () => {
-  workspace = await mkdtemp(path.join(os.tmpdir(), "nox-repo-path-"));
+  workspace = await mkdtemp(path.join(os.tmpdir(), "nox-runner-repo-"));
 });
 
 after(async () => {
-  // `maxRetries` : sous Windows, les fichiers de `.git` restent parfois verrouilles
-  // un court instant apres la fin du processus git.
+  // `maxRetries` : sous Windows, les fichiers de `.git` restent parfois
+  // verrouilles un court instant apres la fin du processus git.
   await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-describe("validateRepositoryPath - controles prealables", () => {
+describe("resolveRepository - controles prealables", () => {
   it("refuse une chaine vide", async () => {
-    const result = await validateRepositoryPath("   ");
-    assert.equal(result.ok, false);
-    assert.equal(result.ok === false && result.code, "EMPTY");
+    const result = await resolveRepository("   ");
+    assert.equal(result.ok === false && result.code, "PATH_REQUIRED");
   });
 
   it("refuse un chemin relatif", async () => {
-    const result = await validateRepositoryPath("./mon-projet");
-    assert.equal(result.ok, false);
-    assert.equal(result.ok === false && result.code, "NOT_ABSOLUTE");
+    const result = await resolveRepository("./mon-projet");
+    assert.equal(result.ok === false && result.code, "PATH_NOT_ABSOLUTE");
   });
 
   it("refuse un dossier inexistant", async () => {
-    const missing = path.join(workspace, "dossier-absent");
-    const result = await validateRepositoryPath(missing);
-    assert.equal(result.ok, false);
-    assert.equal(result.ok === false && result.code, "NOT_FOUND");
+    const result = await resolveRepository(path.join(workspace, "dossier-absent"));
+    assert.equal(result.ok === false && result.code, "PATH_NOT_FOUND");
   });
 
   it("refuse un chemin pointant vers un fichier", async () => {
     const filePath = path.join(workspace, "fichier.txt");
     await writeFile(filePath, "contenu");
-    const result = await validateRepositoryPath(filePath);
-    assert.equal(result.ok, false);
-    assert.equal(result.ok === false && result.code, "NOT_A_DIRECTORY");
+
+    const result = await resolveRepository(filePath);
+    assert.equal(result.ok === false && result.code, "PATH_NOT_DIRECTORY");
   });
 
   it("n'appelle pas Git tant qu'un controle prealable echoue", async () => {
@@ -78,21 +69,18 @@ describe("validateRepositoryPath - controles prealables", () => {
       return Promise.resolve<GitOutcome>({ status: "ok", stdout: workspace });
     };
 
-    await validateRepositoryPath("chemin/relatif", { runGit });
+    await resolveRepository("chemin/relatif", { runGit });
     assert.equal(called, false);
   });
 });
 
-describe("validateRepositoryPath - resolution Git reelle", () => {
+describe("resolveRepository - resolution Git reelle", () => {
   it("accepte un repository Git et retourne sa racine", async () => {
     const repositoryPath = await createGitRepository("depot-simple");
-    const result = await validateRepositoryPath(repositoryPath);
+    const result = await resolveRepository(repositoryPath);
 
     assert.equal(result.ok, true);
-    assert.equal(
-      result.ok && result.canonicalPath.toLowerCase(),
-      repositoryPath.toLowerCase(),
-    );
+    assert.equal(result.ok && result.canonicalPath.toLowerCase(), repositoryPath.toLowerCase());
   });
 
   it("ramene un sous-dossier a la racine du repository", async () => {
@@ -100,75 +88,53 @@ describe("validateRepositoryPath - resolution Git reelle", () => {
     const subDirectory = path.join(repositoryPath, "src", "modules");
     await mkdir(subDirectory, { recursive: true });
 
-    const result = await validateRepositoryPath(subDirectory);
+    const result = await resolveRepository(subDirectory);
 
     assert.equal(result.ok, true);
-    assert.equal(
-      result.ok && result.canonicalPath.toLowerCase(),
-      repositoryPath.toLowerCase(),
-    );
+    assert.equal(result.ok && result.canonicalPath.toLowerCase(), repositoryPath.toLowerCase());
   });
 
   it("accepte un chemin contenant un espace", async () => {
     const repositoryPath = await createGitRepository("mon depot local");
-    const result = await validateRepositoryPath(repositoryPath);
+    const result = await resolveRepository(repositoryPath);
 
     assert.equal(result.ok, true);
-    assert.equal(
-      result.ok && result.canonicalPath.toLowerCase(),
-      repositoryPath.toLowerCase(),
-    );
+    assert.equal(result.ok && result.canonicalPath.toLowerCase(), repositoryPath.toLowerCase());
   });
 
   it("accepte un chemin contenant des accents", async () => {
     const repositoryPath = await createGitRepository("dépôt-accentué");
-    const result = await validateRepositoryPath(repositoryPath);
+    const result = await resolveRepository(repositoryPath);
 
     assert.equal(result.ok, true);
-    assert.equal(
-      result.ok && result.canonicalPath.toLowerCase(),
-      repositoryPath.toLowerCase(),
-    );
+    assert.equal(result.ok && result.canonicalPath.toLowerCase(), repositoryPath.toLowerCase());
   });
 
   it("refuse un dossier hors de tout repository Git", async () => {
     const plainDirectory = path.join(workspace, "sans-git");
     await mkdir(plainDirectory, { recursive: true });
 
-    const result = await validateRepositoryPath(plainDirectory);
-
-    assert.equal(result.ok, false);
+    const result = await resolveRepository(plainDirectory);
     assert.equal(result.ok === false && result.code, "NOT_A_GIT_REPOSITORY");
   });
 });
 
-describe("validateRepositoryPath - defaillances de Git", () => {
-  it("transforme un depassement de delai en resultat controle", async () => {
-    const result = await validateRepositoryPath(workspace, {
-      runGit: stubGit({ status: "timeout" }),
-    });
-
-    assert.equal(result.ok, false);
+describe("resolveRepository - defaillances de Git", () => {
+  it("transforme un depassement de delai en code controle", async () => {
+    const result = await resolveRepository(workspace, { runGit: stubGit({ status: "timeout" }) });
     assert.equal(result.ok === false && result.code, "GIT_TIMEOUT");
-    assert.match(result.ok === false ? result.message : "", /delai/i);
   });
 
-  it("signale Git introuvable sans exposer de detail systeme", async () => {
-    const result = await validateRepositoryPath(workspace, {
-      runGit: stubGit({ status: "unavailable" }),
-    });
-
-    assert.equal(result.ok, false);
-    assert.equal(result.ok === false && result.code, "GIT_UNAVAILABLE");
+  it("signale Git introuvable", async () => {
+    const result = await resolveRepository(workspace, { runGit: stubGit({ status: "unavailable" }) });
+    assert.equal(result.ok === false && result.code, "GIT_NOT_AVAILABLE");
   });
 
-  it("traite une sortie Git vide comme un echec, pas comme un succes", async () => {
-    const result = await validateRepositoryPath(workspace, {
+  it("traite une sortie Git vide comme un echec", async () => {
+    const result = await resolveRepository(workspace, {
       runGit: stubGit({ status: "ok", stdout: "  \n" }),
     });
-
-    assert.equal(result.ok, false);
-    assert.equal(result.ok === false && result.code, "GIT_FAILED");
+    assert.equal(result.ok === false && result.code, "NOT_A_GIT_REPOSITORY");
   });
 
   it("normalise la sortie Git en chemin absolu du systeme", async () => {
@@ -176,11 +142,31 @@ describe("validateRepositoryPath - defaillances de Git", () => {
     // Git renvoie toujours des separateurs `/`, meme sous Windows.
     const gitStyle = repositoryPath.replaceAll("\\", "/");
 
-    const result = await validateRepositoryPath(repositoryPath, {
+    const result = await resolveRepository(repositoryPath, {
       runGit: stubGit({ status: "ok", stdout: `${gitStyle}\n` }),
     });
 
-    assert.equal(result.ok, true);
     assert.equal(result.ok && result.canonicalPath, path.resolve(repositoryPath));
+  });
+
+  it("respecte le delai passe au lanceur Git", async () => {
+    let receivedTimeout = 0;
+    const runGit: GitRunner = (_directory, timeoutMs) => {
+      receivedTimeout = timeoutMs;
+      return Promise.resolve<GitOutcome>({ status: "timeout" });
+    };
+
+    await resolveRepository(workspace, { runGit, timeoutMs: 42 });
+    assert.equal(receivedTimeout, 42);
+  });
+});
+
+describe("runGitToplevel", () => {
+  it("rapporte `failed` hors d'un repository, sans lever d'exception", async () => {
+    const plainDirectory = path.join(workspace, "sans-git-direct");
+    await mkdir(plainDirectory, { recursive: true });
+
+    const outcome = await runGitToplevel(plainDirectory, 5_000);
+    assert.equal(outcome.status, "failed");
   });
 });

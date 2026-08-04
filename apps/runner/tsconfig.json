@@ -4,9 +4,10 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],
-    "rootDir": "src",
-    "outDir": "dist",
-    "sourceMap": true
+    "noEmit": true,
+    // Les tests sont executes tels quels par `node --test`, qui exige une
+    // extension explicite dans les imports relatifs.
+    "allowImportingTsExtensions": true
   },
   "include": ["src/**/*.ts"]
 }

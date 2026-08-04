@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+    // Les sources importent leurs voisins en `.ts` pour que
+    // `node --watch src/index.ts` fonctionne sans transpileur. A l'emission,
+    // TypeScript reecrit ces extensions en `.js`.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

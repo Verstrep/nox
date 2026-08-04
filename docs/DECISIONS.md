@@ -318,3 +318,143 @@ dans la continuité de [D-015](#d-015--type-stripping-natif-de-node-plutôt-que-
 Les tests de persistance visent une base SQLite temporaire, construite en rejouant les vraies
 migrations du projet : la base de développement n'est jamais touchée, et les migrations sont
 elles-mêmes vérifiées au passage.
+
+---
+
+## Décisions de TASK-003 — connexion web ↔ runner
+
+### D-029 — HTTP local plutôt qu'un autre canal
+
+**Décision.** L'application web et le runner communiquent par HTTP sur la boucle locale,
+requête/réponse JSON, sans framework HTTP.
+
+**Justification.** Le runner est déjà un serveur `node:http`. HTTP donne des statuts, des
+en-têtes et un modèle d'erreur que tout le monde comprend, se teste avec `fetch` sans outillage,
+et se diagnostique avec PowerShell. Les alternatives coûtaient plus cher pour rien : un socket
+Unix / named pipe complique le code Windows et l'inspection manuelle ; un module partagé
+appelé en direct annulerait la séparation de processus qui est précisément le but
+([D-008](#d-008--nodejs--typescript-pour-le-runner)).
+
+### D-030 — Contrat partagé dans `@nox/shared`
+
+**Décision.** Les formes de messages et **tous** les codes d'erreur du runner sont déclarés une
+seule fois, dans `packages/shared/src/runner.ts`. Le runner les produit, le web les consomme.
+
+**Justification.** Deux listes de codes à maintenir en parallèle divergent toujours : un code
+ajouté côté runner et oublié côté web deviendrait un message générique silencieux. La source
+unique rend l'oubli visible à la compilation — `describeRunnerFailure` utilise un
+`Record<RunnerErrorCode, string>`, donc un code non traduit casse le typecheck.
+
+Corollaire : le contrat ne transporte **que des codes**, jamais de texte destiné à
+l'utilisateur. La formulation vit dans `apps/web/lib/runner/errors.ts`, seule couche qui connaît
+la langue de l'interface.
+
+### D-031 — Authentification par jeton partagé
+
+**Décision.** Les routes sensibles exigent `Authorization: Bearer <NOX_RUNNER_TOKEN>`. Le jeton
+est comparé avec `crypto.timingSafeEqual` après contrôle de longueur. Le runner **refuse de
+démarrer** sans jeton et n'en génère jamais automatiquement.
+
+**Justification.** Le runner exécute des commandes locales : tout processus de la machine peut
+atteindre `127.0.0.1:4310`, y compris du code hostile exécuté par un autre programme. Le jeton
+est ce qui distingue l'application web de n'importe quel autre appelant local.
+
+Pourquoi pas de génération automatique : le web doit pouvoir utiliser la même valeur d'un
+démarrage à l'autre. Un jeton régénéré à chaque lancement casserait la configuration à chaque
+redémarrage.
+
+Pourquoi un échec au démarrage plutôt qu'un repli : un runner sans jeton ne peut rien faire
+d'utile. Démarrer quand même produirait un runner qui répond `/health` mais échoue sur tout le
+reste — un mode de panne bien plus déroutant qu'un message clair au lancement, qui indique
+d'ailleurs la commande pour générer un jeton.
+
+### D-032 — Écoute restreinte à la boucle locale
+
+**Décision.** `NOX_RUNNER_HOST` doit désigner une adresse de boucle locale (`127.0.0.0/8`,
+`::1`, `localhost`). Toute autre valeur empêche le démarrage.
+
+**Justification.** Un runner joignable depuis le réseau est une exécution de commandes offerte à
+quiconque atteint la machine — le jeton ne serait plus qu'une couche unique devant une capacité
+totale. En V1, cette configuration n'a aucun usage légitime : refuser vaut mieux qu'avertir.
+
+### D-033 — `/health` publique en local, routes sensibles authentifiées
+
+**Décision.** `GET /health` ne demande pas de jeton. `POST /repositories/resolve` et toute route
+sensible future l'exigent.
+
+**Justification.** L'indicateur de disponibilité doit pouvoir répondre « runner indisponible »
+plutôt que « jeton incorrect » quand la configuration est absente — sinon le diagnostic est
+brouillé au moment où l'utilisateur en a le plus besoin. La contrepartie est nulle :
+`/health` ne renvoie que le nom du service, un statut et une version. Aucun chemin local,
+aucune variable d'environnement, aucun repository connu, aucune version de Git — c'est vérifié
+par un test.
+
+### D-034 — Le runner valide la machine, le web valide le métier
+
+**Décision.** Le runner répond aux questions qui dépendent du système de fichiers (le chemin
+existe-t-il, est-ce un dossier, quelle est la racine Git). Le web garde les règles métier : nom
+obligatoire, longueur de description, unicité en base.
+
+**Justification.** Chaque validation vit là où se trouve l'information nécessaire. Le runner
+n'a pas accès à la base, le web n'a pas accès au disque. Une exception pragmatique : le web
+vérifie encore que le champ chemin n'est pas vide, uniquement pour éviter d'annoncer « runner
+indisponible » à quelqu'un qui a simplement laissé le champ vide.
+
+### D-035 — Client runner strictement serveur
+
+**Décision.** `apps/web/lib/runner/` n'est importé que par des Server Components et des Server
+Actions. Aucune variable n'est préfixée `NEXT_PUBLIC_`, et `config.ts` lève une erreur si le
+module est évalué avec un `window` défini.
+
+**Justification.** Une variable `NEXT_PUBLIC_*` est inlinée dans le bundle navigateur : le jeton
+serait lisible par n'importe qui ouvre les outils de développement. Le garde-fou runtime rend
+l'erreur immédiate et explicite si un futur refactor tire ce module dans un Client Component,
+au lieu de la laisser passer silencieusement.
+
+Le client expose exactement deux opérations, `checkRunnerHealth` et `resolveRepositoryPath` :
+un client HTTP générique aurait été une abstraction sans second usage.
+
+### D-036 — Indicateur de disponibilité sans sondage navigateur
+
+**Décision.** L'état du runner est calculé au rendu serveur, affiché sur le tableau de bord et
+sur la page de création. Aucun rafraîchissement automatique côté navigateur.
+
+**Justification.** Un sondage périodique générerait du trafic permanent pour une information que
+l'utilisateur regarde au chargement. L'état est réévalué à chaque navigation, ce qui suffit.
+Point important : l'indicateur ne **bloque jamais** l'interface — la liste des projets, les
+pages projet et le formulaire restent accessibles runner arrêté. C'est à la soumission que
+l'utilisateur reçoit un message expliquant qu'il faut le démarrer.
+
+L'indicateur appelle `connection()` : sans cela, Next.js préaffichait son état au moment du
+build, et la page `/projects/new` aurait affiché « Runner indisponible » à jamais.
+
+### D-037 — Pas de SSE ni de WebSocket dans TASK-003
+
+**Décision.** La communication reste strictement requête/réponse.
+
+**Justification.** Aucune opération actuelle ne produit de flux : résoudre un chemin prend
+quelques millisecondes. SSE deviendra nécessaire quand le runner diffusera les logs de Claude
+Code, pas avant. L'introduire maintenant ajouterait une gestion de connexions persistantes sans
+rien à y faire passer.
+
+### D-038 — Sources du runner importées avec l'extension `.ts`
+
+**Décision.** Les imports relatifs de `apps/runner/src` portent l'extension `.ts`. La compilation
+utilise `rewriteRelativeImportExtensions`, qui les réécrit en `.js` à l'émission.
+
+**Justification.** Le mode développement du runner est `node --watch src/index.ts`, sans
+transpileur ([D-015](#d-015--type-stripping-natif-de-node-plutôt-que-tsx)). Node ne remappe pas
+un import `./config.js` vers `./config.ts` : tant que le runner tenait dans un seul fichier la
+question ne se posait pas, mais le découpage de TASK-003 l'a rendue bloquante. Les extensions
+`.ts` font fonctionner à la fois l'exécution directe, les tests et le build.
+
+### D-039 — Un seul `.env` à la racine, chargé explicitement
+
+**Décision.** Le fichier `.env` reste unique, à la racine du monorepo. Le runner et Prisma le
+chargent via `process.loadEnvFile`; l'application web le charge depuis `apps/web/next.config.ts`.
+
+**Justification.** Next.js ne lit les `.env` que depuis le dossier de l'application : sans ce
+chargement explicite, il aurait fallu dupliquer le jeton dans `apps/web/.env` et à la racine —
+deux fichiers à garder synchronisés pour une valeur qui doit justement être identique des deux
+côtés. `process.loadEnvFile` est fourni par Node, ne coûte aucune dépendance, et **n'écrase pas**
+les variables déjà définies dans le shell (vérifié).

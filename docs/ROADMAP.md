@@ -46,7 +46,29 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## 🟢 3. Documents Markdown
+## ✅ 3. Connexion web ↔ runner — `TASK-003`
+
+**Objectif** : établir un canal local sécurisé entre l'application web et le runner, et lui
+transférer les opérations locales.
+
+- API HTTP du runner : `GET /health` publique, `POST /repositories/resolve` authentifiée.
+- Jeton partagé obligatoire, écoute restreinte à la boucle locale, corps JSON borné.
+- Contrat partagé (formes et codes d'erreur) dans `@nox/shared`
+  ([D-030](DECISIONS.md#d-030--contrat-partagé-dans-noxshared)).
+- Client runner strictement serveur dans `apps/web`, indicateur de disponibilité au rendu.
+- Validation Git retirée de `apps/web` et déplacée dans le runner : l'exception ouverte par
+  TASK-002 est close ([ARCHITECTURE.md § 5.2](ARCHITECTURE.md)).
+
+**Fin d'étape atteinte** : la création d'un projet passe par le runner, et le tableau de bord
+reste consultable runner arrêté — vérifié par un test fonctionnel réel, voir
+[PROJECT_STATE.md](PROJECT_STATE.md).
+
+Hors périmètre volontaire : SSE, WebSocket, exécution de commandes arbitraires, runners
+multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)).
+
+---
+
+## 🟢 4. Documents Markdown
 
 **Étape active.**
 
@@ -60,7 +82,7 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## ⬜ 4. Gestion des tâches
+## ⬜ 5. Gestion des tâches
 
 **Objectif** : structurer le travail en tâches vérifiables.
 
@@ -72,11 +94,11 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## ⬜ 5. Runner contrôlé
+## ⬜ 6. Runner contrôlé
 
 **Objectif** : piloter le runner local depuis l'interface.
 
-- Détection de la disponibilité du runner (`/health`).
+- ~~Détection de la disponibilité du runner (`/health`)~~ — fait à l'étape 3.
 - Endpoints d'exécution de commandes déclarées.
 - Diffusion des logs en Server-Sent Events.
 
@@ -84,7 +106,7 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## ⬜ 6. Intégration Claude Code
+## ⬜ 7. Intégration Claude Code
 
 **Objectif** : envoyer une tâche au CLI et récupérer son compte rendu.
 
@@ -96,7 +118,7 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## ⬜ 7. Git et validations
+## ⬜ 8. Git et validations
 
 **Objectif** : rendre le résultat relisible.
 
@@ -108,7 +130,7 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## ⬜ 8. Orchestrateur OpenAI
+## ⬜ 9. Orchestrateur OpenAI
 
 **Objectif** : discuter du besoin dans NOX.
 
@@ -121,7 +143,7 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## ⬜ 9. Test sur un petit projet réel
+## ⬜ 10. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -133,7 +155,7 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 
 ---
 
-## ⬜ 10. Fonctionnalités avancées
+## ⬜ 11. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -142,4 +164,4 @@ Hors périmètre volontaire de cette étape : édition, suppression et archivage
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 9.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 10.**

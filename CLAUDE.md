@@ -86,26 +86,44 @@ Contexte du projet : [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) ·
 | Élément | Emplacement |
 | --- | --- |
 | Application web | [apps/web/](apps/web/) — Next.js App Router, Tailwind CSS |
-| Runner local | [apps/runner/](apps/runner/) — Node.js natif, port `4310` par défaut |
+| Runner local | [apps/runner/](apps/runner/) — API HTTP native, port `4310` par défaut |
+| Contrat web ↔ runner | [packages/shared/src/runner.ts](packages/shared/src/runner.ts) |
+| Client runner (serveur) | [apps/web/lib/runner/](apps/web/lib/runner/) |
 | Code partagé | [packages/shared/](packages/shared/) — types et statuts, sans dépendance |
 | Accès aux données | [packages/database/](packages/database/) — Prisma + SQLite |
 | Base locale | `data/nox-dev.db` — jamais versionnée |
 | Configuration TypeScript commune | [tsconfig.base.json](tsconfig.base.json) |
 | Configuration ESLint unique | [eslint.config.mjs](eslint.config.mjs) |
 
-Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run test` ·
-`npm run lint` · `npm run typecheck` · `npm run build` · `npm run db:generate` ·
-`npm run db:migrate` · `npm run db:studio`.
+Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run runner:health` ·
+`npm run test` · `npm run lint` · `npm run typecheck` · `npm run build` ·
+`npm run db:generate` · `npm run db:migrate` · `npm run db:studio`.
+
+Le web et le runner sont deux processus séparés : ils se lancent dans deux terminaux et
+partagent le `.env` de la racine, dont `NOX_RUNNER_TOKEN`.
 
 Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 
+- **`apps/web` ne lance aucun processus système et ne lit aucun fichier de projet.** Toute
+  opération Git ou système de fichiers passe par une route du runner. Cette règle est sans
+  exception depuis TASK-003.
+- **`apps/runner` est la seule frontière avec la machine.** Il n'appelle aucun fournisseur de
+  modèle et n'écrit dans aucune base.
+- **Le runner n'écoute que sur la boucle locale** (`127.0.0.0/8`, `::1`, `localhost`) pour la
+  V1. Il refuse de démarrer sur toute autre adresse.
+- **Aucune nouvelle route sensible du runner sans authentification.** `Authorization: Bearer
+  <NOX_RUNNER_TOKEN>` est obligatoire dès qu'une route touche au disque, à Git ou à un
+  processus. Seule `GET /health` est publique en local.
+- **Le jeton ne quitte jamais le serveur.** Pas de variable `NEXT_PUBLIC_*`, pas de jeton dans
+  une réponse, un message d'erreur ou une ligne de log — même partiellement.
+- Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code
+  d'erreur dans `apps/web` ou `apps/runner`.
 - `packages/shared` n'importe ni Node, ni React, ni aucune dépendance runtime ;
 - `packages/database` n'importe ni React ni Next.js, et concentre tout accès à la base ;
-- aucun Client Component n'appelle Prisma ;
-- `apps/runner` n'appelle aucun fournisseur de modèle et n'écrit dans aucune base ;
-- `apps/web` ne lance de processus système qu'en un point, documenté et en lecture seule :
-  la validation d'un chemin de repository Git ([ARCHITECTURE.md § 5.2](docs/ARCHITECTURE.md)).
-  Ne pas étendre cette exception ; toute nouvelle exécution de commande revient au runner.
+- aucun Client Component n'appelle Prisma ni le client runner.
 
 Le client Prisma et les dossiers `dist/` sont générés : ne jamais les modifier à la main, et ne
 jamais les versionner.
+
+Les sources de `apps/runner` importent leurs voisins avec l'extension `.ts` : le mode
+développement exécute le TypeScript directement, sans transpileur.
