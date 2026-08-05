@@ -1,4 +1,5 @@
 import type { ProjectDocumentContent } from "@nox/shared";
+import Link from "next/link";
 
 import { describeCategory } from "@/lib/documents";
 import { formatBytes, formatIsoDateTime } from "@/lib/format";
@@ -13,8 +14,17 @@ import { StatusBadge } from "./StatusBadge";
  * le texte vient d'un fichier du disque, le traiter comme du balisage
  * ouvrirait une injection HTML dans l'interface. React echappe tout ce qu'il
  * insere comme texte, ce qui rend l'affichage sur.
+ *
+ * `editHref` n'est fourni que lorsque le document a ete lu sans erreur : proposer
+ * « Modifier » sur un document que NOX n'a pas su ouvrir n'aurait aucun sens.
  */
-export function DocumentViewer({ document }: { document: ProjectDocumentContent }) {
+export function DocumentViewer({
+  document,
+  editHref,
+}: {
+  document: ProjectDocumentContent;
+  editHref: string;
+}) {
   const updatedAt = formatIsoDateTime(document.updatedAt);
 
   return (
@@ -27,11 +37,19 @@ export function DocumentViewer({ document }: { document: ProjectDocumentContent 
 
         <p className="break-all font-mono text-xs text-zinc-500">{document.path}</p>
 
-        <p className="text-xs text-zinc-600">
-          {formatBytes(document.size)}
-          {updatedAt === null ? null : ` · modifie le ${updatedAt}`}
-          {" · lecture seule"}
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-zinc-600">
+            {formatBytes(document.size)}
+            {updatedAt === null ? null : ` · modifie le ${updatedAt}`}
+          </p>
+
+          <Link
+            href={editHref}
+            className="rounded-md border border-zinc-700 bg-zinc-800/70 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+          >
+            Modifier
+          </Link>
+        </div>
       </header>
 
       {document.content === "" ? (

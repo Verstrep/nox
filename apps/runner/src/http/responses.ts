@@ -53,6 +53,18 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   [RUNNER_ERROR.DOCUMENT_READ_FAILED]: 500,
   [RUNNER_ERROR.TOO_MANY_DOCUMENTS]: 422,
 
+  [RUNNER_ERROR.DOCUMENT_REVISION_REQUIRED]: 400,
+  [RUNNER_ERROR.DOCUMENT_REVISION_INVALID]: 400,
+  [RUNNER_ERROR.DOCUMENT_CONTENT_INVALID]: 400,
+  // `409` : la requete est valide et le fichier accessible, mais son etat a
+  // change. C'est exactement le sens du statut de conflit.
+  [RUNNER_ERROR.DOCUMENT_CONFLICT]: 409,
+  // Meme famille que `DOCUMENT_OUTSIDE_REPOSITORY` : le runner sait ecrire ici
+  // mais s'y refuse deliberement.
+  [RUNNER_ERROR.DOCUMENT_SYMLINK_NOT_WRITABLE]: 403,
+  [RUNNER_ERROR.DOCUMENT_TEMPORARY_FILE_FAILED]: 500,
+  [RUNNER_ERROR.DOCUMENT_WRITE_FAILED]: 500,
+
   [RUNNER_ERROR.INTERNAL_ERROR]: 500,
 };
 

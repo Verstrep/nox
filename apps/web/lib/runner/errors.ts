@@ -31,6 +31,20 @@ const RUNNER_UNAVAILABLE_MESSAGE =
 const GENERIC_RUNNER_ERROR_MESSAGE =
   "Le runner a refuse la demande. Consultez les logs du runner pour le detail.";
 
+/**
+ * Message du conflit de revision.
+ *
+ * Il doit dire trois choses : ce qui s'est passe, que rien n'a ete perdu, et
+ * quoi faire ensuite. NOX ne propose deliberement pas d'ecraser la version du
+ * disque : personne ne peut choisir sans avoir vu ce qui a change.
+ */
+const DOCUMENT_CONFLICT_MESSAGE =
+  "Ce document a ete modifie depuis son ouverture. Votre texte est conserve ci-dessous : " +
+  "rechargez la version actuelle du fichier, puis reportez-y vos modifications.";
+
+const REVISION_MISSING_MESSAGE =
+  "Cette page d'edition n'est plus a jour. Rechargez le document avant de l'enregistrer.";
+
 const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
   [RUNNER_ERROR.PATH_REQUIRED]: "Indiquez le chemin du repository Git local.",
   [RUNNER_ERROR.PATH_NOT_ABSOLUTE]:
@@ -61,6 +75,21 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
     "La lecture de ce document a echoue. Verifiez qu'il n'est pas verrouille par un autre programme.",
   [RUNNER_ERROR.TOO_MANY_DOCUMENTS]:
     "Ce repository contient trop de documents Markdown pour etre inventorie (limite : 500).",
+
+  // --- Ecriture -------------------------------------------------------------
+  [RUNNER_ERROR.DOCUMENT_CONFLICT]: DOCUMENT_CONFLICT_MESSAGE,
+  [RUNNER_ERROR.DOCUMENT_SYMLINK_NOT_WRITABLE]:
+    "Ce document est un lien symbolique. NOX ne modifie que des fichiers reels, pour que le fichier ecrit ne soit jamais une surprise.",
+  [RUNNER_ERROR.DOCUMENT_CONTENT_INVALID]:
+    "Le texte saisi contient un caractere que NOX ne peut pas enregistrer en UTF-8. Retirez-le et reessayez.",
+  [RUNNER_ERROR.DOCUMENT_TEMPORARY_FILE_FAILED]:
+    "NOX n'a pas pu preparer l'ecriture dans le dossier du document. Le fichier n'a pas ete modifie ; verifiez l'espace disque et les droits du dossier.",
+  [RUNNER_ERROR.DOCUMENT_WRITE_FAILED]:
+    "L'enregistrement a echoue et le document n'a pas ete modifie. Il est peut-etre verrouille par un autre programme.",
+  // Ces deux codes signalent un formulaire altere ou une page restee ouverte
+  // trop longtemps : l'utilisateur ne peut rien y faire d'autre que recharger.
+  [RUNNER_ERROR.DOCUMENT_REVISION_REQUIRED]: REVISION_MISSING_MESSAGE,
+  [RUNNER_ERROR.DOCUMENT_REVISION_INVALID]: REVISION_MISSING_MESSAGE,
 
   // Ces codes traduisent un desaccord de contrat entre le web et le runner :
   // l'utilisateur ne peut rien y faire, seul le message generique a du sens.
@@ -102,6 +131,18 @@ export function describeRunnerFailure(failure: RunnerFailure): string {
     case "runner_error":
       return CODE_MESSAGES[failure.code];
   }
+}
+
+/**
+ * Distingue le conflit de revision de tous les autres echecs.
+ *
+ * Ce cas n'est pas une panne : le fichier est accessible, la demande est
+ * correcte, mais le disque a bouge. L'interface doit reagir differemment —
+ * conserver le texte saisi et proposer de recharger la version actuelle — d'ou
+ * cette question posee separement.
+ */
+export function isDocumentConflict(failure: RunnerFailure): boolean {
+  return failure.kind === "runner_error" && failure.code === RUNNER_ERROR.DOCUMENT_CONFLICT;
 }
 
 /**

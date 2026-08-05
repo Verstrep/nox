@@ -23,18 +23,24 @@ import {
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseResolveRepositoryRequest,
+  parseUpdateProjectDocumentRequest,
   type ListProjectDocumentsSuccess,
   type ReadProjectDocumentSuccess,
   type ResolveRepositorySuccess,
   type RunnerHealthResponse,
+  type UpdateProjectDocumentSuccess,
 } from "@nox/shared";
 
 import type { RunnerConfig } from "./config.ts";
 import { isAuthorized } from "./http/auth.ts";
-import { readJsonBody } from "./http/body.ts";
+import { MAX_DOCUMENT_BODY_BYTES, readJsonBody } from "./http/body.ts";
 import { sendJson, sendMethodNotAllowed, sendRunnerError } from "./http/responses.ts";
 import { listDocuments, type ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import { readDocument, type ReadDocumentResult } from "./repositories/documents/read-document.ts";
+import {
+  updateDocument,
+  type UpdateDocumentResult,
+} from "./repositories/documents/update-document.ts";
 import { resolveRepository, type ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
 
 /** Fonctions remplacables dans les tests. */
@@ -42,6 +48,12 @@ export type RunnerDependencies = {
   resolveRepository?: (repositoryPath: string) => Promise<ResolveRepositoryResult>;
   listDocuments?: (repositoryPath: string) => Promise<ListDocumentsResult>;
   readDocument?: (repositoryPath: string, documentPath: string) => Promise<ReadDocumentResult>;
+  updateDocument?: (
+    repositoryPath: string,
+    documentPath: string,
+    content: string,
+    expectedRevision: string,
+  ) => Promise<UpdateDocumentResult>;
   /** Journalisation ; remplacee par une fonction muette dans les tests. */
   log?: (message: string) => void;
 };
@@ -50,6 +62,7 @@ const HEALTH_ROUTE = "/health";
 const RESOLVE_ROUTE = "/repositories/resolve";
 const DOCUMENTS_LIST_ROUTE = "/repositories/documents/list";
 const DOCUMENTS_READ_ROUTE = "/repositories/documents/read";
+const DOCUMENTS_UPDATE_ROUTE = "/repositories/documents/update";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -85,6 +98,7 @@ async function readAuthenticatedBody<TRequest>(
   route: string,
   log: (message: string) => void,
   parse: (value: unknown) => TRequest | null,
+  maxBytes?: number,
 ): Promise<TRequest | null> {
   if (!isAuthorized(request.headers.authorization, config.token)) {
     // Aucune distinction entre en-tete absent, schema errone et jeton faux :
@@ -94,7 +108,7 @@ async function readAuthenticatedBody<TRequest>(
     return null;
   }
 
-  const body = await readJsonBody(request);
+  const body = await readJsonBody(request, maxBytes === undefined ? {} : { maxBytes });
   if (!body.ok) {
     log(`[${RUNNER_SERVICE_NAME}] ${requestId} corps rejete : ${body.code}`);
     sendRunnerError(response, body.code, requestId);
@@ -125,6 +139,10 @@ export function createRunnerServer(
   const read =
     dependencies.readDocument ??
     ((repositoryPath: string, documentPath: string) => readDocument(repositoryPath, documentPath));
+  const update =
+    dependencies.updateDocument ??
+    ((repositoryPath: string, documentPath: string, content: string, expectedRevision: string) =>
+      updateDocument(repositoryPath, documentPath, content, expectedRevision));
   const log = dependencies.log ?? ((message: string) => { console.log(message); });
 
   /** Journalise un refus metier : le code seul, jamais le chemin recu. */
@@ -223,6 +241,39 @@ export function createRunnerServer(
         }
 
         const payload: ReadProjectDocumentSuccess = { ok: true, document: result.document };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === DOCUMENTS_UPDATE_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        // Seule route dont le corps transporte un document entier : sa limite est
+        // plus haute, mais elle reste une limite.
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DOCUMENTS_UPDATE_ROUTE, log,
+          parseUpdateProjectDocumentRequest, MAX_DOCUMENT_BODY_BYTES,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await update(
+          parsed.repositoryPath,
+          parsed.documentPath,
+          parsed.content,
+          parsed.expectedRevision,
+        );
+        if (!result.ok) {
+          logRefusal(requestId, DOCUMENTS_UPDATE_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: UpdateProjectDocumentSuccess = { ok: true, document: result.document };
         sendJson(response, 200, payload, requestId);
         return;
       }

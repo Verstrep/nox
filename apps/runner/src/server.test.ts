@@ -4,10 +4,11 @@ import type { Server } from "node:http";
 import { after, before, describe, it } from "node:test";
 
 import type { RunnerConfig } from "./config.ts";
-import { MAX_BODY_BYTES } from "./http/body.ts";
+import { MAX_BODY_BYTES, MAX_DOCUMENT_BODY_BYTES } from "./http/body.ts";
 import { createRunnerServer } from "./server.ts";
 import type { ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
+import type { UpdateDocumentResult } from "./repositories/documents/update-document.ts";
 import type { ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
 
 const TOKEN = "jeton-de-test-0123456789abcdef";
@@ -21,6 +22,10 @@ const SAMPLE_DOCUMENT = {
   size: 42,
   updatedAt: "2026-08-04T18:30:00.000Z",
 } as const;
+
+/** Revisions fictives : le calcul reel est teste par `revisions.test.ts`. */
+const CURRENT_REVISION = "a".repeat(64);
+const NEXT_REVISION = "b".repeat(64);
 
 /** Chemins transmis a la couche Git simulee, pour verifier le passage de relais. */
 const receivedPaths: string[] = [];
@@ -70,7 +75,48 @@ function fakeRead(repositoryPath: string, documentPath: string): Promise<ReadDoc
   }
   return Promise.resolve({
     ok: true,
-    document: { ...SAMPLE_DOCUMENT, content: "# Brief\n" },
+    document: { ...SAMPLE_DOCUMENT, content: "# Brief\n", revision: CURRENT_REVISION },
+  });
+}
+
+/** Arguments transmis a la couche d'ecriture. */
+const receivedUpdateCalls: {
+  repositoryPath: string;
+  documentPath: string;
+  content: string;
+  expectedRevision: string;
+}[] = [];
+
+/**
+ * Ecriture simulee : le serveur ne doit toucher a aucun fichier pendant ses
+ * propres tests. L'ecriture reelle est couverte par `update-document.test.ts`.
+ */
+function fakeUpdate(
+  repositoryPath: string,
+  documentPath: string,
+  content: string,
+  expectedRevision: string,
+): Promise<UpdateDocumentResult> {
+  receivedUpdateCalls.push({ repositoryPath, documentPath, content, expectedRevision });
+
+  if (expectedRevision !== CURRENT_REVISION) {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_CONFLICT" });
+  }
+  if (documentPath === "docs/LIEN.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_SYMLINK_NOT_WRITABLE" });
+  }
+  if (documentPath === "docs/ABSENT.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_NOT_FOUND" });
+  }
+
+  return Promise.resolve({
+    ok: true,
+    document: {
+      ...SAMPLE_DOCUMENT,
+      size: Buffer.byteLength(content),
+      content,
+      revision: NEXT_REVISION,
+    },
   });
 }
 
@@ -83,6 +129,7 @@ before(async () => {
     resolveRepository: fakeResolve,
     listDocuments: fakeList,
     readDocument: fakeRead,
+    updateDocument: fakeUpdate,
     log: () => undefined,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -449,7 +496,7 @@ describe("POST /repositories/documents/read", () => {
     assert.equal(response.status, 200);
     assert.deepEqual(response.json, {
       ok: true,
-      document: { ...SAMPLE_DOCUMENT, content: "# Brief\n" },
+      document: { ...SAMPLE_DOCUMENT, content: "# Brief\n", revision: CURRENT_REVISION },
     });
   });
 
@@ -511,5 +558,169 @@ describe("POST /repositories/documents/read", () => {
       assert.equal(response.status, 400, body);
       assert.equal(errorCode(response.json), "INVALID_REQUEST", body);
     }
+  });
+});
+
+describe("POST /repositories/documents/update", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const REPOSITORY = "D:\\Projets\\depot";
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      repositoryPath: REPOSITORY,
+      documentPath: "docs/PROJECT_BRIEF.md",
+      content: "# Nouvelle version\n",
+      expectedRevision: CURRENT_REVISION,
+      ...overrides,
+    });
+  }
+
+  it("enregistre et retourne la nouvelle revision", async () => {
+    const response = await call("/repositories/documents/update", { ...authorized, body: body() });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      ok: true,
+      document: {
+        ...SAMPLE_DOCUMENT,
+        size: Buffer.byteLength("# Nouvelle version\n"),
+        content: "# Nouvelle version\n",
+        revision: NEXT_REVISION,
+      },
+    });
+  });
+
+  it("transmet les quatre champs a la couche metier", async () => {
+    await call("/repositories/documents/update", { ...authorized, body: body() });
+
+    assert.deepEqual(receivedUpdateCalls.at(-1), {
+      repositoryPath: REPOSITORY,
+      documentPath: "docs/PROJECT_BRIEF.md",
+      content: "# Nouvelle version\n",
+      expectedRevision: CURRENT_REVISION,
+    });
+  });
+
+  it("accepte un contenu vide", async () => {
+    const response = await call("/repositories/documents/update", {
+      ...authorized,
+      body: body({ content: "" }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(receivedUpdateCalls.at(-1)?.content, "");
+  });
+
+  it("refuse une requete sans jeton, sans appeler la couche metier", async () => {
+    const before = receivedUpdateCalls.length;
+    const response = await call("/repositories/documents/update", {
+      method: "POST",
+      token: null,
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+    assert.equal(receivedUpdateCalls.length, before);
+  });
+
+  it("refuse un jeton incorrect", async () => {
+    const response = await call("/repositories/documents/update", {
+      method: "POST",
+      token: "Bearer un-autre-jeton",
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("refuse une methode incorrecte", async () => {
+    const response = await call("/repositories/documents/update", {
+      method: "GET",
+      token: `Bearer ${TOKEN}`,
+    });
+
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "POST");
+  });
+
+  it("traduit un conflit de revision en 409", async () => {
+    const response = await call("/repositories/documents/update", {
+      ...authorized,
+      body: body({ expectedRevision: "c".repeat(64) }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "DOCUMENT_CONFLICT");
+  });
+
+  it("traduit un lien symbolique en 403", async () => {
+    const response = await call("/repositories/documents/update", {
+      ...authorized,
+      body: body({ documentPath: "docs/LIEN.md" }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(errorCode(response.json), "DOCUMENT_SYMLINK_NOT_WRITABLE");
+  });
+
+  it("traduit un document absent en 404", async () => {
+    const response = await call("/repositories/documents/update", {
+      ...authorized,
+      body: body({ documentPath: "docs/ABSENT.md" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "DOCUMENT_NOT_FOUND");
+  });
+
+  it("exige les quatre champs, tous de type chaine", async () => {
+    for (const raw of [
+      JSON.stringify({ documentPath: "docs/a.md", content: "", expectedRevision: CURRENT_REVISION }),
+      JSON.stringify({ repositoryPath: REPOSITORY, content: "", expectedRevision: CURRENT_REVISION }),
+      JSON.stringify({ repositoryPath: REPOSITORY, documentPath: "docs/a.md", expectedRevision: CURRENT_REVISION }),
+      JSON.stringify({ repositoryPath: REPOSITORY, documentPath: "docs/a.md", content: "" }),
+      // Un contenu qui n'est pas une chaine est un desaccord de contrat.
+      JSON.stringify({
+        repositoryPath: REPOSITORY,
+        documentPath: "docs/a.md",
+        content: 42,
+        expectedRevision: CURRENT_REVISION,
+      }),
+    ]) {
+      const response = await call("/repositories/documents/update", { ...authorized, body: raw });
+      assert.equal(response.status, 400, raw);
+      assert.equal(errorCode(response.json), "INVALID_REQUEST", raw);
+    }
+  });
+
+  it("accepte un corps plus volumineux que la limite des autres routes", async () => {
+    // La route d'ecriture transporte un document entier : sa limite de corps est
+    // plus haute que les 32 Kio des routes qui n'echangent que des chemins.
+    const response = await call("/repositories/documents/update", {
+      ...authorized,
+      body: body({ content: "x".repeat(MAX_BODY_BYTES * 2) }),
+    });
+
+    assert.equal(response.status, 200);
+  });
+
+  it("refuse un corps depassant la limite d'ecriture", async () => {
+    const response = await call("/repositories/documents/update", {
+      ...authorized,
+      body: body({ content: "x".repeat(MAX_DOCUMENT_BODY_BYTES + 1024) }),
+    });
+
+    assert.equal(response.status, 413);
+    assert.equal(errorCode(response.json), "PAYLOAD_TOO_LARGE");
+  });
+
+  it("ne divulgue jamais le jeton dans une reponse d'erreur", async () => {
+    const response = await call("/repositories/documents/update", {
+      ...authorized,
+      body: body({ expectedRevision: "c".repeat(64) }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
   });
 });

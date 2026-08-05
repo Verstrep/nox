@@ -35,7 +35,7 @@ Contexte du projet : [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) ·
 - **Séparer la logique métier de l'interface.** Les composants React affichent ; la logique
   vit dans des modules qui ne dépendent pas de React.
 - **Préférer des fonctions petites et lisibles.** Une fonction qui nécessite un commentaire
-  pour expliquer *ce qu'elle fait* est probablement trop grosse.
+  pour expliquer _ce qu'elle fait_ est probablement trop grosse.
 - **Éviter les abstractions prématurées.** Deux usages ne font pas un motif. Attendre le
   troisième avant de généraliser.
 - **Ne pas ajouter de dépendance sans justification.** Une dépendance doit apporter davantage
@@ -83,17 +83,17 @@ Contexte du projet : [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) ·
 
 ## 6. Repères techniques du repository
 
-| Élément | Emplacement |
-| --- | --- |
-| Application web | [apps/web/](apps/web/) — Next.js App Router, Tailwind CSS |
-| Runner local | [apps/runner/](apps/runner/) — API HTTP native, port `4310` par défaut |
-| Contrat web ↔ runner | [packages/shared/src/runner.ts](packages/shared/src/runner.ts) |
-| Client runner (serveur) | [apps/web/lib/runner/](apps/web/lib/runner/) |
-| Code partagé | [packages/shared/](packages/shared/) — types et statuts, sans dépendance |
-| Accès aux données | [packages/database/](packages/database/) — Prisma + SQLite |
-| Base locale | `data/nox-dev.db` — jamais versionnée |
-| Configuration TypeScript commune | [tsconfig.base.json](tsconfig.base.json) |
-| Configuration ESLint unique | [eslint.config.mjs](eslint.config.mjs) |
+| Élément                          | Emplacement                                                              |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| Application web                  | [apps/web/](apps/web/) — Next.js App Router, Tailwind CSS                |
+| Runner local                     | [apps/runner/](apps/runner/) — API HTTP native, port `4310` par défaut   |
+| Contrat web ↔ runner             | [packages/shared/src/runner.ts](packages/shared/src/runner.ts)           |
+| Client runner (serveur)          | [apps/web/lib/runner/](apps/web/lib/runner/)                             |
+| Code partagé                     | [packages/shared/](packages/shared/) — types et statuts, sans dépendance |
+| Accès aux données                | [packages/database/](packages/database/) — Prisma + SQLite               |
+| Base locale                      | `data/nox-dev.db` — jamais versionnée                                    |
+| Configuration TypeScript commune | [tsconfig.base.json](tsconfig.base.json)                                 |
+| Configuration ESLint unique      | [eslint.config.mjs](eslint.config.mjs)                                   |
 
 Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run runner:health` ·
 `npm run test` · `npm run lint` · `npm run typecheck` · `npm run build` ·
@@ -112,7 +112,7 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 - **Le runner n'écoute que sur la boucle locale** (`127.0.0.0/8`, `::1`, `localhost`) pour la
   V1. Il refuse de démarrer sur toute autre adresse.
 - **Aucune nouvelle route sensible du runner sans authentification.** `Authorization: Bearer
-  <NOX_RUNNER_TOKEN>` est obligatoire dès qu'une route touche au disque, à Git ou à un
+<NOX_RUNNER_TOKEN>` est obligatoire dès qu'une route touche au disque, à Git ou à un
   processus. Seule `GET /health` est publique en local.
 - **Le jeton ne quitte jamais le serveur.** Pas de variable `NEXT_PUBLIC_*`, pas de jeton dans
   une réponse, un message d'erreur ou une ligne de log — même partiellement.
@@ -125,9 +125,23 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   après `realpath`, qui seule révèle les liens sortants.
 - **Aucun fichier hors du repository ne peut être lu.** Le confinement se vérifie sur les chemins
   réels, jamais par comparaison de préfixe de chaîne.
-- **Aucune écriture dans un repository sans tâche qui la demande explicitement.** Les routes
-  documents actuelles sont en lecture seule ; n'y ajoutez ni création, ni modification, ni
-  suppression sans instruction dédiée.
+- **Aucune écriture dans un repository sans tâche qui la demande explicitement.** Depuis
+  TASK-005, seule la **modification d'un document Markdown existant** est autorisée : ni
+  création, ni suppression, ni renommage, ni déplacement sans instruction dédiée.
+- **Aucune écriture sans contrôle de confinement.** Une écriture suit exactement le même
+  chemin de validation qu'une lecture : filtrage syntaxique, puis vérification après
+  `realpath`. Aucune seconde logique de validation de chemin ne doit exister.
+- **Aucune modification d'un fichier existant sans contrôle de révision.** Le runner relit les
+  octets, recalcule l'empreinte et refuse d'écrire si elle diffère de celle attendue.
+- **Aucun forçage silencieux d'un conflit.** Un conflit de révision se règle en rechargeant le
+  fichier ; n'ajoutez pas de bouton « écraser » sans tâche qui le demande.
+- **Aucune écriture dans un lien symbolique**, même si sa cible reste dans le repository :
+  l'utilisateur doit savoir quel fichier physique est modifié.
+- **Toute écriture passe par un fichier temporaire du même dossier, puis un remplacement.** Un
+  document ne doit jamais rester partiellement écrit, et aucun fichier temporaire ne doit
+  survivre — ni en production, ni après les tests.
+- **Aucun chemin absolu reçu du navigateur.** Le chemin d'un repository se relit toujours en
+  base à partir de l'identifiant du projet, jamais depuis un champ de formulaire.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code
   d'erreur dans `apps/web` ou `apps/runner`.
 - `packages/shared` n'importe ni Node, ni React, ni aucune dépendance runtime ;

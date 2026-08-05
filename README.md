@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-004 — inventaire et lecture des documents Markdown**.
+Dernière étape terminée : **TASK-005 — édition sécurisée d'un document Markdown existant**.
 
 | Élément | État |
 | --- | --- |
@@ -21,8 +21,9 @@ Dernière étape terminée : **TASK-004 — inventaire et lecture des documents 
 | Création / liste / consultation d'un projet | ✅ fonctionnelles |
 | API HTTP locale du runner, authentifiée | ✅ fonctionnelle |
 | Validation d'un repository Git par le runner | ✅ fonctionnelle |
-| Inventaire et lecture des documents Markdown | ✅ fonctionnels (lecture seule) |
-| Édition, création, suppression d'un document | ⬜ non commencées |
+| Inventaire et lecture des documents Markdown | ✅ fonctionnels |
+| Modification d'un document Markdown existant | ✅ fonctionnelle |
+| Création, suppression, renommage d'un document | ⬜ non commencées |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
 | Tâches, exécutions, intégration IA | ⬜ non commencées |
 | Tests / lint / typecheck / build | ✅ passent |
@@ -272,11 +273,11 @@ casse et aux accents).
 Les fichiers sont lus en **UTF-8 strict** : un fichier binaire renommé en `.md` est rejeté avec
 un message clair plutôt qu'affiché corrompu.
 
-### Lecture seule
+### Affichage brut
 
-Cette page **ne modifie jamais** le repository. Aucun fichier n'est créé, modifié, renommé ou
-supprimé. Le contenu est affiché brut, sans rendu HTML du Markdown : les `#` et les `**`
-restent visibles. L'édition fera l'objet d'une étape ultérieure.
+Le contenu est affiché brut, sans rendu HTML du Markdown : les `#` et les `**` restent
+visibles. NOX relit le fichier à chaque affichage — ce qui est à l'écran est ce qui est sur le
+disque.
 
 ### Erreurs courantes
 
@@ -292,6 +293,70 @@ restent visibles. L'édition fera l'objet d'une étape ultérieure.
 La page d'un projet reste toujours accessible sans runner : les informations issues de SQLite
 (nom, description, statut, chemin, dates) s'affichent normalement, seule la carte Documents
 signale l'indisponibilité.
+
+## Modifier un document
+
+Ouvrez un document, puis cliquez sur **Modifier**. Le contenu s'affiche dans une zone de texte
+monospace ; **Enregistrer** l'écrit, **Annuler** revient à la lecture.
+
+### L'écriture agit directement dans le repository
+
+Enregistrer **modifie le fichier réel** sur votre disque, immédiatement. NOX ne conserve
+aucune copie, ne crée aucun commit et ne fait aucune sauvegarde de l'ancienne version : c'est
+Git qui joue ce rôle. Un `git diff` après enregistrement montre exactement ce qui a changé.
+
+Seuls les documents **déjà existants** sont modifiables. NOX ne crée, ne supprime, ne renomme
+et ne déplace aucun fichier.
+
+### Si le fichier a été modifié ailleurs
+
+À l'ouverture, NOX retient une empreinte du contenu du fichier. À l'enregistrement, il la
+compare à l'état réel du disque. Si le fichier a changé entre-temps — modifié dans VS Code,
+mis à jour par un `git pull` — l'écriture est **refusée** :
+
+> Ce document a été modifié depuis son ouverture. Votre texte est conservé ci-dessous :
+> rechargez la version actuelle du fichier, puis reportez-y vos modifications.
+
+Votre texte reste dans le formulaire, et un bouton propose de recharger la version actuelle.
+Il n'existe volontairement **aucun bouton pour écraser** : personne ne peut décider d'écraser
+sans avoir vu ce qui a changé, et NOX n'affiche pas encore de comparaison.
+
+### Ce que NOX préserve
+
+| Élément | Comportement |
+| --- | --- |
+| Encodage | UTF-8. Aucun BOM ajouté ; un BOM déjà présent est conservé. |
+| Fins de ligne | Celles du fichier existant. Un fichier en LF reste en LF, un fichier en CRLF reste en CRLF. |
+| Fin de fichier | Aucun saut de ligne ajouté ni retiré. |
+| Permissions | Reprises du fichier remplacé. Aucun fichier ne devient exécutable. |
+| Autres fichiers | Aucun autre fichier n'est touché. |
+
+L'écriture passe par un fichier temporaire du même dossier, puis remplace la cible : une
+coupure en cours d'écriture ne laisse jamais un document à moitié écrit, et aucun fichier
+temporaire ne subsiste.
+
+### Limites de l'édition
+
+- **Taille maximale : 1 Mio**, mesurée sur les octets UTF-8 réellement écrits.
+- **Aucune sauvegarde automatique.** Rien n'est écrit tant que vous n'avez pas cliqué sur
+  Enregistrer.
+- **Aucun brouillon.** Le texte n'est conservé ni en base, ni dans le navigateur.
+- **Annuler n'écrit rien** et demande confirmation si le texte a changé.
+- **Aucun aperçu Markdown**, aucune comparaison visuelle, aucun historique.
+
+### Erreurs d'enregistrement
+
+| Message | Cause | Correction |
+| --- | --- | --- |
+| « Ce document a été modifié depuis son ouverture » | Le fichier a changé sur le disque | Recharger la version actuelle, puis reporter vos modifications |
+| « Ce document est un lien symbolique » | La cible est un lien, pas un fichier réel | Modifier directement le fichier pointé |
+| « Ce document dépasse la taille maximale » | Contenu > 1 Mio | Scinder le document |
+| « L'enregistrement a échoué et le document n'a pas été modifié » | Fichier verrouillé par un autre programme | Fermer le programme, puis réessayer |
+| « Le runner local ne répond pas » | Runner arrêté | `npm run dev:runner`, puis réessayer — votre texte est conservé |
+| « Cette page d'édition n'est plus à jour » | Onglet resté ouvert trop longtemps | Recharger la page |
+
+Dans tous ces cas, **le fichier sur le disque n'a pas été modifié** et le texte saisi reste
+dans le formulaire.
 
 ## Lancer le runner
 
@@ -329,7 +394,8 @@ lancés ensemble : le runner peut être redémarré sans toucher au web, et inve
 | `/health` | `GET`, `HEAD` | aucune | Sonde de disponibilité |
 | `/repositories/resolve` | `POST` | `Bearer` obligatoire | Racine Git d'un chemin local |
 | `/repositories/documents/list` | `POST` | `Bearer` obligatoire | Inventaire des Markdown reconnus |
-| `/repositories/documents/read` | `POST` | `Bearer` obligatoire | Contenu d'un document autorisé |
+| `/repositories/documents/read` | `POST` | `Bearer` obligatoire | Contenu et révision d'un document autorisé |
+| `/repositories/documents/update` | `POST` | `Bearer` obligatoire | Remplace un document existant, après contrôle de révision |
 
 ### Tester `/health`
 
@@ -420,10 +486,12 @@ NOX/
 │   │   │   └── projects/
 │   │   │       ├── new/        Formulaire + Server Action de création
 │   │   │       └── [id]/       Page de détail d'un projet
+│   │   │           └── documents/  Liste, lecteur, éditeur + Server Action
 │   │   ├── components/         Composants d'interface réutilisables
 │   │   ├── lib/
 │   │   │   ├── runner/         Client HTTP du runner (serveur uniquement)
 │   │   │   ├── documents.ts    Chargement des documents pour les pages
+│   │   │   ├── document-edit.ts  Logique du formulaire d'édition
 │   │   │   └── ...             Validation métier et lecture des données
 │   │   └── public/             Fichiers statiques
 │   │
@@ -435,7 +503,7 @@ NOX/
 │           ├── http/           Authentification, corps JSON, réponses
 │           └── repositories/
 │               ├── resolve-repository.ts   Résolution Git (execFile, sans shell)
-│               └── documents/              Inventaire, lecture, confinement
+│               └── documents/              Inventaire, lecture, écriture, confinement
 │
 ├── packages/
 │   ├── shared/                 Types et constantes partagés (@nox/shared)

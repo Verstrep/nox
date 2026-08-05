@@ -84,7 +84,10 @@ modules dédiés décident.
 - `GET /health` — sonde publique en local, sans authentification.
 - `POST /repositories/resolve` — authentifiée, résout la racine Git d'un chemin.
 - `POST /repositories/documents/list` — authentifiée, inventorie les Markdown reconnus.
-- `POST /repositories/documents/read` — authentifiée, lit un document autorisé.
+- `POST /repositories/documents/read` — authentifiée, lit un document autorisé et renvoie sa
+  révision.
+- `POST /repositories/documents/update` — authentifiée, remplace le contenu d'un document
+  existant après contrôle de révision.
 - Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
 - Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
 - Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
@@ -236,10 +239,44 @@ Propriétés de cette chaîne :
 - **Le web ne voit que des chemins relatifs.** Le chemin absolu du repository ne figure dans
   aucune réponse. Le navigateur reçoit `docs/PROJECT_BRIEF.md`, jamais
   `D:\Projets\mon-projet\docs\PROJECT_BRIEF.md`.
-- **Lecture seule stricte.** Aucune route n'écrit dans le repository. L'édition fera l'objet
-  d'une tâche distincte, avec ses propres garanties.
+- **Aucune interprétation.** Le contenu est renvoyé brut ; le web l'affiche sans le convertir
+  en HTML.
 
-### 5.4 Répartition des validations
+### 5.4 Modification d'un document Markdown
+
+```text
+Éditeur Markdown
+      ↓
+Server Action
+      ↓
+Client runner serveur
+      ↓ HTTP authentifié
+Runner
+      ↓ contrôle de révision + écriture sûre
+Document Markdown existant
+```
+
+Quatre propriétés font tenir cette chaîne :
+
+- **SQLite ne stocke toujours pas le contenu.** La base ne connaît que le chemin du
+  repository ; ni le texte du document, ni sa révision, ni un brouillon n'y sont écrits. Le
+  fichier reste la seule vérité, et Git son seul historique.
+- **Le runner est seul responsable de l'écriture.** Il applique le même confinement qu'en
+  lecture, refuse les liens symboliques, vérifie la taille en octets UTF-8, écrit dans un
+  fichier temporaire du même dossier puis remplace la cible. Rien de tout cela n'est dupliqué
+  côté web, qui n'a de toute façon aucun accès au disque.
+- **La révision empêche les écrasements silencieux.** Chaque lecture renvoie l'empreinte
+  SHA-256 des octets du fichier ; l'écriture la renvoie, et le runner refuse d'écrire si le
+  disque a changé entre-temps. Un fichier modifié dans un éditeur pendant qu'il est ouvert dans
+  NOX produit un conflit explicite, jamais une perte de données.
+- **Le chemin absolu vient de la base, jamais du formulaire.** Le navigateur n'envoie que
+  l'identifiant du projet et un chemin relatif ; la Server Action relit le repository en base.
+  Un champ caché altéré ne peut donc pas diriger l'écriture ailleurs sur la machine.
+
+Ce que cette chaîne ne fait **pas**, volontairement : créer un document, en supprimer un, le
+renommer, le déplacer, sauvegarder automatiquement, ou proposer d'écraser un conflit.
+
+### 5.5 Répartition des validations
 
 La distinction est structurante et vaut d'être explicite :
 
@@ -248,6 +285,7 @@ La distinction est structurante et vaut d'être explicite :
 | Ce chemin existe-t-il ? Est-ce un repository Git ? Quelle est sa racine ? | **Le runner** | Seul lui voit le système de fichiers de la machine. |
 | Quels documents Markdown existent ? Que contient celui-ci ? | **Le runner** | Même raison : le web n'a aucun accès au disque. |
 | Ce chemin de document sort-il du repository ? | **Le runner** | Le confinement se vérifie sur les chemins réels, après résolution des liens. |
+| Le fichier a-t-il changé depuis son ouverture ? | **Le runner** | Seul lui peut relire les octets réels au moment d'écrire. |
 | Le nom est-il renseigné ? La description est-elle trop longue ? | **Le web** | Règles métier, sans rapport avec la machine. |
 | Ce repository est-il déjà enregistré ? | **Le web** | Seul lui voit la base ; le runner reste sans état. |
 

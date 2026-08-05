@@ -5,8 +5,11 @@ import { DocumentList } from "@/components/DocumentList";
 import { DocumentViewer } from "@/components/DocumentViewer";
 import { EmptyState } from "@/components/EmptyState";
 import { RunnerStatusBadge } from "@/components/RunnerStatusBadge";
+import { documentUrl } from "@/lib/document-edit";
 import { loadProjectDocument, loadProjectDocuments } from "@/lib/documents";
 import { loadProject } from "@/lib/projects";
+
+import { DocumentEditor } from "./DocumentEditor";
 
 /**
  * Bandeau d'erreur.
@@ -26,6 +29,11 @@ function ErrorNotice({ title, message }: { title: string; message: string }) {
   );
 }
 
+/** Lit un parametre d'URL binaire, tolerant aux valeurs repetees. */
+function isFlagSet(value: string | string[] | undefined): boolean {
+  return value === "1" || (Array.isArray(value) && value.includes("1"));
+}
+
 export default async function ProjectDocumentsPage({
   params,
   searchParams,
@@ -43,6 +51,8 @@ export default async function ProjectDocumentsPage({
   const query = await searchParams;
   const rawPath = query["path"];
   const selectedPath = typeof rawPath === "string" && rawPath !== "" ? rawPath : null;
+  const wantsEditing = isFlagSet(query["edit"]);
+  const justSaved = isFlagSet(query["saved"]);
 
   const inventory = await loadProjectDocuments(project.repositoryPath);
 
@@ -50,6 +60,10 @@ export default async function ProjectDocumentsPage({
   // reste seul juge de sa validite : le web ne pre-filtre pas.
   const opened =
     selectedPath === null ? null : await loadProjectDocument(project.repositoryPath, selectedPath);
+
+  // Le mode edition n'est atteint que sur un document reellement lu : sinon il
+  // n'y a ni contenu a modifier, ni revision a comparer.
+  const isEditing = wantsEditing && opened !== null && opened.ok;
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -73,8 +87,8 @@ export default async function ProjectDocumentsPage({
           <code className="font-mono text-zinc-500">docs/</code>,{" "}
           <code className="font-mono text-zinc-500">decisions/</code>,{" "}
           <code className="font-mono text-zinc-500">plans/</code> et{" "}
-          <code className="font-mono text-zinc-500">tasks/</code>. Les fichiers sont lus depuis le
-          repository, en lecture seule.
+          <code className="font-mono text-zinc-500">tasks/</code>. Les documents existants sont
+          modifiables ; NOX n&apos;en cree et n&apos;en supprime aucun.
         </p>
       </header>
 
@@ -102,7 +116,16 @@ export default async function ProjectDocumentsPage({
           )}
         </section>
 
-        <section className="min-w-0">
+        <section className="flex min-w-0 flex-col gap-4">
+          {justSaved && !isEditing ? (
+            <p
+              role="status"
+              className="rounded-lg border border-teal-400/30 bg-teal-400/10 px-4 py-2 text-xs text-teal-200"
+            >
+              Document enregistre dans le repository.
+            </p>
+          ) : null}
+
           {opened === null ? (
             <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-5 py-16 text-center">
               <p className="text-sm text-zinc-400">Aucun document ouvert</p>
@@ -110,17 +133,22 @@ export default async function ProjectDocumentsPage({
                 Selectionnez un document dans la liste pour afficher son contenu brut.
               </p>
             </div>
-          ) : opened.ok ? (
-            <DocumentViewer document={opened.document} />
-          ) : (
+          ) : !opened.ok ? (
             <ErrorNotice title="Document illisible" message={opened.message} />
+          ) : isEditing ? (
+            <DocumentEditor projectId={project.id} document={opened.document} />
+          ) : (
+            <DocumentViewer
+              document={opened.document}
+              editHref={documentUrl(project.id, opened.document.path, { edit: true })}
+            />
           )}
         </section>
       </main>
 
       <footer className="mt-auto border-t border-zinc-800 pt-6 text-xs text-zinc-600">
-        NOX affiche le contenu brut des fichiers. L&apos;edition sera ajoutee dans une prochaine
-        etape ; aucun fichier n&apos;est modifie par cette page.
+        NOX affiche et enregistre le contenu brut des fichiers. Aucun document n&apos;est cree,
+        supprime ni renomme, et aucune sauvegarde automatique n&apos;a lieu.
       </footer>
     </div>
   );

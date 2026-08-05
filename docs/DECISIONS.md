@@ -608,3 +608,137 @@ l'utilisateur. `PATH_NOT_FOUND` survient pendant la création d'un projet : c'es
 frappe, et le message invite à corriger la saisie. `REPOSITORY_NOT_FOUND` survient sur un projet
 déjà enregistré : le repository a été déplacé ou supprimé, et le message doit le dire. Un code
 unique aurait forcé un message vague dans les deux cas.
+
+### D-051 — L'édition ne porte que sur des documents existants
+
+**Décision.** `POST /repositories/documents/update` remplace le contenu d'un fichier déjà
+présent. Un document absent produit `DOCUMENT_NOT_FOUND` ; il n'est jamais créé implicitement.
+
+**Justification.** Créer et modifier sont deux opérations aux risques différents. Modifier
+demande de ne pas écraser une version concurrente ; créer demande de valider un chemin qui
+n'existe pas encore, de refuser d'écraser un fichier existant et de décider quels emplacements
+acceptent un nouveau fichier. Les mélanger aurait produit une route au comportement double,
+difficile à raisonner et à tester. La création fera l'objet d'une tâche dédiée.
+
+### D-052 — La révision est une empreinte SHA-256 du contenu binaire
+
+**Décision.** Chaque lecture renvoie `revision`, empreinte SHA-256 hexadécimale des octets réels
+du fichier. Elle n'est calculée ni sur `updatedAt`, ni sur `size`, ni sur le texte décodé.
+
+**Justification.** L'horodatage et la taille sont les deux indicateurs qui viennent d'abord à
+l'esprit, et tous deux se trompent : deux écritures dans la même seconde peuvent partager un
+`mtime`, et une correction à taille constante — un mot remplacé par un autre de même longueur —
+passerait totalement inaperçue. Une empreinte du contenu ne se laisse tromper par aucun des deux.
+SHA-256 n'est pas retenu pour une propriété cryptographique — la révision n'est pas un secret et
+peut circuler jusqu'au navigateur — mais parce qu'il ne collisionne pas par accident, ce qu'un
+CRC ne garantit pas.
+
+### D-053 — Contrôle de concurrence optimiste, pas de verrou
+
+**Décision.** L'écriture est acceptée si la révision attendue correspond à l'état du disque au
+moment d'écrire, et refusée avec `DOCUMENT_CONFLICT` sinon. Aucun fichier n'est verrouillé
+pendant l'édition.
+
+**Justification.** Un verrou poserait plus de problèmes qu'il n'en résout dans ce contexte : il
+faudrait le libérer si l'onglet est fermé, le forcer si NOX plante, et il gênerait l'éditeur de
+code que l'utilisateur a ouvert en parallèle — usage normal, pas accident. Le contrôle optimiste
+n'empêche rien tant qu'il n'y a pas de conflit réel, et signale clairement les cas où il y en a
+un. Il reste une fenêtre théorique entre la relecture et le remplacement ; elle se compte en
+millisecondes sur un outil mono-utilisateur local.
+
+### D-054 — Aucun forçage de conflit
+
+**Décision.** En cas de conflit, NOX propose de recharger la version actuelle du fichier. Aucun
+bouton « écraser quand même », aucune fusion automatique.
+
+**Justification.** Un bouton de forçage transforme une protection en formalité : confronté à un
+message qui bloque, l'utilisateur clique. Or personne ne peut décider d'écraser sans avoir vu ce
+qui a changé — et NOX n'affiche pas encore de diff. Une fusion automatique serait pire : elle
+produirait un fichier que personne n'a écrit. Recharger fait perdre au plus quelques minutes de
+saisie, que l'utilisateur peut copier avant ; écraser peut faire perdre le travail d'un autre
+outil, sans trace.
+
+### D-055 — Refus d'écrire dans un lien symbolique
+
+**Décision.** Si le chemin visé est lui-même un lien symbolique — ou une jonction Windows —
+l'écriture est refusée avec `DOCUMENT_SYMLINK_NOT_WRITABLE`, même lorsque la cible reste dans le
+repository. La lecture, elle, continue de suivre les liens confinés.
+
+**Justification.** Lecture et écriture n'ont pas les mêmes conséquences. Lire à travers un lien
+confiné affiche un contenu du repository : sans surprise. Écrire à travers ce même lien modifie
+un fichier dont le nom n'est pas celui que l'utilisateur a cliqué. NOX doit pouvoir répondre sans
+ambiguïté à la question « quel fichier vient d'être modifié ? ». Le contrôle porte sur le chemin
+**avant** résolution — `absolutePath`, déjà passé par `realpath`, ne peut par construction plus
+signaler aucun lien.
+
+### D-056 — Écriture par fichier temporaire et remplacement
+
+**Décision.** Le contenu est écrit dans un fichier temporaire du même dossier, nommé
+`.nox-<aléatoire>.tmp`, synchronisé sur le disque, puis renommé sur la cible. Le temporaire est
+supprimé en cas d'échec.
+
+**Justification.** Écrire directement dans le fichier cible le tronque avant de le remplir : une
+coupure dans cette fenêtre laisse un document mutilé, et NOX n'a aucune copie pour le
+reconstituer. Le temporaire vit dans le même dossier parce qu'un renommage entre volumes n'est
+pas un renommage mais une copie suivie d'une suppression — ce qui rouvrirait exactement la
+fenêtre à fermer. Son nom ne se termine pas par `.md`, si bien qu'un temporaire survivant à un
+arrêt brutal n'apparaît jamais dans l'inventaire.
+
+**Garantie réelle sous Windows.** `fs.rename` s'appuie sur `MoveFileEx` avec
+`MOVEFILE_REPLACE_EXISTING`. Sur un même volume NTFS, un lecteur voit l'ancien contenu ou le
+nouveau, jamais un mélange — mais Windows ne documente pas l'opération comme atomique au sens
+strict, et elle échoue au lieu d'attendre si un autre processus tient la cible ouverte sans
+partage de suppression. La garantie offerte est donc « jamais de contenu partiel », pas
+« écriture atomique certifiée ». Obtenir la seconde demanderait `ReplaceFileW` via une dépendance
+native, ce qui n'apporterait rien de décisif à un outil local mono-utilisateur.
+
+### D-057 — UTF-8 conservé, BOM préservé, fins de ligne alignées sur le fichier
+
+**Décision.** Trois règles pour le contenu écrit :
+
+1. **UTF-8 sans BOM ajouté.** NOX n'ajoute jamais de BOM. Un BOM déjà présent est en revanche
+   **conservé** : le décodage de lecture utilise `ignoreBOM: true`, ce qui le maintient dans le
+   contenu et le fait donc revenir tel quel à l'enregistrement.
+2. **Fins de ligne alignées sur le document existant.** Le contenu reçu est ramené en LF, puis la
+   convention majoritaire du fichier sur le disque lui est réappliquée.
+3. **Aucun caractère de fin de fichier ajouté ni retiré.** Si l'utilisateur supprime le saut de
+   ligne final, il est supprimé.
+
+**Justification.** La règle 2 corrige un problème qui vient du navigateur : la spécification HTML
+impose qu'un `<textarea>` soit soumis en CRLF, quel que soit le texte affiché. Sans correction,
+enregistrer un fichier écrit en LF réécrirait toutes ses lignes en CRLF — un diff de plusieurs
+centaines de lignes pour une correction de trois mots. C'est le seul endroit où le contenu écrit
+s'écarte de la chaîne soumise, et cet écart existe précisément pour rester fidèle à l'intention.
+La règle 1 suit la même logique : perdre un BOM en silence serait une modification que personne
+n'a demandée.
+
+### D-058 — Aucune sauvegarde automatique
+
+**Décision.** L'enregistrement est déclenché par un clic explicite. Aucune écriture périodique,
+aucune écriture à la perte du focus.
+
+**Justification.** NOX écrit dans un repository Git qu'un éditeur de code observe en parallèle.
+Une sauvegarde automatique produirait des écritures que l'utilisateur n'a pas demandées, des
+conflits avec son éditeur, et un `git status` bruyant. La protection contre la perte accidentelle
+est assurée autrement : confirmation à l'annulation et `beforeunload`, tous deux inactifs tant
+que le texte n'a pas changé.
+
+### D-059 — Aucun brouillon persisté
+
+**Décision.** Le texte en cours d'édition vit dans l'état React du formulaire. Il n'est écrit ni
+en base, ni dans `localStorage`, ni dans un fichier temporaire de brouillon.
+
+**Justification.** Un brouillon crée un second point de vérité, avec toutes les questions qui
+suivent : quand l'effacer, que faire s'il diverge du fichier, que présenter à la réouverture.
+C'est une fonctionnalité à part entière, pas un détail d'implémentation. La conservation du texte
+en cas d'erreur — voir D-060 — couvre le besoin réel sans rien persister.
+
+### D-060 — Le texte saisi survit à toute erreur contrôlée
+
+**Décision.** Tout échec d'enregistrement renvoie le texte soumis dans l'état du formulaire :
+conflit de révision, runner arrêté, document trop volumineux, lien symbolique, panne d'écriture.
+
+**Justification.** Une erreur ne doit jamais coûter à l'utilisateur ce qu'il vient d'écrire.
+C'est particulièrement vrai du conflit, seul cas où NOX refuse une action parfaitement légitime :
+lui faire perdre son texte par-dessus le marché rendrait la protection plus coûteuse que le
+risque dont elle protège.

@@ -1,9 +1,9 @@
 /**
  * Client HTTP du runner local, strictement cote serveur.
  *
- * Deux operations, pas une de plus : verifier la disponibilite du runner et
- * resoudre la racine d'un repository. Ce n'est volontairement pas un client HTTP
- * generique.
+ * Une fonction par operation du runner, pas une de plus : sante, resolution d'un
+ * repository, inventaire, lecture et ecriture d'un document. Ce n'est
+ * volontairement pas un client HTTP generique.
  *
  * Le jeton circule uniquement dans l'en-tete `Authorization` d'une requete
  * serveur-vers-serveur. Il n'apparait dans aucune valeur de retour, dans aucun
@@ -16,12 +16,14 @@ import {
   isResolveRepositorySuccess,
   isRunnerErrorResponse,
   isRunnerHealthResponse,
+  isUpdateProjectDocumentSuccess,
   type ListProjectDocumentsRequest,
   type ProjectDocumentContent,
   type ProjectDocumentSummary,
   type ReadProjectDocumentRequest,
   type ResolveRepositoryRequest,
   type RunnerHealthResponse,
+  type UpdateProjectDocumentRequest,
 } from "@nox/shared";
 
 import { RUNNER_REQUEST_TIMEOUT_MS, loadRunnerClientConfig } from "./config.ts";
@@ -244,6 +246,39 @@ export function readProjectDocument(
     "documents/read",
     payload,
     isReadProjectDocumentSuccess,
+    (value) => (value as { document: ProjectDocumentContent }).document,
+    options,
+  );
+}
+
+/**
+ * Enregistre le nouveau contenu d'un document existant.
+ *
+ * `expectedRevision` est la revision obtenue a l'ouverture. Le runner compare
+ * cette valeur a l'etat reel du fichier et refuse l'ecriture si elle differe :
+ * le web ne decide jamais si l'ecriture est sure, il transmet et interprete.
+ *
+ * `repositoryPath` provient toujours de la base, jamais du navigateur.
+ */
+export function updateProjectDocument(
+  repositoryPath: string,
+  documentPath: string,
+  content: string,
+  expectedRevision: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ProjectDocumentContent>> {
+  const payload: UpdateProjectDocumentRequest = {
+    repositoryPath,
+    documentPath,
+    content,
+    expectedRevision,
+  };
+
+  return postAuthenticated(
+    "/repositories/documents/update",
+    "documents/update",
+    payload,
+    isUpdateProjectDocumentSuccess,
     (value) => (value as { document: ProjectDocumentContent }).document,
     options,
   );

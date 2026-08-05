@@ -47,9 +47,29 @@ export type ProjectDocumentSummary = {
   updatedAt: string;
 };
 
-/** Document complet : la fiche et son contenu brut. */
+/**
+ * Empreinte du contenu d'un document, en hexadecimal minuscule.
+ *
+ * Calculee par le runner sur les **octets reels** du fichier. Elle n'est pas
+ * derivee du chemin : deux fichiers de meme contenu partagent la meme revision,
+ * ce qui est sans consequence puisqu'elle n'identifie pas un document, elle
+ * decrit son etat.
+ *
+ * Elle peut circuler jusqu'au navigateur : elle ne revele ni chemin, ni contenu.
+ */
+export type ProjectDocumentRevision = string;
+
+/** SHA-256 en hexadecimal minuscule : 64 caracteres. */
+const REVISION_PATTERN = /^[0-9a-f]{64}$/;
+
+export function isProjectDocumentRevision(value: unknown): value is ProjectDocumentRevision {
+  return typeof value === "string" && REVISION_PATTERN.test(value);
+}
+
+/** Document complet : la fiche, son contenu brut et sa revision. */
 export type ProjectDocumentContent = ProjectDocumentSummary & {
   content: string;
+  revision: ProjectDocumentRevision;
 };
 
 export type ListProjectDocumentsRequest = {
@@ -67,6 +87,28 @@ export type ReadProjectDocumentRequest = {
 };
 
 export type ReadProjectDocumentSuccess = {
+  ok: true;
+  document: ProjectDocumentContent;
+};
+
+/**
+ * Demande de mise a jour d'un document **existant**.
+ *
+ * `expectedRevision` est la revision recue lors de la lecture. Le runner refuse
+ * l'ecriture si le fichier a change depuis : c'est tout le mecanisme de
+ * protection contre l'ecrasement d'une modification concurrente.
+ *
+ * Une chaine vide est un contenu parfaitement valide — vider un document est une
+ * modification comme une autre.
+ */
+export type UpdateProjectDocumentRequest = {
+  repositoryPath: string;
+  documentPath: string;
+  content: string;
+  expectedRevision: ProjectDocumentRevision;
+};
+
+export type UpdateProjectDocumentSuccess = {
   ok: true;
   document: ProjectDocumentContent;
 };
@@ -102,6 +144,34 @@ export function parseReadProjectDocumentRequest(
   };
 }
 
+/**
+ * Valide le corps recu par `POST /repositories/documents/update`.
+ *
+ * Les quatre champs doivent etre des chaines : un `content` absent ou d'un autre
+ * type est un desaccord de contrat, pas une erreur d'edition. Le **format** de
+ * la revision et la taille du contenu sont verifies plus loin, par le runner,
+ * qui dispose de codes d'erreur dedies pour les distinguer.
+ */
+export function parseUpdateProjectDocumentRequest(
+  value: unknown,
+): UpdateProjectDocumentRequest | null {
+  if (
+    !isRecord(value) ||
+    typeof value["repositoryPath"] !== "string" ||
+    typeof value["documentPath"] !== "string" ||
+    typeof value["content"] !== "string" ||
+    typeof value["expectedRevision"] !== "string"
+  ) {
+    return null;
+  }
+  return {
+    repositoryPath: value["repositoryPath"],
+    documentPath: value["documentPath"],
+    content: value["content"],
+    expectedRevision: value["expectedRevision"],
+  };
+}
+
 function isProjectDocumentSummary(value: unknown): value is ProjectDocumentSummary {
   return (
     isRecord(value) &&
@@ -124,6 +194,14 @@ export function isListProjectDocumentsSuccess(
   return Array.isArray(documents) && documents.every(isProjectDocumentSummary);
 }
 
+function isProjectDocumentContent(value: unknown): value is ProjectDocumentContent {
+  return (
+    isProjectDocumentSummary(value) &&
+    typeof (value as ProjectDocumentContent).content === "string" &&
+    isProjectDocumentRevision((value as ProjectDocumentContent).revision)
+  );
+}
+
 /** Verifie qu'une reponse JSON est une lecture de document valide. */
 export function isReadProjectDocumentSuccess(
   value: unknown,
@@ -131,6 +209,20 @@ export function isReadProjectDocumentSuccess(
   if (!isRecord(value) || value["ok"] !== true) {
     return false;
   }
-  const document: unknown = value["document"];
-  return isProjectDocumentSummary(document) && typeof (document as ProjectDocumentContent).content === "string";
+  return isProjectDocumentContent(value["document"]);
+}
+
+/**
+ * Verifie qu'une reponse JSON est une mise a jour reussie.
+ *
+ * Meme forme que la lecture : apres ecriture, le runner relit le document et
+ * renvoie sa fiche complete, avec sa **nouvelle** revision.
+ */
+export function isUpdateProjectDocumentSuccess(
+  value: unknown,
+): value is UpdateProjectDocumentSuccess {
+  if (!isRecord(value) || value["ok"] !== true) {
+    return false;
+  }
+  return isProjectDocumentContent(value["document"]);
 }

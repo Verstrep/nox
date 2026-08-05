@@ -84,6 +84,26 @@ export const RUNNER_ERROR = {
   /** L'inventaire depasse le nombre maximal de documents. */
   TOO_MANY_DOCUMENTS: "TOO_MANY_DOCUMENTS",
 
+  // --- Ecriture d'un document ------------------------------------------------
+  // L'edition n'ajoute pas seulement une operation : elle ajoute une classe
+  // d'echecs absente de la lecture, ou l'etat du disque a change entre le moment
+  // ou l'utilisateur a ouvert le document et celui ou il l'enregistre.
+
+  /** La revision attendue est absente du corps de la requete. */
+  DOCUMENT_REVISION_REQUIRED: "DOCUMENT_REVISION_REQUIRED",
+  /** La revision attendue n'a pas la forme d'une empreinte SHA-256. */
+  DOCUMENT_REVISION_INVALID: "DOCUMENT_REVISION_INVALID",
+  /** Le fichier a change sur le disque depuis sa lecture : ecriture refusee. */
+  DOCUMENT_CONFLICT: "DOCUMENT_CONFLICT",
+  /** Le contenu soumis ne peut pas etre encode en UTF-8 valide. */
+  DOCUMENT_CONTENT_INVALID: "DOCUMENT_CONTENT_INVALID",
+  /** La cible de l'ecriture est un lien symbolique : NOX refuse de la suivre. */
+  DOCUMENT_SYMLINK_NOT_WRITABLE: "DOCUMENT_SYMLINK_NOT_WRITABLE",
+  /** Le fichier temporaire n'a pas pu etre ecrit : le document est inchange. */
+  DOCUMENT_TEMPORARY_FILE_FAILED: "DOCUMENT_TEMPORARY_FILE_FAILED",
+  /** Le remplacement du document a echoue : verrou, droits, erreur disque. */
+  DOCUMENT_WRITE_FAILED: "DOCUMENT_WRITE_FAILED",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

@@ -6,10 +6,19 @@ import {
   listProjectDocuments,
   readProjectDocument,
   resolveRepositoryPath,
+  updateProjectDocument,
 } from "./client.ts";
-import { describeRunnerFailure, isRunnerUnavailable, type RunnerFailure } from "./errors.ts";
+import {
+  describeRunnerFailure,
+  isDocumentConflict,
+  isRunnerUnavailable,
+  type RunnerFailure,
+} from "./errors.ts";
 
 const TOKEN = "jeton-de-test-0123456789abcdef";
+/** Revision fictive, au format attendu par le contrat : SHA-256 hexadecimal. */
+const REVISION = "a".repeat(64);
+const NEXT_REVISION = "b".repeat(64);
 const ENVIRONMENT = {
   NOX_RUNNER_URL: "http://127.0.0.1:9999",
   NOX_RUNNER_TOKEN: TOKEN,
@@ -292,6 +301,7 @@ describe("readProjectDocument", () => {
     size: 9,
     updatedAt: "2026-08-04T18:30:00.000Z",
     content: "# Brief\n",
+    revision: REVISION,
   };
 
   it("retourne le document et son contenu", async () => {
@@ -359,6 +369,10 @@ describe("readProjectDocument", () => {
       { ok: true, document: { ...document, content: 42 } },
       { ok: true, document: { path: "a.md" } },
       { ok: true },
+      // Une revision absente ou mal formee rend la protection contre les
+      // conflits inoperante : la reponse est rejetee, pas rattrapee.
+      { ok: true, document: { ...document, revision: undefined } },
+      { ok: true, document: { ...document, revision: "pas-une-empreinte" } },
     ]) {
       const result = await readProjectDocument("D:\\Projets\\depot", "docs/a.md", {
         environment: ENVIRONMENT,
@@ -369,9 +383,173 @@ describe("readProjectDocument", () => {
     }
   });
 
+  it("retourne la revision du document", async () => {
+    const result = await readProjectDocument("D:\\Projets\\depot", "docs/PROJECT_BRIEF.md", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, document }),
+    });
+
+    assert.equal(result.ok && result.value.revision, REVISION);
+  });
+
   it("signale une configuration absente sans appeler le runner", async () => {
     let called = false;
     const result = await readProjectDocument("D:\\Projets\\depot", "docs/a.md", {
+      environment: { NOX_RUNNER_URL: "http://127.0.0.1:9999" },
+      fetch: () => {
+        called = true;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+
+    assert.equal(failureOf(result).kind, "not_configured");
+    assert.equal(called, false);
+  });
+});
+
+describe("updateProjectDocument", () => {
+  const saved = {
+    path: "docs/PROJECT_BRIEF.md",
+    name: "PROJECT_BRIEF.md",
+    category: "CORE",
+    size: 18,
+    updatedAt: "2026-08-05T09:00:00.000Z",
+    content: "# Brief revu\n",
+    revision: NEXT_REVISION,
+  };
+
+  it("retourne le document enregistre et sa nouvelle revision", async () => {
+    const result = await updateProjectDocument(
+      "D:\\Projets\\depot",
+      "docs/PROJECT_BRIEF.md",
+      "# Brief revu\n",
+      REVISION,
+      { environment: ENVIRONMENT, fetch: stubFetch(200, { ok: true, document: saved }) },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.revision, NEXT_REVISION);
+    assert.equal(result.ok && result.value.content, "# Brief revu\n");
+  });
+
+  it("envoie les quatre champs, et le jeton dans le seul en-tete", async () => {
+    const capture: { request?: Request } = {};
+    await updateProjectDocument(
+      "D:\\Projets\\depot",
+      "docs/PROJECT_BRIEF.md",
+      "# Brief revu\n",
+      REVISION,
+      {
+        environment: ENVIRONMENT,
+        fetch: stubFetch(200, { ok: true, document: saved }, capture),
+      },
+    );
+
+    assert.equal(capture.request?.method, "POST");
+    assert.equal(capture.request?.url.endsWith("/repositories/documents/update"), true);
+    assert.equal(capture.request?.headers.get("authorization"), `Bearer ${TOKEN}`);
+
+    const body = await capture.request?.text();
+    assert.equal(
+      body,
+      JSON.stringify({
+        repositoryPath: "D:\\Projets\\depot",
+        documentPath: "docs/PROJECT_BRIEF.md",
+        content: "# Brief revu\n",
+        expectedRevision: REVISION,
+      }),
+    );
+    // Le jeton voyage dans l'en-tete, jamais dans le corps.
+    assert.equal(body?.includes(TOKEN), false);
+  });
+
+  it("transmet un contenu vide sans le transformer", async () => {
+    const capture: { request?: Request } = {};
+    await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, document: { ...saved, content: "", size: 0 } }, capture),
+    });
+
+    assert.equal(JSON.parse((await capture.request?.text()) ?? "{}").content, "");
+  });
+
+  it("traduit un conflit de revision", async () => {
+    const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "DOCUMENT_CONFLICT" } }),
+    });
+
+    const runnerFailure = failureOf(result);
+    assert.equal(runnerFailure.kind === "runner_error" && runnerFailure.code, "DOCUMENT_CONFLICT");
+    assert.equal(isDocumentConflict(runnerFailure), true);
+    assert.match(describeRunnerFailure(runnerFailure), /modifie depuis son ouverture/);
+  });
+
+  it("traduit un refus d'ecriture dans un lien symbolique", async () => {
+    const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(403, { ok: false, error: { code: "DOCUMENT_SYMLINK_NOT_WRITABLE" } }),
+    });
+
+    assert.match(describeRunnerFailure(failureOf(result)), /lien symbolique/);
+  });
+
+  it("traduit un document absent", async () => {
+    const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(404, { ok: false, error: { code: "DOCUMENT_NOT_FOUND" } }),
+    });
+
+    const runnerFailure = failureOf(result);
+    assert.equal(runnerFailure.kind === "runner_error" && runnerFailure.code, "DOCUMENT_NOT_FOUND");
+  });
+
+  it("traduit un contenu trop volumineux", async () => {
+    const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(413, { ok: false, error: { code: "DOCUMENT_TOO_LARGE" } }),
+    });
+
+    assert.match(describeRunnerFailure(failureOf(result)), /taille maximale/);
+  });
+
+  it("traduit une authentification refusee", async () => {
+    const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(401, { ok: false, error: { code: "UNAUTHORIZED" } }),
+    });
+
+    assert.equal(failureOf(result).kind, "unauthorized");
+  });
+
+  it("signale un runner arrete", async () => {
+    const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new TypeError("fetch failed")),
+    });
+
+    assert.equal(failureOf(result).kind, "unreachable");
+  });
+
+  it("refuse une reponse hors contrat", async () => {
+    for (const body of [
+      { ok: true, document: { ...saved, revision: "trop-court" } },
+      { ok: true, document: { ...saved, content: undefined } },
+      { ok: true },
+      { ok: true, document: null },
+    ]) {
+      const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
+        environment: ENVIRONMENT,
+        fetch: stubFetch(200, body),
+      });
+
+      assert.equal(failureOf(result).kind, "invalid_response", JSON.stringify(body));
+    }
+  });
+
+  it("signale une configuration absente sans appeler le runner", async () => {
+    let called = false;
+    const result = await updateProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", REVISION, {
       environment: { NOX_RUNNER_URL: "http://127.0.0.1:9999" },
       fetch: () => {
         called = true;
@@ -400,6 +578,13 @@ describe("messages presentes a l'utilisateur", () => {
     { kind: "runner_error", code: "DOCUMENT_OUTSIDE_REPOSITORY" },
     { kind: "runner_error", code: "DOCUMENT_NOT_UTF8" },
     { kind: "runner_error", code: "TOO_MANY_DOCUMENTS" },
+    { kind: "runner_error", code: "DOCUMENT_CONFLICT" },
+    { kind: "runner_error", code: "DOCUMENT_SYMLINK_NOT_WRITABLE" },
+    { kind: "runner_error", code: "DOCUMENT_CONTENT_INVALID" },
+    { kind: "runner_error", code: "DOCUMENT_WRITE_FAILED" },
+    { kind: "runner_error", code: "DOCUMENT_TEMPORARY_FILE_FAILED" },
+    { kind: "runner_error", code: "DOCUMENT_REVISION_REQUIRED" },
+    { kind: "runner_error", code: "DOCUMENT_REVISION_INVALID" },
   ];
 
   it("produit un message non vide pour chaque echec", () => {

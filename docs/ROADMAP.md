@@ -93,21 +93,49 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 
 ---
 
-## 🟢 5. Création et édition des documents Markdown
+## ✅ 5. Édition sécurisée d'un document existant — `TASK-005`
 
-**Étape active.**
+**Objectif** : modifier depuis NOX un document Markdown déjà présent, sans jamais écraser une
+version modifiée entre-temps sur le disque.
 
-**Objectif** : écrire les documents de référence depuis NOX.
+- Route authentifiée `POST /repositories/documents/update`.
+- Révision SHA-256 renvoyée à chaque lecture, comparée à chaque écriture
+  ([D-052](DECISIONS.md#d-052--la-révision-est-une-empreinte-sha-256-du-contenu-binaire)).
+- Contrôle de concurrence optimiste, conflit explicite, aucun forçage
+  ([D-053](DECISIONS.md#d-053--contrôle-de-concurrence-optimiste-pas-de-verrou),
+  [D-054](DECISIONS.md#d-054--aucun-forçage-de-conflit)).
+- Confinement réutilisé tel quel, refus d'écrire dans un lien symbolique
+  ([D-055](DECISIONS.md#d-055--refus-décrire-dans-un-lien-symbolique)).
+- Écriture par fichier temporaire puis remplacement, sans reste
+  ([D-056](DECISIONS.md#d-056--écriture-par-fichier-temporaire-et-remplacement)).
+- Modes lecture et édition sur `/projects/[id]/documents`, texte conservé en cas d'erreur.
 
-- Édition et sauvegarde d'un document existant.
-- Création d'un document dans un emplacement autorisé.
-- Garanties d'écriture : confinement identique à la lecture, gestion des conflits.
+**Fin d'étape atteinte** : `PROJECT_BRIEF.md` d'un projet est modifiable depuis NOX, et une
+modification concurrente est refusée sans perte — vérifié par un test fonctionnel réel, voir
+[PROJECT_STATE.md](PROJECT_STATE.md).
 
-**Fin d'étape** : `PROJECT_BRIEF.md` d'un projet est modifiable depuis NOX.
+Hors périmètre volontaire : création, suppression, renommage, déplacement, brouillons,
+sauvegarde automatique, aperçu Markdown, diff
+([D-051](DECISIONS.md#d-051--lédition-ne-porte-que-sur-des-documents-existants),
+[D-058](DECISIONS.md#d-058--aucune-sauvegarde-automatique)).
 
 ---
 
-## ⬜ 6. Gestion des tâches
+## 🟢 6. Création de documents Markdown
+
+**Étape active.**
+
+**Objectif** : créer un nouveau document depuis NOX, sans jamais écraser un fichier existant.
+
+- Validation d'un chemin qui n'existe pas encore, dans un emplacement autorisé.
+- Refus d'écrasement d'un fichier déjà présent.
+- Réutilisation du confinement et de l'écriture sûre de l'étape 5.
+
+**Fin d'étape** : un document de référence manquant peut être créé depuis NOX.
+
+---
+
+## ⬜ 7. Gestion des tâches
 
 **Objectif** : structurer le travail en tâches vérifiables.
 
@@ -119,7 +147,7 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 
 ---
 
-## ⬜ 7. Runner contrôlé
+## ⬜ 8. Runner contrôlé
 
 **Objectif** : piloter le runner local depuis l'interface.
 
@@ -131,7 +159,7 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 
 ---
 
-## ⬜ 8. Intégration Claude Code
+## ⬜ 9. Intégration Claude Code
 
 **Objectif** : envoyer une tâche au CLI et récupérer son compte rendu.
 
@@ -143,7 +171,7 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 
 ---
 
-## ⬜ 9. Git et validations
+## ⬜ 10. Git et validations
 
 **Objectif** : rendre le résultat relisible.
 
@@ -155,7 +183,7 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 
 ---
 
-## ⬜ 10. Orchestrateur OpenAI
+## ⬜ 11. Orchestrateur OpenAI
 
 **Objectif** : discuter du besoin dans NOX.
 
@@ -168,7 +196,7 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 
 ---
 
-## ⬜ 11. Test sur un petit projet réel
+## ⬜ 12. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -180,7 +208,7 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 
 ---
 
-## ⬜ 12. Fonctionnalités avancées
+## ⬜ 13. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -189,4 +217,4 @@ Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, 
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 11.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 12.**

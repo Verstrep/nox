@@ -14,6 +14,19 @@ import { RUNNER_ERROR, type RunnerErrorCode } from "@nox/shared";
 /** Taille maximale acceptee pour un corps de requete : 32 Kio. */
 export const MAX_BODY_BYTES = 32 * 1024;
 
+/**
+ * Taille maximale du corps d'une ecriture de document : 4 Mio.
+ *
+ * Un document peut peser jusqu'a 1 Mio, et son encodage JSON est plus long que
+ * le texte d'origine — guillemets, antislashs et retours a la ligne sont
+ * echappes. La marge couvre largement cette expansion sans laisser la limite
+ * devenir symbolique : elle reste une borne, pas une formalite.
+ *
+ * Seule la route d'ecriture l'utilise. Les autres n'echangent que des chemins et
+ * gardent la limite stricte de 32 Kio.
+ */
+export const MAX_DOCUMENT_BODY_BYTES = 4 * 1024 * 1024;
+
 /** Delai maximal pour recevoir un corps complet. */
 export const BODY_TIMEOUT_MS = 5_000;
 

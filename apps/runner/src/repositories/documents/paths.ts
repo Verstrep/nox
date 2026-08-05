@@ -35,7 +35,21 @@ import {
 export type NormalizedDocumentPath = { ok: true; relativePath: string } | { ok: false; code: RunnerErrorCode };
 
 export type ResolvedDocumentPath =
-  | { ok: true; relativePath: string; absolutePath: string }
+  | {
+      ok: true;
+      relativePath: string;
+      /** Chemin reel du fichier, apres resolution des liens. */
+      absolutePath: string;
+      /**
+       * Chemin designe dans le repository, **avant** resolution des liens.
+       *
+       * Il vaut `absolutePath` a la casse pres lorsque aucun lien n'intervient.
+       * L'ecriture en a besoin : c'est sur ce chemin qu'un `lstat` revele que le
+       * document demande est lui-meme un lien symbolique — information que
+       * `absolutePath`, deja resolu, a par construction perdue.
+       */
+      candidatePath: string;
+    }
   | { ok: false; code: RunnerErrorCode };
 
 /** Detecte un schema d'URL (`file:`, `http:`, mais aussi `C:` sous Windows). */
@@ -187,5 +201,10 @@ export function resolveDocumentPath(
     return { ok: false, code: RUNNER_ERROR.DOCUMENT_OUTSIDE_REPOSITORY };
   }
 
-  return { ok: true, relativePath: normalized.relativePath, absolutePath: realDocument };
+  return {
+    ok: true,
+    relativePath: normalized.relativePath,
+    absolutePath: realDocument,
+    candidatePath: candidate,
+  };
 }

@@ -11,7 +11,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -25,6 +25,7 @@ import {
   listProjectDocuments,
   readProjectDocument,
   resolveRepositoryPath,
+  updateProjectDocument,
 } from "./client.ts";
 import type { RunnerFailure } from "./errors.ts";
 
@@ -196,5 +197,104 @@ describe("integration web -> runner : documents", () => {
     });
 
     assert.equal(failureOf(result).kind, "unauthorized");
+  });
+});
+
+describe("integration web -> runner : ecriture d'un document", () => {
+  /** Ouvre un document et retourne sa revision courante. */
+  async function open(documentPath: string) {
+    const result = await readProjectDocument(documentsRepository, documentPath, { environment });
+    assert.equal(result.ok, true);
+    if (!result.ok) throw new Error("lecture impossible");
+    return result.value;
+  }
+
+  it("enregistre un nouveau contenu et le rend immediatement relisible", async () => {
+    const opened = await open("docs/nested/NOTE.md");
+
+    const saved = await updateProjectDocument(
+      documentsRepository,
+      "docs/nested/NOTE.md",
+      "# Note revue\n",
+      opened.revision,
+      { environment },
+    );
+
+    assert.equal(saved.ok, true);
+    assert.equal(saved.ok && saved.value.content, "# Note revue\n");
+    assert.notEqual(saved.ok && saved.value.revision, opened.revision);
+
+    // Le fichier reel, vu depuis le test : c'est le disque qui fait foi.
+    assert.equal(
+      await readFile(path.join(documentsRepository, "docs", "nested", "NOTE.md"), "utf8"),
+      "# Note revue\n",
+    );
+
+    const reopened = await open("docs/nested/NOTE.md");
+    assert.equal(reopened.content, "# Note revue\n");
+    assert.equal(reopened.revision, saved.ok ? saved.value.revision : "");
+  });
+
+  it("refuse une revision perimee et laisse le fichier intact", async () => {
+    const opened = await open("decisions/ADR-001.md");
+
+    // Modification exterieure, comme depuis un editeur ouvert en parallele.
+    await writeFile(
+      path.join(documentsRepository, "decisions", "ADR-001.md"),
+      "# ADR 001 modifie ailleurs\n",
+      "utf8",
+    );
+
+    const refused = await updateProjectDocument(
+      documentsRepository,
+      "decisions/ADR-001.md",
+      "# Version de NOX\n",
+      opened.revision,
+      { environment },
+    );
+
+    const runnerFailure = failureOf(refused);
+    assert.equal(runnerFailure.kind === "runner_error" && runnerFailure.code, "DOCUMENT_CONFLICT");
+    assert.equal(
+      await readFile(path.join(documentsRepository, "decisions", "ADR-001.md"), "utf8"),
+      "# ADR 001 modifie ailleurs\n",
+    );
+  });
+
+  it("refuse une traversee de repertoire de bout en bout", async () => {
+    const refused = await updateProjectDocument(
+      documentsRepository,
+      "../../secret.md",
+      "# Injecte\n",
+      "a".repeat(64),
+      { environment },
+    );
+
+    const runnerFailure = failureOf(refused);
+    assert.equal(runnerFailure.kind === "runner_error" && runnerFailure.code, "DOCUMENT_PATH_INVALID");
+  });
+
+  it("exige le bon jeton pour ecrire", async () => {
+    const opened = await open("README.md");
+    const refused = await updateProjectDocument(documentsRepository, "README.md", "# Pirate\n", opened.revision, {
+      environment: { ...environment, NOX_RUNNER_TOKEN: "un-autre-jeton" },
+    });
+
+    assert.equal(failureOf(refused).kind, "unauthorized");
+    assert.equal(await readFile(path.join(documentsRepository, "README.md"), "utf8"), "# Lisez-moi\n");
+  });
+
+  it("ne laisse aucun fichier temporaire derriere lui", async () => {
+    const opened = await open("docs/PROJECT_BRIEF.md");
+    await updateProjectDocument(
+      documentsRepository,
+      "docs/PROJECT_BRIEF.md",
+      "# Brief revu\n",
+      opened.revision,
+      { environment },
+    );
+
+    const entries = await readdir(path.join(documentsRepository, "docs"));
+    assert.deepEqual(entries.filter((name) => name.startsWith(".nox-")), []);
   });
 });

@@ -46,9 +46,12 @@ export {
   PROJECT_DOCUMENT_CATEGORY,
   isListProjectDocumentsSuccess,
   isProjectDocumentCategory,
+  isProjectDocumentRevision,
   isReadProjectDocumentSuccess,
+  isUpdateProjectDocumentSuccess,
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
+  parseUpdateProjectDocumentRequest,
 } from "./documents.js";
 
 export type {
@@ -56,9 +59,12 @@ export type {
   ListProjectDocumentsSuccess,
   ProjectDocumentCategory,
   ProjectDocumentContent,
+  ProjectDocumentRevision,
   ProjectDocumentSummary,
   ReadProjectDocumentRequest,
   ReadProjectDocumentSuccess,
+  UpdateProjectDocumentRequest,
+  UpdateProjectDocumentSuccess,
 } from "./documents.js";
 
 /** Version courante du socle NOX, partagee par les workspaces. */
