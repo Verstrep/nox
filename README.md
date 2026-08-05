@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-003 — connexion web ↔ runner**.
+Dernière étape terminée : **TASK-004 — inventaire et lecture des documents Markdown**.
 
 | Élément | État |
 | --- | --- |
@@ -21,9 +21,10 @@ Dernière étape terminée : **TASK-003 — connexion web ↔ runner**.
 | Création / liste / consultation d'un projet | ✅ fonctionnelles |
 | API HTTP locale du runner, authentifiée | ✅ fonctionnelle |
 | Validation d'un repository Git par le runner | ✅ fonctionnelle |
-| Indicateur de disponibilité du runner | ✅ fonctionnel |
+| Inventaire et lecture des documents Markdown | ✅ fonctionnels (lecture seule) |
+| Édition, création, suppression d'un document | ⬜ non commencées |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
-| Documents, tâches, exécutions, intégration IA | ⬜ non commencées |
+| Tâches, exécutions, intégration IA | ⬜ non commencées |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
@@ -217,6 +218,81 @@ message indiquant qu'il faut démarrer le runner.
 Le statut d'un projet est toujours `DRAFT` : les transitions viendront avec la gestion des
 tâches. Pour retirer un projet créé par erreur, passer par `npm run db:studio`.
 
+## Consulter les documents d'un projet
+
+Depuis la page d'un projet, la carte **Documents** indique le nombre de fichiers Markdown
+détectés et mène à `/projects/<id>/documents`.
+
+La page présente la liste à gauche et le lecteur à droite. Sélectionner un document met son
+chemin dans l'URL (`?path=docs%2FPROJECT_BRIEF.md`) : le lien est partageable, le bouton
+« précédent » du navigateur fonctionne, et un rechargement conserve le document ouvert.
+
+### Emplacements inspectés
+
+NOX **ne parcourt pas tout le repository**. Il inspecte uniquement :
+
+| Emplacement | Contenu retenu |
+| --- | --- |
+| Racine | `README.md`, `CLAUDE.md`, `AGENTS.md` — et rien d'autre |
+| `docs/` | tous les `.md`, récursivement |
+| `decisions/` | tous les `.md`, récursivement |
+| `plans/` | tous les `.md`, récursivement |
+| `tasks/` | tous les `.md`, récursivement |
+
+Sont toujours ignorés : `node_modules/`, `.git/`, `.next/`, `dist/`, `build/`, `coverage/`,
+`out/`, `vendor/`, les fichiers non `.md`, et les liens symboliques (jamais suivis).
+
+Les autres Markdown de la racine — `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE.md`… — sont
+volontairement écartés : ils encombreraient un inventaire destiné au pilotage du projet.
+
+### Catégories et ordre
+
+Chaque document reçoit une catégorie déduite de son **chemin** uniquement, jamais de son
+contenu :
+
+| Catégorie | Origine |
+| --- | --- |
+| **Principal** | Documents de référence reconnus : `README.md`, `CLAUDE.md`, `AGENTS.md`, `docs/PROJECT_BRIEF.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md`… |
+| **Documentation** | Autres fichiers de `docs/` |
+| **Décision** | Fichiers de `decisions/` |
+| **Plan** | Fichiers de `plans/` |
+| **Tâche** | Fichiers de `tasks/` |
+
+La liste est triée par catégorie, puis par chemin dans l'ordre alphabétique (insensible à la
+casse et aux accents).
+
+### Limites
+
+| Limite | Valeur | Comportement au dépassement |
+| --- | --- | --- |
+| Taille d'un document | 1 Mio | Le document n'est pas lu ; la liste continue de l'afficher |
+| Nombre de documents | 500 | L'inventaire est refusé plutôt que tronqué silencieusement |
+| Profondeur de parcours | 6 niveaux | Les fichiers plus profonds sont ignorés |
+
+Les fichiers sont lus en **UTF-8 strict** : un fichier binaire renommé en `.md` est rejeté avec
+un message clair plutôt qu'affiché corrompu.
+
+### Lecture seule
+
+Cette page **ne modifie jamais** le repository. Aucun fichier n'est créé, modifié, renommé ou
+supprimé. Le contenu est affiché brut, sans rendu HTML du Markdown : les `#` et les `**`
+restent visibles. L'édition fera l'objet d'une étape ultérieure.
+
+### Erreurs courantes
+
+| Symptôme | Cause | Correction |
+| --- | --- | --- |
+| « Inventaire indisponible » + « Runner indisponible » | Le runner n'est pas démarré | `npm run dev:runner` dans un second terminal |
+| « Le repository de ce projet est introuvable » | Le dossier a été déplacé ou supprimé depuis son enregistrement | Remettre le dossier en place, ou recréer le projet |
+| « Aucun document Markdown » | Le repository n'a rien dans les emplacements inspectés | Vérifier le tableau ci-dessus |
+| « Ce document n'existe plus » | Fichier supprimé ou renommé entre la liste et l'ouverture | Recharger la page |
+| « Ce document dépasse la taille maximale lisible » | Fichier > 1 Mio | L'ouvrir dans votre éditeur |
+| « Ce fichier n'est pas du texte UTF-8 valide » | Fichier binaire ou encodage exotique | Le convertir en UTF-8 |
+
+La page d'un projet reste toujours accessible sans runner : les informations issues de SQLite
+(nom, description, statut, chemin, dates) s'affichent normalement, seule la carte Documents
+signale l'indisponibilité.
+
 ## Lancer le runner
 
 Dans un second terminal :
@@ -252,6 +328,8 @@ lancés ensemble : le runner peut être redémarré sans toucher au web, et inve
 | --- | --- | --- | --- |
 | `/health` | `GET`, `HEAD` | aucune | Sonde de disponibilité |
 | `/repositories/resolve` | `POST` | `Bearer` obligatoire | Racine Git d'un chemin local |
+| `/repositories/documents/list` | `POST` | `Bearer` obligatoire | Inventaire des Markdown reconnus |
+| `/repositories/documents/read` | `POST` | `Bearer` obligatoire | Contenu d'un document autorisé |
 
 ### Tester `/health`
 
@@ -345,6 +423,7 @@ NOX/
 │   │   ├── components/         Composants d'interface réutilisables
 │   │   ├── lib/
 │   │   │   ├── runner/         Client HTTP du runner (serveur uniquement)
+│   │   │   ├── documents.ts    Chargement des documents pour les pages
 │   │   │   └── ...             Validation métier et lecture des données
 │   │   └── public/             Fichiers statiques
 │   │
@@ -354,12 +433,15 @@ NOX/
 │           ├── config.ts       Configuration validée au démarrage
 │           ├── server.ts       Routage HTTP
 │           ├── http/           Authentification, corps JSON, réponses
-│           └── repositories/   Résolution Git (execFile, sans shell)
+│           └── repositories/
+│               ├── resolve-repository.ts   Résolution Git (execFile, sans shell)
+│               └── documents/              Inventaire, lecture, confinement
 │
 ├── packages/
 │   ├── shared/                 Types et constantes partagés (@nox/shared)
 │   │   ├── src/statuses.ts     ProjectStatus, TaskStatus, RunStatus
-│   │   └── src/runner.ts       Contrat HTTP web ↔ runner
+│   │   ├── src/runner.ts       Contrat HTTP web ↔ runner
+│   │   └── src/documents.ts    Contrat des documents Markdown
 │   │
 │   └── database/               Accès aux données (@nox/database)
 │       ├── prisma/             Schéma et migrations versionnées

@@ -116,6 +116,18 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   processus. Seule `GET /health` est publique en local.
 - **Le jeton ne quitte jamais le serveur.** Pas de variable `NEXT_PUBLIC_*`, pas de jeton dans
   une réponse, un message d'erreur ou une ligne de log — même partiellement.
+- **Tout accès aux fichiers d'un projet passe par le runner.** `apps/web` n'ouvre, ne liste et
+  ne lit aucun fichier de repository.
+- **Le web ne reçoit que des chemins relatifs.** Un chemin absolu de la machine ne doit jamais
+  figurer dans une réponse du runner, ni atteindre le navigateur.
+- **Aucun chemin fourni par l'utilisateur n'est résolu sans contrôle de confinement.** Filtrage
+  syntaxique (relatif, sans `..`, extension attendue, emplacement autorisé) **puis** vérification
+  après `realpath`, qui seule révèle les liens sortants.
+- **Aucun fichier hors du repository ne peut être lu.** Le confinement se vérifie sur les chemins
+  réels, jamais par comparaison de préfixe de chaîne.
+- **Aucune écriture dans un repository sans tâche qui la demande explicitement.** Les routes
+  documents actuelles sont en lecture seule ; n'y ajoutez ni création, ni modification, ni
+  suppression sans instruction dédiée.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code
   d'erreur dans `apps/web` ou `apps/runner`.
 - `packages/shared` n'importe ni Node, ni React, ni aucune dépendance runtime ;

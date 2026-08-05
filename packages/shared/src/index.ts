@@ -41,5 +41,25 @@ export type {
   RunnerHealthResponse,
 } from "./runner.js";
 
+export {
+  PROJECT_DOCUMENT_CATEGORIES,
+  PROJECT_DOCUMENT_CATEGORY,
+  isListProjectDocumentsSuccess,
+  isProjectDocumentCategory,
+  isReadProjectDocumentSuccess,
+  parseListProjectDocumentsRequest,
+  parseReadProjectDocumentRequest,
+} from "./documents.js";
+
+export type {
+  ListProjectDocumentsRequest,
+  ListProjectDocumentsSuccess,
+  ProjectDocumentCategory,
+  ProjectDocumentContent,
+  ProjectDocumentSummary,
+  ReadProjectDocumentRequest,
+  ReadProjectDocumentSuccess,
+} from "./documents.js";
+
 /** Version courante du socle NOX, partagee par les workspaces. */
 export const NOX_VERSION = "0.1.0";

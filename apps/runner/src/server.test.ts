@@ -6,14 +6,27 @@ import { after, before, describe, it } from "node:test";
 import type { RunnerConfig } from "./config.ts";
 import { MAX_BODY_BYTES } from "./http/body.ts";
 import { createRunnerServer } from "./server.ts";
+import type { ListDocumentsResult } from "./repositories/documents/list-documents.ts";
+import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
 import type { ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
 
 const TOKEN = "jeton-de-test-0123456789abcdef";
 const CONFIG: RunnerConfig = { host: "127.0.0.1", port: 0, token: TOKEN };
 const CANONICAL_PATH = "D:\\Projets\\depot-fictif";
 
+const SAMPLE_DOCUMENT = {
+  path: "docs/PROJECT_BRIEF.md",
+  name: "PROJECT_BRIEF.md",
+  category: "CORE",
+  size: 42,
+  updatedAt: "2026-08-04T18:30:00.000Z",
+} as const;
+
 /** Chemins transmis a la couche Git simulee, pour verifier le passage de relais. */
 const receivedPaths: string[] = [];
+
+/** Arguments transmis a la couche documents, meme objectif. */
+const receivedDocumentCalls: { repositoryPath: string; documentPath: string }[] = [];
 
 /**
  * Git est simule : les tests HTTP ne doivent dependre ni de Git, ni du systeme
@@ -30,12 +43,48 @@ function fakeResolve(repositoryPath: string): Promise<ResolveRepositoryResult> {
   return Promise.resolve({ ok: true, canonicalPath: CANONICAL_PATH });
 }
 
+/** Inventaire simule : la decouverte reelle a ses propres tests. */
+function fakeList(repositoryPath: string): Promise<ListDocumentsResult> {
+  receivedDocumentCalls.push({ repositoryPath, documentPath: "" });
+  if (repositoryPath === "vide") {
+    return Promise.resolve({ ok: true, documents: [] });
+  }
+  if (repositoryPath === "disparu") {
+    return Promise.resolve({ ok: false, code: "REPOSITORY_NOT_FOUND" });
+  }
+  return Promise.resolve({ ok: true, documents: [{ ...SAMPLE_DOCUMENT }] });
+}
+
+/** Lecture simulee, avec les refus les plus significatifs. */
+function fakeRead(repositoryPath: string, documentPath: string): Promise<ReadDocumentResult> {
+  receivedDocumentCalls.push({ repositoryPath, documentPath });
+
+  if (documentPath.includes("..")) {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_PATH_INVALID" });
+  }
+  if (documentPath === "docs/ENORME.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_TOO_LARGE" });
+  }
+  if (documentPath === "docs/ABSENT.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_NOT_FOUND" });
+  }
+  return Promise.resolve({
+    ok: true,
+    document: { ...SAMPLE_DOCUMENT, content: "# Brief\n" },
+  });
+}
+
 let server: Server;
 let baseUrl: string;
 
 before(async () => {
   // Le serveur est cree sans port fixe : le systeme en attribue un libre.
-  server = createRunnerServer(CONFIG, { resolveRepository: fakeResolve, log: () => undefined });
+  server = createRunnerServer(CONFIG, {
+    resolveRepository: fakeResolve,
+    listDocuments: fakeList,
+    readDocument: fakeRead,
+    log: () => undefined,
+  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${String(address.port)}`;
@@ -298,5 +347,169 @@ describe("POST /repositories/resolve - resultats", () => {
     assert.equal(errorCode(response.json), "INTERNAL_ERROR");
     assert.equal(response.text.includes("panne simulee"), false);
     assert.equal(response.text.includes("at "), false);
+  });
+});
+
+describe("POST /repositories/documents/list", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+
+  it("refuse l'absence de jeton", async () => {
+    const response = await call("/repositories/documents/list", {
+      method: "POST",
+      token: null,
+      body: JSON.stringify({ repositoryPath: "D:\\Projets\\depot" }),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+    assert.equal(response.text.includes(TOKEN), false);
+  });
+
+  it("refuse un mauvais jeton", async () => {
+    const response = await call("/repositories/documents/list", {
+      method: "POST",
+      token: "Bearer mauvais-jeton",
+      body: JSON.stringify({ repositoryPath: "D:\\Projets\\depot" }),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("refuse une methode incorrecte", async () => {
+    const response = await call("/repositories/documents/list", { ...authorized, method: "GET" });
+
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "POST");
+  });
+
+  it("retourne l'inventaire", async () => {
+    const response = await call("/repositories/documents/list", {
+      ...authorized,
+      body: JSON.stringify({ repositoryPath: "D:\\Projets\\depot" }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, { ok: true, documents: [SAMPLE_DOCUMENT] });
+    assert.equal(receivedDocumentCalls.at(-1)?.repositoryPath, "D:\\Projets\\depot");
+  });
+
+  it("retourne une liste vide sans erreur", async () => {
+    const response = await call("/repositories/documents/list", {
+      ...authorized,
+      body: JSON.stringify({ repositoryPath: "vide" }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, { ok: true, documents: [] });
+  });
+
+  it("traduit un repository disparu en erreur du contrat", async () => {
+    const response = await call("/repositories/documents/list", {
+      ...authorized,
+      body: JSON.stringify({ repositoryPath: "disparu" }),
+    });
+
+    assert.equal(response.status, 422);
+    assert.equal(errorCode(response.json), "REPOSITORY_NOT_FOUND");
+  });
+
+  it("refuse un corps qui ne respecte pas le contrat", async () => {
+    for (const body of ["{}", '{"repositoryPath":42}', "[]"]) {
+      const response = await call("/repositories/documents/list", { ...authorized, body });
+      assert.equal(response.status, 400, body);
+      assert.equal(errorCode(response.json), "INVALID_REQUEST", body);
+    }
+  });
+});
+
+describe("POST /repositories/documents/read", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const validBody = JSON.stringify({
+    repositoryPath: "D:\\Projets\\depot",
+    documentPath: "docs/PROJECT_BRIEF.md",
+  });
+
+  it("refuse l'absence de jeton", async () => {
+    const response = await call("/repositories/documents/read", {
+      method: "POST",
+      token: null,
+      body: validBody,
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(response.text.includes(TOKEN), false);
+  });
+
+  it("retourne le document et son contenu", async () => {
+    const response = await call("/repositories/documents/read", {
+      ...authorized,
+      body: validBody,
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      ok: true,
+      document: { ...SAMPLE_DOCUMENT, content: "# Brief\n" },
+    });
+  });
+
+  it("transmet les deux chemins a la couche metier", async () => {
+    await call("/repositories/documents/read", { ...authorized, body: validBody });
+
+    assert.deepEqual(receivedDocumentCalls.at(-1), {
+      repositoryPath: "D:\\Projets\\depot",
+      documentPath: "docs/PROJECT_BRIEF.md",
+    });
+  });
+
+  it("refuse une traversee de repertoire", async () => {
+    const response = await call("/repositories/documents/read", {
+      ...authorized,
+      body: JSON.stringify({
+        repositoryPath: "D:\\Projets\\depot",
+        documentPath: "../../secret.md",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(errorCode(response.json), "DOCUMENT_PATH_INVALID");
+  });
+
+  it("refuse un document trop volumineux", async () => {
+    const response = await call("/repositories/documents/read", {
+      ...authorized,
+      body: JSON.stringify({
+        repositoryPath: "D:\\Projets\\depot",
+        documentPath: "docs/ENORME.md",
+      }),
+    });
+
+    assert.equal(response.status, 413);
+    assert.equal(errorCode(response.json), "DOCUMENT_TOO_LARGE");
+  });
+
+  it("signale un document absent", async () => {
+    const response = await call("/repositories/documents/read", {
+      ...authorized,
+      body: JSON.stringify({
+        repositoryPath: "D:\\Projets\\depot",
+        documentPath: "docs/ABSENT.md",
+      }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "DOCUMENT_NOT_FOUND");
+  });
+
+  it("exige les deux chemins", async () => {
+    for (const body of [
+      '{"repositoryPath":"D:\\\\Projets\\\\depot"}',
+      '{"documentPath":"docs/a.md"}',
+      "{}",
+    ]) {
+      const response = await call("/repositories/documents/read", { ...authorized, body });
+      assert.equal(response.status, 400, body);
+      assert.equal(errorCode(response.json), "INVALID_REQUEST", body);
+    }
   });
 });

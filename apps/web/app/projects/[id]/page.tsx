@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { loadProjectDocuments } from "@/lib/documents";
 import { formatDateTime } from "@/lib/format";
 import { loadProject } from "@/lib/projects";
 
@@ -16,11 +17,6 @@ const PLANNED_SECTIONS = [
     id: "conversation",
     title: "Conversation",
     description: "Echanger avec l'orchestrateur pour clarifier le besoin de ce projet.",
-  },
-  {
-    id: "documents",
-    title: "Documents",
-    description: "Consulter et modifier les documents Markdown de reference du repository.",
   },
   {
     id: "tasks",
@@ -41,6 +37,10 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   if (project === null) {
     notFound();
   }
+
+  // L'inventaire est indicatif : son echec n'empeche jamais l'affichage des
+  // donnees SQLite du projet, qui ne dependent pas du runner.
+  const documents = await loadProjectDocuments(project.repositoryPath);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -91,6 +91,29 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             Repository Git valide lors de la creation : le chemin ci-dessus est la racine retournee
             par Git.
           </p>
+        </SectionCard>
+
+        <SectionCard
+          title="Documents"
+          description="Documents Markdown de reference presents dans le repository."
+          action={
+            <Link
+              href={`/projects/${project.id}/documents`}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Voir les documents
+            </Link>
+          }
+        >
+          {documents.ok ? (
+            <p className="text-sm text-zinc-400">
+              {documents.documents.length === 0
+                ? "Aucun document Markdown trouve dans les emplacements inspectes."
+                : `${String(documents.documents.length)} document(s) Markdown detecte(s).`}
+            </p>
+          ) : (
+            <p className="text-sm text-amber-200/90">{documents.message}</p>
+          )}
         </SectionCard>
 
         <div className="grid gap-4 sm:grid-cols-2">

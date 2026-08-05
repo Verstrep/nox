@@ -47,6 +47,43 @@ export const RUNNER_ERROR = {
   /** Git n'a pas repondu dans le delai imparti. */
   GIT_TIMEOUT: "GIT_TIMEOUT",
 
+  // --- Documents Markdown ---------------------------------------------------
+  // Les codes `REPOSITORY_*` doublent en apparence les codes `PATH_*` ci-dessus,
+  // mais ils repondent a une question differente : `PATH_*` concerne un chemin
+  // que l'utilisateur vient de saisir, `REPOSITORY_*` un repository deja
+  // enregistre qui a depuis ete deplace ou supprime. Les messages affiches n'ont
+  // rien a voir, d'ou deux familles distinctes.
+
+  /** Le chemin du repository est absent du corps de la requete. */
+  REPOSITORY_PATH_REQUIRED: "REPOSITORY_PATH_REQUIRED",
+  /** Le repository enregistre n'existe plus a l'emplacement connu. */
+  REPOSITORY_NOT_FOUND: "REPOSITORY_NOT_FOUND",
+  /** Le chemin enregistre ne designe plus un dossier. */
+  REPOSITORY_NOT_DIRECTORY: "REPOSITORY_NOT_DIRECTORY",
+
+  /** Le chemin de document est absent ou vide. */
+  DOCUMENT_PATH_REQUIRED: "DOCUMENT_PATH_REQUIRED",
+  /** Chemin mal forme : absolu, URL, ou contenant une remontee `..`. */
+  DOCUMENT_PATH_INVALID: "DOCUMENT_PATH_INVALID",
+  /** Apres resolution reelle, le fichier sort de la racine du repository. */
+  DOCUMENT_OUTSIDE_REPOSITORY: "DOCUMENT_OUTSIDE_REPOSITORY",
+  /** Chemin valide mais hors des emplacements inspectes par NOX. */
+  DOCUMENT_NOT_ALLOWED: "DOCUMENT_NOT_ALLOWED",
+  /** Aucun fichier a cet emplacement. */
+  DOCUMENT_NOT_FOUND: "DOCUMENT_NOT_FOUND",
+  /** L'emplacement designe un dossier, pas un fichier. */
+  DOCUMENT_NOT_FILE: "DOCUMENT_NOT_FILE",
+  /** L'extension n'est pas `.md`. */
+  DOCUMENT_NOT_MARKDOWN: "DOCUMENT_NOT_MARKDOWN",
+  /** Le fichier depasse la taille maximale lisible. */
+  DOCUMENT_TOO_LARGE: "DOCUMENT_TOO_LARGE",
+  /** Le contenu n'est pas de l'UTF-8 valide. */
+  DOCUMENT_NOT_UTF8: "DOCUMENT_NOT_UTF8",
+  /** Lecture impossible : droits insuffisants, verrou, erreur disque. */
+  DOCUMENT_READ_FAILED: "DOCUMENT_READ_FAILED",
+  /** L'inventaire depasse le nombre maximal de documents. */
+  TOO_MANY_DOCUMENTS: "TOO_MANY_DOCUMENTS",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

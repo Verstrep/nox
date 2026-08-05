@@ -11,9 +11,15 @@
  */
 
 import {
+  isListProjectDocumentsSuccess,
+  isReadProjectDocumentSuccess,
   isResolveRepositorySuccess,
   isRunnerErrorResponse,
   isRunnerHealthResponse,
+  type ListProjectDocumentsRequest,
+  type ProjectDocumentContent,
+  type ProjectDocumentSummary,
+  type ReadProjectDocumentRequest,
   type ResolveRepositoryRequest,
   type RunnerHealthResponse,
 } from "@nox/shared";
@@ -129,24 +135,28 @@ export async function checkRunnerHealth(
 }
 
 /**
- * Demande au runner la racine canonique du repository contenant `repositoryPath`.
+ * Envoie une requete authentifiee a une route sensible du runner, et valide sa
+ * reponse contre le contrat partage.
  *
- * Le web ne valide plus le chemin lui-meme : c'est la machine du runner qui fait
- * foi. Seule l'unicite en base reste une responsabilite du web.
+ * `extract` n'est appele que sur une reponse `200` reconnue : tout le reste
+ * devient un echec typé. Une reponse hors contrat n'atteint donc jamais
+ * l'interface.
  */
-export async function resolveRepositoryPath(
-  repositoryPath: string,
-  options: RunnerClientOptions = {},
-): Promise<RunnerResult<string>> {
+async function postAuthenticated<TBody, TValue>(
+  route: string,
+  operation: string,
+  payload: TBody,
+  isSuccess: (value: unknown) => boolean,
+  extract: (value: unknown) => TValue,
+  options: RunnerClientOptions,
+): Promise<RunnerResult<TValue>> {
   const configuration = loadRunnerClientConfig(options.environment ?? process.env);
   if (!configuration.ok) {
     return failure({ kind: "not_configured" });
   }
 
-  const payload: ResolveRepositoryRequest = { repositoryPath };
-
   const result = await request(
-    `${configuration.config.baseUrl}/repositories/resolve`,
+    `${configuration.config.baseUrl}${route}`,
     {
       method: "POST",
       headers: {
@@ -165,9 +175,76 @@ export async function resolveRepositoryPath(
     return failure(result.failure);
   }
 
-  if (result.response.status === 200 && isResolveRepositorySuccess(result.response.body)) {
-    return { ok: true, value: result.response.body.repository.canonicalPath };
+  if (result.response.status === 200 && isSuccess(result.response.body)) {
+    return { ok: true, value: extract(result.response.body) };
   }
 
-  return failure(toFailure("resolve", result.response));
+  return failure(toFailure(operation, result.response));
+}
+
+/**
+ * Demande au runner la racine canonique du repository contenant `repositoryPath`.
+ *
+ * Le web ne valide plus le chemin lui-meme : c'est la machine du runner qui fait
+ * foi. Seule l'unicite en base reste une responsabilite du web.
+ */
+export function resolveRepositoryPath(
+  repositoryPath: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<string>> {
+  const payload: ResolveRepositoryRequest = { repositoryPath };
+
+  return postAuthenticated(
+    "/repositories/resolve",
+    "resolve",
+    payload,
+    isResolveRepositorySuccess,
+    (value) => (value as { repository: { canonicalPath: string } }).repository.canonicalPath,
+    options,
+  );
+}
+
+/**
+ * Inventorie les documents Markdown d'un repository.
+ *
+ * Les fiches retournees ne contiennent que des chemins **relatifs** : le chemin
+ * absolu du repository ne quitte jamais le runner.
+ */
+export function listProjectDocuments(
+  repositoryPath: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ProjectDocumentSummary[]>> {
+  const payload: ListProjectDocumentsRequest = { repositoryPath };
+
+  return postAuthenticated(
+    "/repositories/documents/list",
+    "documents/list",
+    payload,
+    isListProjectDocumentsSuccess,
+    (value) => (value as { documents: ProjectDocumentSummary[] }).documents,
+    options,
+  );
+}
+
+/**
+ * Lit un document Markdown du repository.
+ *
+ * `documentPath` est relatif a la racine du repository. Le confinement est
+ * verifie par le runner, jamais ici : le web n'a aucune vue sur le disque.
+ */
+export function readProjectDocument(
+  repositoryPath: string,
+  documentPath: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ProjectDocumentContent>> {
+  const payload: ReadProjectDocumentRequest = { repositoryPath, documentPath };
+
+  return postAuthenticated(
+    "/repositories/documents/read",
+    "documents/read",
+    payload,
+    isReadProjectDocumentSuccess,
+    (value) => (value as { document: ProjectDocumentContent }).document,
+    options,
+  );
 }

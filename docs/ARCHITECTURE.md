@@ -83,13 +83,16 @@ modules dédiés décident.
 
 - `GET /health` — sonde publique en local, sans authentification.
 - `POST /repositories/resolve` — authentifiée, résout la racine Git d'un chemin.
+- `POST /repositories/documents/list` — authentifiée, inventorie les Markdown reconnus.
+- `POST /repositories/documents/read` — authentifiée, lit un document autorisé.
 - Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
 - Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
 - Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
   trace d'exception.
 
 Organisation : `config.ts` (validation au démarrage), `server.ts` (routage, testable sans port
-fixe), `http/` (auth, corps, réponses), `repositories/` (logique Git, indépendante de HTTP).
+fixe), `http/` (auth, corps, réponses), `repositories/` (logique Git et documents, indépendante
+de HTTP).
 
 **À terme** :
 
@@ -209,13 +212,42 @@ Le runner est désormais la frontière unique des opérations locales. Aucune ex
 ouverte, et aucune nouvelle ne doit l'être : toute opération sur le système de fichiers ou sur
 Git ajoutée par la suite prend la forme d'une route authentifiée du runner.
 
-### 5.3 Répartition des validations
+### 5.3 Lecture des documents Markdown
+
+```text
+Page Documents  (/projects/[id]/documents)
+      ↓
+Client runner serveur  (apps/web/lib/runner/)
+      ↓ HTTP local authentifié
+Runner NOX
+      ↓ lecture seule
+Fichiers Markdown du repository
+```
+
+Propriétés de cette chaîne :
+
+- **Les contenus restent dans Git.** SQLite ne stocke ni le texte des documents, ni leur liste :
+  la base ne connaît que le chemin du repository. Le fichier sur disque est la seule vérité, et
+  il n'existe donc aucune copie à resynchroniser.
+- **Le runner applique les frontières de sécurité.** Confinement dans le repository, blocage des
+  traversées `..`, refus des liens sortants, limites de taille, de nombre et de profondeur.
+  Aucune de ces règles n'est dupliquée côté web, qui n'aurait de toute façon pas les moyens de
+  les vérifier.
+- **Le web ne voit que des chemins relatifs.** Le chemin absolu du repository ne figure dans
+  aucune réponse. Le navigateur reçoit `docs/PROJECT_BRIEF.md`, jamais
+  `D:\Projets\mon-projet\docs\PROJECT_BRIEF.md`.
+- **Lecture seule stricte.** Aucune route n'écrit dans le repository. L'édition fera l'objet
+  d'une tâche distincte, avec ses propres garanties.
+
+### 5.4 Répartition des validations
 
 La distinction est structurante et vaut d'être explicite :
 
 | Question | Qui répond | Pourquoi |
 | --- | --- | --- |
 | Ce chemin existe-t-il ? Est-ce un repository Git ? Quelle est sa racine ? | **Le runner** | Seul lui voit le système de fichiers de la machine. |
+| Quels documents Markdown existent ? Que contient celui-ci ? | **Le runner** | Même raison : le web n'a aucun accès au disque. |
+| Ce chemin de document sort-il du repository ? | **Le runner** | Le confinement se vérifie sur les chemins réels, après résolution des liens. |
 | Le nom est-il renseigné ? La description est-elle trop longue ? | **Le web** | Règles métier, sans rapport avec la machine. |
 | Ce repository est-il déjà enregistré ? | **Le web** | Seul lui voit la base ; le runner reste sans état. |
 

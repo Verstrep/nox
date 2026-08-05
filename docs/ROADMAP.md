@@ -68,21 +68,46 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 
 ---
 
-## 🟢 4. Documents Markdown
+## ✅ 4. Inventaire et lecture des documents Markdown — `TASK-004`
+
+**Objectif** : inventorier et lire les documents Markdown d'un projet depuis NOX.
+
+- Routes authentifiées `POST /repositories/documents/list` et
+  `POST /repositories/documents/read`.
+- Périmètre d'inspection restreint et documenté
+  ([D-041](DECISIONS.md#d-041--emplacements-inspectés-limités-pas-de-parcours-complet)).
+- Catégorisation et tri stables, déduits du chemin seul
+  ([D-042](DECISIONS.md#d-042--documents-principaux-reconnus-par-une-liste-explicite)).
+- Confinement des chemins vérifié après résolution réelle, liens sortants bloqués
+  ([D-045](DECISIONS.md#d-045--confinement-vérifié-après-résolution-réelle-des-chemins)).
+- Page `/projects/[id]/documents` : liste, lecteur, sélection portée par l'URL.
+- Contenu affiché brut, sans rendu HTML
+  ([D-047](DECISIONS.md#d-047--contenu-brut-aucun-rendu-markdown)).
+
+**Fin d'étape atteinte** : les documents d'un repository réel sont inventoriés, classés et
+lisibles dans NOX, et la page projet reste accessible runner arrêté — vérifié par un test
+fonctionnel réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
+
+Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, l'historique
+([D-040](DECISIONS.md#d-040--lecture-seule-stricte)).
+
+---
+
+## 🟢 5. Création et édition des documents Markdown
 
 **Étape active.**
 
-**Objectif** : lire et écrire les documents de référence depuis NOX.
+**Objectif** : écrire les documents de référence depuis NOX.
 
-- Lecture des fichiers Markdown du repository d'un projet.
-- Édition et sauvegarde depuis l'interface.
-- Rendu lisible dans le tableau de bord.
+- Édition et sauvegarde d'un document existant.
+- Création d'un document dans un emplacement autorisé.
+- Garanties d'écriture : confinement identique à la lecture, gestion des conflits.
 
 **Fin d'étape** : `PROJECT_BRIEF.md` d'un projet est modifiable depuis NOX.
 
 ---
 
-## ⬜ 5. Gestion des tâches
+## ⬜ 6. Gestion des tâches
 
 **Objectif** : structurer le travail en tâches vérifiables.
 
@@ -94,7 +119,7 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 
 ---
 
-## ⬜ 6. Runner contrôlé
+## ⬜ 7. Runner contrôlé
 
 **Objectif** : piloter le runner local depuis l'interface.
 
@@ -106,7 +131,7 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 
 ---
 
-## ⬜ 7. Intégration Claude Code
+## ⬜ 8. Intégration Claude Code
 
 **Objectif** : envoyer une tâche au CLI et récupérer son compte rendu.
 
@@ -118,7 +143,7 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 
 ---
 
-## ⬜ 8. Git et validations
+## ⬜ 9. Git et validations
 
 **Objectif** : rendre le résultat relisible.
 
@@ -130,7 +155,7 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 
 ---
 
-## ⬜ 9. Orchestrateur OpenAI
+## ⬜ 10. Orchestrateur OpenAI
 
 **Objectif** : discuter du besoin dans NOX.
 
@@ -143,7 +168,7 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 
 ---
 
-## ⬜ 10. Test sur un petit projet réel
+## ⬜ 11. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -155,7 +180,7 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 
 ---
 
-## ⬜ 11. Fonctionnalités avancées
+## ⬜ 12. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -164,4 +189,4 @@ multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 10.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 11.**

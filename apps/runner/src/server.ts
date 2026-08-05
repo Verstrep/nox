@@ -5,18 +5,26 @@
  * l'ouvrent sur le port 0 (attribue par le systeme) et n'ont donc jamais besoin
  * du port 4310. Le demarrage reel est la seule responsabilite d'`index.ts`.
  *
- * Les dependances externes (Git) sont injectees par parametre : pas de
- * conteneur d'injection, juste une valeur par defaut remplacable.
+ * Ce fichier ne fait que quatre choses par requete : authentifier, lire et
+ * valider le corps, appeler la fonction metier, traduire le resultat en reponse.
+ * Toute la logique Git et fichiers vit dans `repositories/`.
+ *
+ * Les dependances externes sont injectees par parametre : pas de conteneur
+ * d'injection, juste des valeurs par defaut remplacables.
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import {
   NOX_VERSION,
   RUNNER_ERROR,
   RUNNER_SERVICE_NAME,
+  parseListProjectDocumentsRequest,
+  parseReadProjectDocumentRequest,
   parseResolveRepositoryRequest,
+  type ListProjectDocumentsSuccess,
+  type ReadProjectDocumentSuccess,
   type ResolveRepositorySuccess,
   type RunnerHealthResponse,
 } from "@nox/shared";
@@ -25,17 +33,23 @@ import type { RunnerConfig } from "./config.ts";
 import { isAuthorized } from "./http/auth.ts";
 import { readJsonBody } from "./http/body.ts";
 import { sendJson, sendMethodNotAllowed, sendRunnerError } from "./http/responses.ts";
+import { listDocuments, type ListDocumentsResult } from "./repositories/documents/list-documents.ts";
+import { readDocument, type ReadDocumentResult } from "./repositories/documents/read-document.ts";
 import { resolveRepository, type ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
 
 /** Fonctions remplacables dans les tests. */
 export type RunnerDependencies = {
   resolveRepository?: (repositoryPath: string) => Promise<ResolveRepositoryResult>;
+  listDocuments?: (repositoryPath: string) => Promise<ListDocumentsResult>;
+  readDocument?: (repositoryPath: string, documentPath: string) => Promise<ReadDocumentResult>;
   /** Journalisation ; remplacee par une fonction muette dans les tests. */
   log?: (message: string) => void;
 };
 
 const HEALTH_ROUTE = "/health";
 const RESOLVE_ROUTE = "/repositories/resolve";
+const DOCUMENTS_LIST_ROUTE = "/repositories/documents/list";
+const DOCUMENTS_READ_ROUTE = "/repositories/documents/read";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -56,48 +70,44 @@ function handleHealth(response: ServerResponse, requestId: string): void {
   sendJson(response, 200, payload, requestId);
 }
 
-async function handleResolveRepository(
+/**
+ * Authentifie la requete, lit son corps JSON et le valide.
+ *
+ * Retourne `null` lorsqu'une reponse d'erreur a deja ete envoyee : l'appelant
+ * n'a plus rien a faire. Cette forme evite de repeter le meme preambule sur
+ * chacune des routes sensibles.
+ */
+async function readAuthenticatedBody<TRequest>(
   request: IncomingMessage,
   response: ServerResponse,
   config: RunnerConfig,
   requestId: string,
-  resolve: (repositoryPath: string) => Promise<ResolveRepositoryResult>,
+  route: string,
   log: (message: string) => void,
-): Promise<void> {
+  parse: (value: unknown) => TRequest | null,
+): Promise<TRequest | null> {
   if (!isAuthorized(request.headers.authorization, config.token)) {
     // Aucune distinction entre en-tete absent, schema errone et jeton faux :
     // la reponse ne doit rien apprendre a un appelant non autorise.
-    log(`[${RUNNER_SERVICE_NAME}] ${requestId} 401 ${RESOLVE_ROUTE}`);
+    log(`[${RUNNER_SERVICE_NAME}] ${requestId} 401 ${route}`);
     sendRunnerError(response, RUNNER_ERROR.UNAUTHORIZED, requestId);
-    return;
+    return null;
   }
 
   const body = await readJsonBody(request);
   if (!body.ok) {
     log(`[${RUNNER_SERVICE_NAME}] ${requestId} corps rejete : ${body.code}`);
     sendRunnerError(response, body.code, requestId);
-    return;
+    return null;
   }
 
-  const parsed = parseResolveRepositoryRequest(body.value);
+  const parsed = parse(body.value);
   if (parsed === null) {
     sendRunnerError(response, RUNNER_ERROR.INVALID_REQUEST, requestId);
-    return;
+    return null;
   }
 
-  const result = await resolve(parsed.repositoryPath);
-  if (!result.ok) {
-    // Le code seul est journalise : le chemin recu n'apparait pas dans les logs.
-    log(`[${RUNNER_SERVICE_NAME}] ${requestId} resolution refusee : ${result.code}`);
-    sendRunnerError(response, result.code, requestId);
-    return;
-  }
-
-  const payload: ResolveRepositorySuccess = {
-    ok: true,
-    repository: { canonicalPath: result.canonicalPath },
-  };
-  sendJson(response, 200, payload, requestId);
+  return parsed;
 }
 
 /**
@@ -111,7 +121,16 @@ export function createRunnerServer(
 ): Server {
   const resolve =
     dependencies.resolveRepository ?? ((repositoryPath: string) => resolveRepository(repositoryPath));
+  const list = dependencies.listDocuments ?? ((repositoryPath: string) => listDocuments(repositoryPath));
+  const read =
+    dependencies.readDocument ??
+    ((repositoryPath: string, documentPath: string) => readDocument(repositoryPath, documentPath));
   const log = dependencies.log ?? ((message: string) => { console.log(message); });
+
+  /** Journalise un refus metier : le code seul, jamais le chemin recu. */
+  const logRefusal = (requestId: string, route: string, code: string): void => {
+    log(`[${RUNNER_SERVICE_NAME}] ${requestId} ${route} refuse : ${code}`);
+  };
 
   return createServer((request, response) => {
     const requestId = newRequestId();
@@ -133,7 +152,78 @@ export function createRunnerServer(
           sendMethodNotAllowed(response, ["POST"], requestId);
           return;
         }
-        await handleResolveRepository(request, response, config, requestId, resolve, log);
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, RESOLVE_ROUTE, log, parseResolveRepositoryRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await resolve(parsed.repositoryPath);
+        if (!result.ok) {
+          logRefusal(requestId, RESOLVE_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: ResolveRepositorySuccess = {
+          ok: true,
+          repository: { canonicalPath: result.canonicalPath },
+        };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === DOCUMENTS_LIST_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DOCUMENTS_LIST_ROUTE, log,
+          parseListProjectDocumentsRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await list(parsed.repositoryPath);
+        if (!result.ok) {
+          logRefusal(requestId, DOCUMENTS_LIST_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: ListProjectDocumentsSuccess = { ok: true, documents: result.documents };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === DOCUMENTS_READ_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DOCUMENTS_READ_ROUTE, log,
+          parseReadProjectDocumentRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await read(parsed.repositoryPath, parsed.documentPath);
+        if (!result.ok) {
+          logRefusal(requestId, DOCUMENTS_READ_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: ReadProjectDocumentSuccess = { ok: true, document: result.document };
+        sendJson(response, 200, payload, requestId);
         return;
       }
 

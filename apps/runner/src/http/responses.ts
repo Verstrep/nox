@@ -33,6 +33,26 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   [RUNNER_ERROR.GIT_NOT_AVAILABLE]: 503,
   [RUNNER_ERROR.GIT_TIMEOUT]: 504,
 
+  // Le repository enregistre a disparu ou changé de nature : la requete est
+  // correcte, c'est l'etat de la machine qui ne permet pas d'y repondre.
+  [RUNNER_ERROR.REPOSITORY_PATH_REQUIRED]: 400,
+  [RUNNER_ERROR.REPOSITORY_NOT_FOUND]: 422,
+  [RUNNER_ERROR.REPOSITORY_NOT_DIRECTORY]: 422,
+
+  [RUNNER_ERROR.DOCUMENT_PATH_REQUIRED]: 400,
+  [RUNNER_ERROR.DOCUMENT_PATH_INVALID]: 400,
+  // `403` et non `404` : le runner sait ou pointe la demande et refuse
+  // deliberement d'y repondre. Un `404` laisserait croire a une simple absence.
+  [RUNNER_ERROR.DOCUMENT_OUTSIDE_REPOSITORY]: 403,
+  [RUNNER_ERROR.DOCUMENT_NOT_ALLOWED]: 403,
+  [RUNNER_ERROR.DOCUMENT_NOT_FOUND]: 404,
+  [RUNNER_ERROR.DOCUMENT_NOT_FILE]: 422,
+  [RUNNER_ERROR.DOCUMENT_NOT_MARKDOWN]: 422,
+  [RUNNER_ERROR.DOCUMENT_TOO_LARGE]: 413,
+  [RUNNER_ERROR.DOCUMENT_NOT_UTF8]: 422,
+  [RUNNER_ERROR.DOCUMENT_READ_FAILED]: 500,
+  [RUNNER_ERROR.TOO_MANY_DOCUMENTS]: 422,
+
   [RUNNER_ERROR.INTERNAL_ERROR]: 500,
 };
 

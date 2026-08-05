@@ -458,3 +458,153 @@ chargement explicite, il aurait fallu dupliquer le jeton dans `apps/web/.env` et
 deux fichiers à garder synchronisés pour une valeur qui doit justement être identique des deux
 côtés. `process.loadEnvFile` est fourni par Node, ne coûte aucune dépendance, et **n'écrase pas**
 les variables déjà définies dans le shell (vérifié).
+
+---
+
+## Décisions de TASK-004 — inventaire et lecture des documents
+
+### D-040 — Lecture seule stricte
+
+**Décision.** TASK-004 n'ajoute aucune écriture : ni création, ni modification, ni suppression,
+ni renommage. Le runner n'ouvre aucun fichier en écriture.
+
+**Justification.** L'écriture dans un repository de l'utilisateur est irréversible et engage des
+questions que la lecture ne pose pas : que faire d'un fichier modifié entre-temps, faut-il un
+verrou, comment gérer un échec à mi-parcours. Séparer la lecture de l'écriture permet de valider
+d'abord le confinement des chemins — la partie la plus délicate — sur des opérations qui ne
+peuvent rien casser. Un test vérifie explicitement qu'aucun fichier n'apparaît ni ne disparaît
+après une série de lectures, y compris refusées.
+
+### D-041 — Emplacements inspectés limités, pas de parcours complet
+
+**Décision.** NOX inspecte trois fichiers à la racine (`README.md`, `CLAUDE.md`, `AGENTS.md`)
+puis, récursivement, `docs/`, `decisions/`, `plans/` et `tasks/`. Le reste du repository n'est
+jamais parcouru.
+
+**Justification.** Un parcours complet serait lent sur un vrai projet, et surtout inutile : la
+quasi-totalité des `.md` d'un repository appartient à des dépendances, des gabarits ou des
+changelogs. Restreindre le périmètre rend l'inventaire rapide, prévisible et pertinent. C'est
+aussi une réduction de surface : un dossier non parcouru est un dossier qui ne peut pas fuiter.
+
+**Conséquence assumée.** Un projet qui range sa documentation ailleurs (par exemple
+`documentation/`) n'affichera rien. Rendre la liste configurable par projet est une évolution
+naturelle, volontairement repoussée faute de besoin constaté.
+
+**Autres Markdown de la racine ignorés.** `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE.md` et
+consorts sont du bruit dans un outil de pilotage : ils ne sont pas listés.
+
+### D-042 — Documents principaux reconnus par une liste explicite
+
+**Décision.** La catégorie `CORE` provient d'une liste de chemins connus
+(`apps/runner/src/repositories/documents/constants.ts`), comparée sans distinction de casse.
+Les autres catégories découlent du dossier de premier niveau.
+
+**Justification.** La catégorisation est déduite du **chemin seul** : aucune analyse de contenu,
+aucune heuristique sur les titres, aucune IA. Un fichier déplacé change de catégorie de façon
+prévisible, et la fonction reste pure et testable. Le prix à payer est une liste à tenir à jour,
+ce qui est acceptable : elle décrit une convention documentaire, pas un format ouvert.
+
+### D-043 — Tri par catégorie puis par chemin, insensible à la casse
+
+**Décision.** Les documents sont triés par catégorie (`CORE`, `DOCUMENTATION`, `DECISION`,
+`PLAN`, `TASK`), puis par chemin via `localeCompare` en français avec `sensitivity: "base"`.
+
+**Justification.** Le tri est stable et indépendant de l'ordre du système de fichiers. La
+comparaison locale place `étude` entre `analyse` et `zebre`, là où un tri par point de code la
+rejetterait après `zebre`.
+
+**Conséquence à connaître.** Comme la comparaison ignore la casse, `docs/ARCHITECTURE.md`
+précède `README.md` à l'intérieur de la catégorie `CORE` : les documents racine ne sont donc pas
+regroupés en tête. C'est le tri alphabétique par chemin demandé, appliqué littéralement. Si la
+lisibilité en souffre à l'usage, trier `CORE` selon l'ordre éditorial de la liste serait une
+alternative simple.
+
+### D-044 — Limites explicites : 1 Mio, 500 documents, profondeur 6
+
+**Décision.** Un document lisible pèse au plus 1 Mio, l'inventaire s'arrête au-delà de 500
+documents, et le parcours ne descend pas sous 6 niveaux dans un dossier inspecté.
+
+**Justification.** Ces trois limites bornent la mémoire et le temps de réponse du runner face à
+un repository inhabituel. La taille est vérifiée **avant** la lecture, par `stat` : un fichier de
+plusieurs gigaoctets n'est jamais chargé, même partiellement. 1 Mio représente environ 500 pages
+de texte — un document de référence qui dépasse cette taille relève de l'éditeur, pas d'un
+lecteur intégré.
+
+**Conséquence assumée.** Dépasser 500 documents renvoie `TOO_MANY_DOCUMENTS` et rend
+l'inventaire indisponible, plutôt que d'en afficher une partie silencieusement. Une liste
+tronquée sans le dire serait plus trompeuse qu'une erreur explicite ; le contrat ne comporte pas
+de champ « tronqué ».
+
+### D-045 — Confinement vérifié après résolution réelle des chemins
+
+**Décision.** Un chemin de document est d'abord filtré syntaxiquement (relatif, sans `..`, sans
+schéma d'URL, extension `.md`, emplacement autorisé), puis les deux chemins — racine et fichier —
+sont passés par `realpath` avant d'être comparés avec `path.relative`.
+
+**Justification.** Le filtre syntaxique seul ne suffit pas : il ne voit pas les liens
+symboliques. Un lien parfaitement bien formé placé dans `docs/` peut pointer n'importe où sur le
+disque ; seule la résolution réelle le révèle.
+
+`path.relative` plutôt qu'une comparaison de préfixe de chaîne : `startsWith` accepterait
+`C:\repo-public` comme étant « dans » `C:\repo`. `path.relative` gère correctement les
+séparateurs, les volumes distincts et la casse Windows. Un test couvre précisément ce piège.
+
+### D-046 — Liens symboliques jamais suivis pendant la découverte
+
+**Décision.** L'inventaire ignore toute entrée signalée comme lien par `readdir({ withFileTypes: true })`,
+qu'elle pointe à l'intérieur ou à l'extérieur du repository. La lecture, elle, les résout puis
+vérifie le confinement.
+
+**Justification.** Ne pas suivre les liens pendant le parcours élimine d'un coup trois problèmes :
+la sortie du repository, les boucles infinies, et les doublons quand un raccourci interne fait
+apparaître deux fois le même fichier. Pour la lecture d'un document précis, résoudre puis
+vérifier est plus utile : un lien interne légitime reste lisible.
+
+**Vérification.** Les tests emploient des **jonctions** Windows plutôt que des liens
+symboliques : elles ne demandent aucun privilège, alors qu'un lien symbolique exige le mode
+développeur. Les cas de sécurité s'exécutent donc réellement au lieu d'être systématiquement
+ignorés.
+
+### D-047 — Contenu brut, aucun rendu Markdown
+
+**Décision.** Le contenu est affiché tel quel dans un `<pre>`. Aucun moteur Markdown n'est
+installé, et `dangerouslySetInnerHTML` n'est utilisé nulle part.
+
+**Justification.** Deux raisons, dans cet ordre. D'abord la sécurité : le texte vient d'un
+fichier du disque, le convertir en HTML pour l'injecter ouvrirait une injection dans
+l'interface — React échappe tout ce qu'il insère comme texte, ce qui rend l'affichage brut sûr
+par construction. Ensuite le périmètre : un rendu correct demande un moteur, un plan
+d'assainissement et une feuille de style. Rien de tout cela n'est nécessaire pour relire un
+document de référence.
+
+### D-048 — Sélection du document portée par l'URL
+
+**Décision.** Le document ouvert est indiqué par `?path=<chemin relatif encodé>`, et non par un
+état React.
+
+**Justification.** L'URL reste partageable, le bouton « précédent » du navigateur fonctionne, et
+un rechargement conserve le document affiché. La page est un Server Component : lire la sélection
+dans l'URL permet de rendre le contenu côté serveur, sans état client à hydrater.
+
+### D-049 — Aucune copie des documents en base
+
+**Décision.** Ni le contenu, ni la liste des documents ne sont écrits dans SQLite. Chaque
+affichage interroge le runner.
+
+**Justification.** Une copie en base créerait un second point de vérité à resynchroniser : un
+fichier modifié dans l'éditeur rendrait aussitôt le cache faux, sans moyen simple de le savoir
+sans surveiller le système de fichiers — explicitement hors périmètre. Interroger le runner à
+chaque affichage coûte quelques millisecondes en local et garantit que ce qui est affiché est ce
+qui est sur le disque.
+
+### D-050 — Codes `REPOSITORY_*` distincts des codes `PATH_*`
+
+**Décision.** Les routes documents utilisent `REPOSITORY_NOT_FOUND` et
+`REPOSITORY_NOT_DIRECTORY`, distincts des `PATH_NOT_FOUND` / `PATH_NOT_DIRECTORY` employés par
+`/repositories/resolve`.
+
+**Justification.** Les deux familles décrivent des situations différentes du point de vue de
+l'utilisateur. `PATH_NOT_FOUND` survient pendant la création d'un projet : c'est une faute de
+frappe, et le message invite à corriger la saisie. `REPOSITORY_NOT_FOUND` survient sur un projet
+déjà enregistré : le repository a été déplacé ou supprimé, et le message doit le dire. Un code
+unique aurait forcé un message vague dans les deux cas.
