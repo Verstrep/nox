@@ -74,6 +74,14 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   [RUNNER_ERROR.DOCUMENT_NAME_NOT_PORTABLE]: 400,
   [RUNNER_ERROR.DOCUMENT_CREATION_FAILED]: 500,
 
+  // Meme famille que `DOCUMENT_OUTSIDE_REPOSITORY` : le runner sait exactement
+  // quel fichier est vise et refuse deliberement d'y toucher.
+  [RUNNER_ERROR.DOCUMENT_PROTECTED]: 403,
+  // `409`, comme `DOCUMENT_CONFLICT` : la demande est valide et le fichier
+  // accessible, mais son etat a change depuis l'affichage.
+  [RUNNER_ERROR.DOCUMENT_DELETE_CONFLICT]: 409,
+  [RUNNER_ERROR.DOCUMENT_DELETE_FAILED]: 500,
+
   // Le code d'une tache determine un nom de fichier : une forme invalide est un
   // desaccord de contrat, pas un etat de la machine.
   [RUNNER_ERROR.TASK_CODE_INVALID]: 400,
@@ -82,6 +90,9 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   // demande et refuse d'y ecrire.
   [RUNNER_ERROR.TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED]: 403,
   [RUNNER_ERROR.TASKS_DIRECTORY_CREATION_FAILED]: 500,
+  // `409` : un fichier inattendu occupe le chemin de la tache. L'etat du disque
+  // s'oppose a la demande, exactement comme pour un conflit de revision.
+  [RUNNER_ERROR.TASK_DOCUMENT_REVISION_UNKNOWN]: 409,
 
   // Preflight : la requete est correcte, c'est l'etat de la machine ou du
   // repository qui ne permet pas de lancer.

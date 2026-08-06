@@ -4,7 +4,7 @@ import { TASK_PRIORITIES } from "@nox/shared";
 import { useActionState, useState } from "react";
 
 import { useUnsavedChanges } from "@/components/useUnsavedChanges";
-import { describeTaskPriority } from "@/lib/task-display";
+import { taskPriorityLabel } from "@/lib/labels";
 import { readLines, TASK_LIMITS, type TaskFormValues } from "@/lib/task-input";
 
 import { createTaskAction } from "./actions";
@@ -134,7 +134,7 @@ export function NewTaskForm({ projectId }: { projectId: string }) {
           >
             {TASK_PRIORITIES.map((priority) => (
               <option key={priority} value={priority}>
-                {describeTaskPriority(priority)}
+                {taskPriorityLabel(priority)}
               </option>
             ))}
           </select>
@@ -221,7 +221,7 @@ export function NewTaskForm({ projectId }: { projectId: string }) {
           disabled={pending}
           className="rounded-md border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-60"
         >
-          Annuler
+          Cancel
         </button>
 
         <span className="text-xs text-zinc-600">Annuler n&apos;enregistre rien.</span>

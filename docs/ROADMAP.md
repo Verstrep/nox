@@ -211,6 +211,13 @@ explicitement, et en rendre le résultat relisible.
 repository, et son résultat est relisible sans copier-coller — vérifié par un test fonctionnel
 avec un faux Claude Code, voir [PROJECT_STATE.md](PROJECT_STATE.md).
 
+> **Réserve.** Claude Code n'était pas installé sur la machine au moment de cette étape. La
+> syntaxe des arguments (`-p`, `--output-format json`, `--max-turns`, `--allowedTools`,
+> `--disallowedTools`) et celle des règles d'outils suivent la forme documentée du mode non
+> interactif, mais **n'ont pas été vérifiées contre un binaire local**. Aucune requête Claude
+> réelle n'a été lancée. `buildClaudeArguments`, `formatBashRule` et `probeClaudeVersion` sont
+> isolées pour qu'un écart se corrige à un seul endroit. Le premier run réel reste à faire.
+
 Hors périmètre volontaire : streaming des événements, annulation manuelle, reprise de session,
 prompt correctif automatique, exécution automatique d'une autre tâche, plusieurs agents en
 parallèle, worktrees, commits automatiques
@@ -219,7 +226,46 @@ parallèle, worktrees, commits automatiques
 
 ---
 
-## 🟢 9. Streaming et annulation d'une exécution
+## ✅ 9. Suppression sécurisée et libellés d'état — `TASK-009`
+
+**Objectif** : pouvoir retirer depuis NOX ce qui a été créé pour des essais, sans jamais perdre
+un historique, et rendre les états lisibles d'un coup d'œil.
+
+- Route authentifiée `POST /repositories/documents/delete`, avec contrôle de révision
+  ([D-107](DECISIONS.md#d-107--la-suppression-exige-une-révision-comme-lécriture),
+  [D-108](DECISIONS.md#d-108--aucune-suppression-forcée-aucun-bouton-pour-en-demander-une)).
+- Documents `tasks/TASK-xxx.md` protégés **par le runner**, pas seulement par l'interface
+  ([D-111](DECISIONS.md#d-111--les-documents-taskstask-xxxmd-sont-protégés-dans-le-runner)).
+- Route dédiée `POST /repositories/tasks/delete-document`, qui ne reçoit qu'un code de tâche
+  ([D-112](DECISIONS.md#d-112--une-route-dédiée-pour-le-document-dune-tâche),
+  [D-113](DECISIONS.md#d-113--un-document-absent-est-une-réussite-idempotente)).
+- Aucun dossier supprimé, aucun lien suivi, aucune suppression récursive
+  ([D-110](DECISIONS.md#d-110--aucun-dossier-nest-supprimé-jamais)).
+- `deleteTaskWithoutRuns` et contrainte `Restrict` de `Run` vers `Task`
+  ([D-115](DECISIONS.md#d-115--une-tâche-possédant-un-historique-nest-pas-supprimable),
+  [D-116](DECISIONS.md#d-116--la-contrainte-double-la-règle-métier)).
+- Fichier supprimé avant la base, numéro jamais réutilisé
+  ([D-117](DECISIONS.md#d-117--le-numéro-dune-tâche-supprimée-reste-réservé),
+  [D-118](DECISIONS.md#d-118--le-fichier-est-supprimé-avant-la-tâche-en-base)).
+- Confirmations portées par l'URL, code de tâche à recopier
+  ([D-119](DECISIONS.md#d-119--la-confirmation-exige-de-recopier-le-code-de-la-tâche),
+  [D-120](DECISIONS.md#d-120--les-confirmations-sont-portées-par-lurl-pas-par-un-état-de-composant)).
+- Libellés anglais limités aux micro-éléments techniques, centralisés dans `lib/labels.ts`
+  ([D-121](DECISIONS.md#d-121--langlais-est-limité-aux-micro-éléments-techniques),
+  [D-122](DECISIONS.md#d-122--un-seul-module-traduit-les-valeurs-internes),
+  [D-123](DECISIONS.md#d-123--les-valeurs-internes-ne-changent-pas)).
+
+**Fin d'étape atteinte** : un document de test se supprime depuis NOX, une modification
+concurrente bloque la suppression sans rien perdre, une tâche sans exécution disparaît avec son
+Markdown, et une tâche avec historique est conservée — vérifié par un test fonctionnel réel, voir
+[PROJECT_STATE.md](PROJECT_STATE.md).
+
+Hors périmètre volontaire : suppression de projet, de run, de tâche avec exécutions, suppression
+forcée, récursive ou en masse, corbeille, restauration, archivage, renommage, déplacement.
+
+---
+
+## 🟢 10. Streaming et annulation d'une exécution
 
 **Étape active.**
 
@@ -229,12 +275,16 @@ parallèle, worktrees, commits automatiques
 - Bouton d'annulation d'une exécution active, avec arrêt propre du processus.
 - Reprise du flux après une coupure du navigateur.
 
+**Prérequis** : cette étape ne doit commencer qu'**après** l'installation de Claude Code et la
+validation d'un premier run réel contrôlé. Streamer et annuler des événements dont on n'a jamais
+vu la forme réelle reviendrait à empiler des suppositions sur celles de l'étape 8.
+
 **Fin d'étape** : l'interface affiche en direct la progression d'une exécution, et permet de
 l'interrompre sans laisser de processus orphelin.
 
 ---
 
-## ⬜ 10. Git et validations
+## ⬜ 11. Git et validations
 
 **Objectif** : rendre le résultat relisible.
 
@@ -247,7 +297,7 @@ l'interrompre sans laisser de processus orphelin.
 
 ---
 
-## ⬜ 11. Orchestrateur OpenAI
+## ⬜ 12. Orchestrateur OpenAI
 
 **Objectif** : discuter du besoin dans NOX.
 
@@ -260,7 +310,7 @@ l'interrompre sans laisser de processus orphelin.
 
 ---
 
-## ⬜ 12. Test sur un petit projet réel
+## ⬜ 13. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -272,7 +322,7 @@ l'interrompre sans laisser de processus orphelin.
 
 ---
 
-## ⬜ 13. Fonctionnalités avancées
+## ⬜ 14. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -281,4 +331,4 @@ l'interrompre sans laisser de processus orphelin.
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 12.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 13.**

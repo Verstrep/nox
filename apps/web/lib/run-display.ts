@@ -1,22 +1,16 @@
 /**
- * Libelles, tons et URL des executions.
+ * Tons, URL et formats d'affichage des executions.
  *
  * Ce module n'importe ni Prisma, ni le client runner : il est donc utilisable
  * par un Client Component, ce que `lib/runs.ts` ne peut pas etre.
+ *
+ * Les **libelles de statut** vivent dans `lib/labels.ts` depuis TASK-009, avec
+ * ceux des taches : une seule couche traduit les valeurs internes.
  */
 
 import { RUN_STATUS, isFinalRunStatus, type RunStatus } from "@nox/shared";
 
 import type { BadgeTone } from "@/components/StatusBadge";
-
-const STATUS_LABELS: Record<RunStatus, string> = {
-  [RUN_STATUS.QUEUED]: "En attente",
-  [RUN_STATUS.RUNNING]: "En cours",
-  [RUN_STATUS.BLOCKED]: "Bloquee",
-  [RUN_STATUS.FAILED]: "Echouee",
-  [RUN_STATUS.CANCELLED]: "Annulee",
-  [RUN_STATUS.COMPLETED]: "Terminee",
-};
 
 const STATUS_TONES: Record<RunStatus, BadgeTone> = {
   [RUN_STATUS.QUEUED]: "muted",
@@ -26,10 +20,6 @@ const STATUS_TONES: Record<RunStatus, BadgeTone> = {
   [RUN_STATUS.CANCELLED]: "muted",
   [RUN_STATUS.COMPLETED]: "accent",
 };
-
-export function describeRunStatus(status: RunStatus): string {
-  return STATUS_LABELS[status];
-}
 
 export function runStatusTone(status: RunStatus): BadgeTone {
   return STATUS_TONES[status];

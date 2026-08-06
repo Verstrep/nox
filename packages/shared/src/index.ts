@@ -51,6 +51,7 @@ export {
   allowedTaskStatusTransitions,
   canTransitionTaskStatus,
   formatTaskCode,
+  isManagedTaskDocumentPath,
   isReservedTaskStatus,
   isTaskCode,
   isTaskDocumentSyncStatus,
@@ -129,24 +130,30 @@ export type {
 
 export {
   isCreateTaskDocumentSuccess,
+  isDeleteTaskDocumentSuccess,
   parseCreateTaskDocumentRequest,
+  parseDeleteTaskDocumentRequest,
 } from "./task-documents.js";
 
 export type {
   CreateTaskDocumentRequest,
   CreateTaskDocumentSuccess,
+  DeleteTaskDocumentRequest,
+  DeleteTaskDocumentSuccess,
 } from "./task-documents.js";
 
 export {
   PROJECT_DOCUMENT_CATEGORIES,
   PROJECT_DOCUMENT_CATEGORY,
   isCreateProjectDocumentSuccess,
+  isDeleteProjectDocumentSuccess,
   isListProjectDocumentsSuccess,
   isProjectDocumentCategory,
   isProjectDocumentRevision,
   isReadProjectDocumentSuccess,
   isUpdateProjectDocumentSuccess,
   parseCreateProjectDocumentRequest,
+  parseDeleteProjectDocumentRequest,
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseUpdateProjectDocumentRequest,
@@ -155,6 +162,8 @@ export {
 export type {
   CreateProjectDocumentRequest,
   CreateProjectDocumentSuccess,
+  DeleteProjectDocumentRequest,
+  DeleteProjectDocumentSuccess,
   ListProjectDocumentsRequest,
   ListProjectDocumentsSuccess,
   ProjectDocumentCategory,

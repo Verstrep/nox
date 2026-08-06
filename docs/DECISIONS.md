@@ -1248,3 +1248,207 @@ réinitialisation qui n'a pas lieu d'être, alors qu'une erreur générique le r
 logs. Le double critère évite le faux positif le plus probable : un compte rendu qui parle du
 *rate limit* implémenté dans le code de l'utilisateur. Et une heure inventée serait pire
 qu'aucune.
+
+### D-107 — La suppression exige une révision, comme l'écriture
+
+**Décision.** `POST /repositories/documents/delete` reçoit `expectedRevision` et refuse de
+supprimer si l'empreinte du disque diffère. Le contrat n'accepte même pas syntaxiquement une
+révision absente ou nulle.
+
+**Justification.** Supprimer sans révision, c'est supprimer un fichier que l'utilisateur n'a pas
+vu. C'est le pire cas de cette opération : contrairement à une écriture refusée, il ne reste rien
+à reporter. Le mécanisme existait déjà pour l'édition ; l'étendre coûtait une ligne, et ne pas
+l'étendre aurait fait de la suppression la seule écriture non protégée.
+
+### D-108 — Aucune suppression forcée, aucun bouton pour en demander une
+
+**Décision.** Un conflit de suppression se règle en rechargeant. Il n'existe ni paramètre de
+forçage, ni bouton « supprimer quand même ».
+
+**Justification.** Même raison qu'en [D-054](#d-054--aucun-forçage-de-conflit) : personne ne peut
+décider de supprimer une version qu'il n'a pas vue. Un bouton de forçage transformerait un
+garde-fou en formalité — on clique sans lire, précisément parce que le bouton est là.
+
+### D-109 — Un code d'erreur distinct pour le conflit de suppression
+
+**Décision.** `DOCUMENT_DELETE_CONFLICT` existe à côté de `DOCUMENT_CONFLICT`, malgré une cause
+identique sur le disque.
+
+**Justification.** Un code se traduit par un seul message. Après un refus d'écriture,
+l'utilisateur a un texte à reporter ; après un refus de suppression, il n'a rien à sauver —
+seulement une version qu'il doit relire avant de décider. Le geste attendu n'est pas le même, la
+phrase non plus. Réutiliser le code aurait obligé l'interface à distinguer les deux cas
+autrement, ce qui revenait au même en moins lisible.
+
+### D-110 — Aucun dossier n'est supprimé, jamais
+
+**Décision.** La suppression appelle `unlink`, et rien d'autre. Aucun `rmdir`, aucune suppression
+récursive, aucun nettoyage d'un dossier parent devenu vide.
+
+**Justification.** `docs/` appartient à la structure du repository, pas au document qui s'y
+trouvait. Un dossier vide ne gêne personne ; un dossier supprimé parce qu'il « semblait inutile »
+se remarque au prochain `git status`, et pas dans le bon sens. C'est le pendant exact de
+[D-064](#d-064--les-dossiers-parents-doivent-exister--nox-nen-crée-aucun) : NOX ne crée aucun
+dossier, il n'en supprime aucun non plus.
+
+### D-111 — Les documents `tasks/TASK-xxx.md` sont protégés, dans le runner
+
+**Décision.** La route générique de suppression refuse tout chemin de la forme
+`tasks/TASK-<au moins trois chiffres>.md`, quelle que soit la révision fournie. La comparaison
+est faite sur le chemin en minuscules.
+
+**Justification.** Ces fichiers ont un propriétaire : la tâche correspondante en base. Les
+supprimer depuis la page Documents laisserait une tâche sans artefact, sans que rien ne
+l'enregistre. La protection vit dans le runner et non dans l'interface, parce qu'une interface se
+contourne. Et la comparaison ignore la casse parce que sous Windows `Tasks/task-001.MD` désigne
+le même fichier : une protection sensible à la casse se contournerait par une faute de frappe
+volontaire.
+
+Le contrôle porte sur la **forme du chemin**, pas sur l'existence d'une tâche : il vaut donc
+aussi pour un `tasks/TASK-999.md` orphelin, dont NOX ne peut pas savoir s'il précède une tâche à
+venir ou en suit une disparue.
+
+### D-112 — Une route dédiée pour le document d'une tâche
+
+**Décision.** `POST /repositories/tasks/delete-document` reçoit un **code de tâche**, jamais un
+chemin, et compose `tasks/<code>.md` elle-même.
+
+**Justification.** Symétrique de
+[D-081](#d-081--le-dossier-tasks-est-la-seule-création-de-dossier-autorisée), et pour la même
+raison : c'est la seule route autorisée à toucher aux fichiers que la route générique protège.
+Lui confier ce droit n'est acceptable que parce qu'aucun chemin arbitraire n'a de prise sur elle.
+Fusionner les deux routes aurait donné une route dont les garanties dépendent d'un drapeau —
+exactement ce qu'il ne faut pas pour du code qui supprime sur disque.
+
+### D-113 — Un document absent est une réussite idempotente
+
+**Décision.** Supprimer le document d'une tâche qui n'en a pas retourne
+`{ deleted: false, alreadyAbsent: true }`, et non une erreur. Un dossier `tasks/` absent produit
+la même réponse, sans être créé.
+
+**Justification.** Une tâche dont la synchronisation a échoué n'a jamais eu de fichier : exiger sa
+présence la rendrait indestructible. Le résultat visé est « plus rien à ce chemin », pas « un
+fichier de moins ». C'est aussi ce qui rend la reprise possible après un échec en base : relancer
+la suppression repasse cette étape sans redemander le fichier.
+
+### D-114 — Un document présent sans révision connue bloque la suppression
+
+**Décision.** Si la tâche n'a pas de révision mais qu'un fichier occupe `tasks/<code>.md`, la
+suppression est refusée (`TASK_DOCUMENT_REVISION_UNKNOWN`).
+
+**Justification.** Ce n'est pas un conflit — il n'y a rien qui diffère — c'est une impossibilité
+de prouver l'appartenance. NOX n'a jamais écrit ce fichier ; supprimer sur cette base reviendrait
+à deviner. Le refus renvoie l'utilisateur vers la seule chose utile : ouvrir le fichier, ou
+relancer la synchronisation pour que NOX en connaisse enfin la révision.
+
+### D-115 — Une tâche possédant un historique n'est pas supprimable
+
+**Décision.** `deleteTaskWithoutRuns` refuse dès qu'un run existe, quel que soit son statut —
+`QUEUED`, `RUNNING`, `BLOCKED`, `FAILED`, `CANCELLED` ou `COMPLETED`. Aucun run n'est jamais
+supprimé.
+
+**Justification.** Une exécution est un fait : elle a consommé du quota, modifié un repository et
+produit un compte rendu. Supprimer la tâche emporterait ce compte rendu, ou laisserait des
+exécutions orphelines. L'archivage répondra à ce besoin ; la suppression n'en est pas le
+brouillon. La règle porte sur l'existence d'un historique, jamais sur son résultat : une
+exécution annulée a tout de même eu lieu.
+
+### D-116 — La contrainte double la règle métier
+
+**Décision.** La relation `Run → Task` passe de `Cascade` à `Restrict`, alors que les trois
+tables enfant de `Task` restent en `Cascade`.
+
+**Justification.** Un critère d'acceptation n'a aucun sens sans sa tâche ; une exécution, si. La
+règle métier produit un message utile, la contrainte tient même si quelqu'un l'ignore et appelle
+Prisma directement. Ce n'est pas une redondance : ce sont deux niveaux de défense contre la même
+perte, et le second ne dépend d'aucune discipline.
+
+### D-117 — Le numéro d'une tâche supprimée reste réservé
+
+**Décision.** `Project.nextTaskSequence` n'est jamais décrémenté par une suppression.
+
+**Justification.** Prolongement direct de
+[D-076](#d-076--les-trous-de-numérotation-sont-acceptés). `TASK-001` a pu circuler dans un
+commit, un log ou une conversation ; le réattribuer ferait désigner deux travaux différents par
+le même identifiant. Un trou se remarque et ne gêne personne.
+
+### D-118 — Le fichier est supprimé avant la tâche en base
+
+**Décision.** L'ordre est `runner → SQLite`, jamais l'inverse. Un runner injoignable laisse la
+base intacte.
+
+**Justification.** L'opération traverse deux systèmes sans transaction commune : l'un échouera un
+jour entre les deux étapes, et le choix se résume à quelle incohérence on préfère. Base d'abord
+laisse un document orphelin que plus rien ne désigne et qu'aucune reprise ne retrouve. Fichier
+d'abord laisse une tâche dont le document a disparu — visible, signalée, et reprenable d'un
+second clic grâce à [D-113](#d-113--un-document-absent-est-une-réussite-idempotente). Le second
+cas se répare, le premier se découvre des mois plus tard.
+
+Un échec en base après suppression réussie du fichier est rapporté honnêtement. NOX ne recrée
+surtout pas le fichier en silence : sa révision différerait de celle enregistrée, et le contrôle
+suivant échouerait sans que personne comprenne pourquoi.
+
+### D-119 — La confirmation exige de recopier le code de la tâche
+
+**Décision.** Le bouton final de « Delete task » reste inactif tant que l'utilisateur n'a pas
+saisi exactement `TASK-001`. La Server Action vérifie le code de son côté.
+
+**Justification.** Recopier demande de lire ce qu'on supprime, ce qu'un « Êtes-vous sûr ? »
+n'obtient de personne. Le verrou côté navigateur est une **commodité** : sans JavaScript le
+bouton reste actif, et c'est le serveur qui refuse. C'est aussi pourquoi la vérification arrive
+**après** celles de l'historique et du statut — apprendre à quelqu'un qu'il a mal recopié un code
+avant de lui dire que la suppression était de toute façon impossible le ferait travailler pour
+rien.
+
+### D-120 — Les confirmations sont portées par l'URL, pas par un état de composant
+
+**Décision.** `?confirmDelete=1` ouvre la confirmation, sur la page Documents comme sur celle
+d'une tâche. Les boutons qui l'ouvrent et la ferment sont des liens.
+
+**Justification.** Le formulaire est alors rendu par le serveur : il fonctionne sans JavaScript,
+« revenir en arrière » est une navigation ordinaire, et l'état de l'interface reste partageable.
+Un état local aurait aussi rendu la confirmation invisible à tout test qui ne fait que lire du
+HTML — ce qui est précisément ce que fait le test fonctionnel de cette tâche.
+
+### D-121 — L'anglais est limité aux micro-éléments techniques
+
+**Décision.** Passent en anglais les badges de statut, de synchronisation et de priorité, ainsi
+que les petites actions compactes (`Edit`, `Save`, `Cancel`, `Delete`, `Retry`, `Approve`,
+`Mark ready`, `New run`, `Run Claude Code`). Tout le reste — navigation, titres, descriptions,
+avertissements, formulaires, messages d'erreur — reste en français.
+
+**Justification.** Ces étiquettes se lisent d'un coup d'œil, sont courtes, et portent les mêmes
+noms que les valeurs internes qu'elles désignent : `READY` s'affiche `Ready`, ce qui rend
+l'interface et la base immédiatement rapprochables. Les phrases, elles, doivent rester dans la
+langue où l'utilisateur pense la nuance. D'où des mélanges assumés — « État de la tâche : Ready »,
+« Priorité : High » — qui sont un choix, pas un oubli de traduction.
+
+`COMPLETED` s'affiche `Done` pour les tâches et `Completed` pour les exécutions : la page d'une
+tâche montre les deux côte à côte, et deux pastilles identiques pour « travail accepté » et
+« processus terminé » se confondraient.
+
+### D-122 — Un seul module traduit les valeurs internes
+
+**Décision.** `apps/web/lib/labels.ts` contient les cinq fonctions de libellé et les seules tables
+de correspondance. `task-display.ts` et `run-display.ts` ne gardent que les tons, les URL et les
+formats.
+
+**Justification.** Un second mapping, même minuscule, même dans un composant isolé, finirait par
+diverger — et deux pages diraient alors deux choses différentes du même enregistrement. Un ton est
+une décision d'affichage propre à un type d'objet ; un libellé est une traduction, et il n'en
+existe qu'une par valeur.
+
+Les tables sont déclarées en `Record<Status, …>` : un statut ajouté plus tard ne peut pas passer
+inaperçu. Pour les transitions, dont la plupart des paires n'existent pas, l'exhaustivité est
+obtenue par un test qui parcourt `allowedTaskStatusTransitions` et exige un libellé explicite
+pour chacune.
+
+### D-123 — Les valeurs internes ne changent pas
+
+**Décision.** Aucun identifiant de statut, de priorité ou de synchronisation n'est renommé.
+TASK-009 ne touche qu'à l'affichage.
+
+**Justification.** Ces chaînes vivent en base, dans les contrats web ↔ runner, dans les
+transitions et dans les documents Markdown déjà générés. Les renommer aurait demandé une
+migration de données pour un bénéfice purement cosmétique. Un test le vérifie explicitement, pour
+que la prochaine session ne confonde pas « traduire » et « renommer ».

@@ -11,6 +11,7 @@ import {
   allowedTaskStatusTransitions,
   canTransitionTaskStatus,
   formatTaskCode,
+  isManagedTaskDocumentPath,
   isReservedTaskStatus,
   isTaskCode,
   isTaskDocumentSyncStatus,
@@ -166,5 +167,45 @@ describe("code d'une tache", () => {
   it("derive un chemin stable, sans le titre", () => {
     assert.equal(taskDocumentPath("TASK-001"), "tasks/TASK-001.md");
     assert.equal(taskDocumentPath(formatTaskCode(7)), "tasks/TASK-007.md");
+  });
+});
+
+describe("isManagedTaskDocumentPath", () => {
+  it("reconnait un document de tache", () => {
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-001.md"), true);
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-002.md"), true);
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-1234.md"), true);
+  });
+
+  it("reconnait tout chemin que le disque considererait identique", () => {
+    // Sous Windows, ces quatre chemins designent le meme fichier. Une
+    // comparaison sensible a la casse laisserait donc contourner la protection
+    // par une simple variation d'orthographe.
+    assert.equal(isManagedTaskDocumentPath("Tasks/TASK-001.md"), true);
+    assert.equal(isManagedTaskDocumentPath("tasks/task-001.md"), true);
+    assert.equal(isManagedTaskDocumentPath("TASKS/Task-001.MD"), true);
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-001.MD"), true);
+  });
+
+  it("protege aussi un document orphelin", () => {
+    // Le controle porte sur la forme du chemin, pas sur l'existence d'une
+    // tache : NOX ne peut pas savoir si `TASK-999` precede une tache a venir ou
+    // en suit une disparue.
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-999.md"), true);
+  });
+
+  it("laisse les autres documents de tasks/ ordinaires", () => {
+    assert.equal(isManagedTaskDocumentPath("tasks/NOTES.md"), false);
+    assert.equal(isManagedTaskDocumentPath("tasks/README.md"), false);
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-01.md"), false);
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-001.txt"), false);
+    assert.equal(isManagedTaskDocumentPath("tasks/TASK-001.md.bak"), false);
+  });
+
+  it("ne protege rien hors du dossier tasks/", () => {
+    assert.equal(isManagedTaskDocumentPath("docs/TASK-001.md"), false);
+    assert.equal(isManagedTaskDocumentPath("TASK-001.md"), false);
+    assert.equal(isManagedTaskDocumentPath("archive/tasks/TASK-001.md"), false);
+    assert.equal(isManagedTaskDocumentPath(""), false);
   });
 });

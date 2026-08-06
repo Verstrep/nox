@@ -3,31 +3,33 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 6 août 2026, à l'issue de `TASK-008`.
+**Dernière mise à jour** : 6 août 2026, à l'issue de `TASK-009`.
 
 ---
 
 ## 1. Phase actuelle
 
-**NOX lance Claude Code.** La boucle que le projet cherchait à fermer depuis le début l'est
-enfin sur son premier maillon : une tâche rédigée dans NOX modifie réellement un repository,
-sans qu'aucun prompt ne soit copié-collé.
+**NOX sait défaire ce qu'il a fait.** Jusqu'ici, tout ce que l'outil créait — documents de test,
+tâches d'essai — restait à supprimer à la main dans VS Code. C'est la première tâche qui **retire**
+quelque chose, et donc la première dont le risque n'est pas de perdre une modification mais de
+perdre un fichier entier.
 
-C'est aussi la première fonctionnalité dont une étape **dure plus longtemps qu'une requête
-HTTP**. Le web possède les données métier, le runner possède le processus, et l'interrogation
-périodique réconcilie les deux. Fermer le navigateur n'interrompt rien ; redémarrer le runner,
-si — et NOX le dit plutôt que de deviner.
+Deux garde-fous portent tout le reste. Une suppression exige la **même révision** qu'une écriture :
+on ne supprime pas une version qu'on n'a pas vue. Et une tâche possédant un **historique
+d'exécution** n'est jamais supprimable : un run est un fait, pas un brouillon.
 
-Le lancement reste **toujours explicite**. Aucune orchestration automatique, aucun appel OpenAI,
-aucune clé d'API Anthropic dans NOX.
+L'interface change aussi de registre : les **micro-éléments techniques** — statuts, priorités,
+petites actions — passent en anglais et portent désormais les mêmes noms que les valeurs internes,
+tandis que tout ce qui explique, avertit ou questionne reste en français.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 8 — lancement manuel d'une tâche
-Claude Code (terminée)**. L'étape 9 (streaming et annulation) devient l'étape active.
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 9 — suppression sécurisée et libellés
+d'état (terminée)**. L'étape 10 (streaming et annulation) devient l'étape active, mais elle ne doit
+pas commencer avant l'installation de Claude Code et un premier run réel contrôlé.
 
 ## 2. Tâche active
 
-`TASK-008 — Préparation et lancement manuel d'une tâche Claude Code` : **terminée**, en attente
-de review humaine.
+`TASK-009 — Suppression sécurisée et libellés d'état en anglais` : **terminée**, en attente de
+review humaine.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
@@ -147,21 +149,122 @@ mais ne connaît plus l'exécution conclut, lui : le suivi est perdu et le reste
 Le prompt n'est pas modifiable : ce n'est pas un champ du formulaire. Trois valeurs seulement
 sont transmises — projet, tâche, `HEAD` attendu.
 
-### 3.9 Validations exécutées
+### 3.9 Suppression de documents — `TASK-009`
+
+`POST /repositories/documents/delete`, authentifiée. Le contrat exige `expectedRevision` :
+supprimer sans révision est refusé **syntaxiquement**, pas seulement à l'exécution.
+
+Le module `delete-document.ts` réutilise `resolveDocumentPath` et le contrôle d'empreinte tels
+quels — il n'existe pas de quatrième logique de validation de chemin. Il ajoute quatre refus :
+document géré par une tâche, lien symbolique, dossier, révision différente. La suppression est
+un `unlink`, jamais un `rmdir`, et l'absence du fichier est **constatée** avant d'annoncer une
+réussite.
+
+Les chemins de la forme `tasks/TASK-<chiffres>.md` sont refusés (`DOCUMENT_PROTECTED`), avec une
+comparaison insensible à la casse : sous Windows, `Tasks/task-001.MD` désigne le même fichier.
+Les autres documents de `tasks/` restent ordinaires.
+
+### 3.10 Suppression du document d'une tâche
+
+`POST /repositories/tasks/delete-document`, authentifiée. Comme à la création, le corps ne porte
+**aucun chemin** : le runner compose `tasks/<code>.md` à partir du code, après en avoir vérifié
+la forme. C'est la seule route autorisée à toucher aux fichiers que la précédente protège.
+
+| Situation | Réponse |
+| --- | --- |
+| Document présent, révision correcte | `deleted: true` |
+| Document absent, ou dossier `tasks/` absent | `deleted: false, alreadyAbsent: true` — réussite |
+| Document présent, révision inconnue | `TASK_DOCUMENT_REVISION_UNKNOWN` (`409`) |
+| Document présent, révision différente | `DOCUMENT_DELETE_CONFLICT` (`409`) |
+
+Le dossier `tasks/` n'est ni créé ni supprimé par cette route.
+
+### 3.11 Suppression d'une tâche
+
+`deleteTaskWithoutRuns(db, projectId, taskId)` supprime la tâche et ses trois listes enfant dans
+une transaction, après avoir **relu le nombre d'exécutions dans cette transaction** — une
+exécution a pu démarrer depuis l'affichage de la page. La relation `Run → Task` passe de
+`Cascade` à `Restrict` : même un appel direct à Prisma échoue.
+
+`Project.nextTaskSequence` n'est jamais décrémenté. `TASK-001` supprimée, la suivante est
+`TASK-004`.
+
+L'ordre est **runner puis base**. Un runner injoignable ne supprime rien ; un échec en base après
+une suppression réussie du fichier est rapporté honnêtement, sans recréer le fichier en silence.
+
+### 3.12 Libellés d'interface
+
+`apps/web/lib/labels.ts` est la seule couche qui traduit une valeur interne. `task-display.ts` et
+`run-display.ts` ne gardent que les tons, les URL et les formats.
+
+| Famille | Libellés |
+| --- | --- |
+| Statut de tâche | `Draft`, `Ready`, `Running`, `Blocked`, `Failed`, `Review`, `Done` |
+| Statut d'exécution | `Queued`, `Running`, `Blocked`, `Failed`, `Cancelled`, `Completed` |
+| Synchronisation | `Pending`, `Synced`, `Error`, `Conflict` |
+| Priorité | `Low`, `Medium`, `High`, `Critical` |
+| Transitions | `Mark ready`, `Mark blocked`, `Mark done`, `Back to draft`, `Reopen`, `Approve`, `Retry` |
+| Actions compactes | `Edit`, `Save`, `Cancel`, `Delete`, `Delete task`, `Retry`, `New run`, `Run Claude Code` |
+
+Restent en français : navigation, titres, sous-titres, descriptions, formulaires, avertissements,
+confirmations, messages d'erreur détaillés. **Aucune valeur interne n'a changé** — un test le
+vérifie explicitement.
+
+### 3.13 Interface de suppression
+
+Les deux confirmations sont portées par l'URL (`?confirmDelete=1`) et non par un état de
+composant : elles sont rendues par le serveur, fonctionnent sans JavaScript, et « annuler » est
+une navigation ordinaire.
+
+- **Document** : bouton `Delete` dans l'en-tête du lecteur, uniquement si le document a été lu
+  (donc révision connue et runner disponible) et n'est pas géré par une tâche. La confirmation
+  nomme le fichier, affiche son chemin relatif, et avertit en français.
+- **Tâche** : section « Supprimer la tâche ». Le bouton disparaît dès qu'une exécution existe, et
+  une explication française prend sa place. La confirmation exige de recopier le code exact.
+
+### 3.14 Validations exécutées
 
 | Commande | Résultat |
 | --- | --- |
 | `npm install` | ✅ aucune dépendance ajoutée |
 | `npm run db:generate` | ✅ client Prisma régénéré |
-| `npm run db:migrate` | ✅ migration appliquée, projets et tâches existants intacts |
-| `npm run test` | ✅ **902 tests, 167 suites, 0 échec, 2 ignorés** |
+| `npm run db:migrate` | ✅ `20260806182745_restrict_run_deletion` appliquée, données intactes |
+| `npm run test` | ✅ **1046 tests, 198 suites, 0 échec, 4 ignorés** |
 | `npm run lint` | ✅ exit 0 |
 | `npm run typecheck` | ✅ exit 0, 4 workspaces |
 | `npm run build` | ✅ exit 0, 12 routes |
 
-Les 2 tests ignorés sont ceux de TASK-005 (liens symboliques de fichier sous Windows).
+Les 4 tests ignorés concernent les liens symboliques **de fichier** sous Windows, qui exigent un
+privilège. Les cas d'évasion correspondants restent couverts par des jonctions, qui n'en
+demandent aucun.
 
-### 3.10 Test fonctionnel réellement exécuté
+### 3.15 Test fonctionnel de TASK-009
+
+Repository Git temporaire avec remote `bare` local, base SQLite **isolée**, runner réel et web en
+**mode production** — la base de développement n'a jamais été touchée. Aucun appel Claude.
+
+**185 vérifications, toutes passées**, en quatre exécutions.
+
+- **103** : enregistrement du projet ; création puis suppression de `docs/DELETE_ME.md` (disparu
+  du disque et de l'inventaire, `docs/` conservé) ; conflit de révision sur `docs/CONFLICT.md`
+  modifié hors de NOX, version B intacte, aucun bouton de forçage ; document de tâche protégé —
+  bouton absent de l'interface **et** `DOCUMENT_PROTECTED` renvoyé par l'API, y compris avec une
+  orthographe différente ; suppression d'une tâche sans exécution avec son Markdown et ses
+  enfants ; `TASK-002` après suppression de `TASK-001` ; refus sur une tâche avec exécution ;
+  libellés anglais et textes français.
+- **5** : préparation d'une tâche supprimable et capture des formulaires avant la panne.
+- **12** : runner arrêté — la page ne propose même plus de suppression, et une page ouverte avant
+  la panne ne supprime **rien**, ni fichier ni ligne en base.
+- **65** : runner redémarré, la suppression aboutit ; puis vérification de chaque libellé
+  (`Draft`, `Ready`, `Running`, `Review`, `Done`, `Failed`, `Pending`, `Synced`, `Error`,
+  `Conflict`, `Low`, `Medium`, `High`, `Critical`, `Approve`, `Reopen`, `Retry`) et absence de
+  tout libellé français de statut sur quatre pages.
+
+À la fin, le repository temporaire : `HEAD` identique à `origin/main`, **un seul commit**,
+suppressions et créations laissées non commitées. Nettoyage complet — repository, remote, base et
+processus.
+
+### 3.16 Test fonctionnel de TASK-008
 
 Repository Git temporaire **avec un remote `bare` local**, propre et synchronisé. Runner lancé
 depuis `dist/` avec un **faux Claude Code** ; web lancé en **mode production**.
@@ -194,7 +297,9 @@ et la base ne contient aucune exécution.
 - Streaming des événements Claude Code, annulation manuelle d'une exécution.
 - Reprise d'une session Claude, prompt correctif automatique.
 - Diff complet dans l'interface ; extraction du résultat des validations.
-- Modification d'une spécification après création, suppression, renumérotation, duplication,
+- Suppression d'un projet, d'une exécution, ou d'une tâche possédant un historique.
+- Archivage, corbeille, restauration, suppression en masse, renommage, déplacement.
+- Modification d'une spécification après création, renumérotation, duplication,
   dépendances entre tâches.
 - Plusieurs agents en parallèle, worktrees, plusieurs comptes Claude.
 - Commits et push automatiques.
@@ -228,30 +333,51 @@ endroit. Le premier lancement réel le confirmera ou l'infirmera.
    ([D-106](DECISIONS.md#d-106--détection-prudente-des-limites-dutilisation)).
 9. **La modification manuelle d'un `tasks/TASK-xxx.md` ne met pas à jour la tâche.**
 10. **Une spécification ne se modifie pas après création.** Seul le statut change.
-11. **Un trou dans la numérotation** des tâches et des exécutions est possible après un échec
-    survenu entre la réservation et l'enregistrement.
-12. **Aucun dossier ne peut être créé depuis NOX**, à l'exception de `tasks/`.
-13. **`beforeunload` ne couvre pas la navigation interne de Next.js.**
-14. **Le périmètre d'inspection des documents est figé** ; 500 documents maximum.
-15. **Pas de test de rendu React.** Couverture assurée par les tests unitaires, le test
+11. **Une tâche possédant un historique d'exécution ne peut pas être supprimée**, et aucun
+    archivage n'existe encore
+    ([D-115](DECISIONS.md#d-115--une-tâche-possédant-un-historique-nest-pas-supprimable)).
+12. **La suppression n'est pas atomique entre le disque et SQLite.** Un échec en base après
+    suppression réussie du fichier laisse une tâche sans document — état visible, signalé, et
+    reprenable d'un second clic
+    ([D-118](DECISIONS.md#d-118--le-fichier-est-supprimé-avant-la-tâche-en-base)).
+13. **Une fenêtre de concurrence résiduelle subsiste** entre le dernier contrôle de nature et
+    l'`unlink` : Node n'expose pas de suppression conditionnée à un descripteur déjà ouvert. Elle
+    est bornée dans ses conséquences — `unlink` ne suit jamais un lien, donc un lien apparu
+    entre-temps serait retiré à la place du document, jamais sa cible — et n'est pas couverte par
+    un test, faute de pouvoir provoquer la course de façon déterministe.
+14. **Aucune suppression de projet, ni d'exécution.** Aucun forçage, aucune suppression
+    récursive, aucune corbeille, aucune restauration.
+15. **Un trou dans la numérotation** des tâches et des exécutions est possible après un échec
+    survenu entre la réservation et l'enregistrement — et désormais aussi après une suppression,
+    ce qui est voulu ([D-117](DECISIONS.md#d-117--le-numéro-dune-tâche-supprimée-reste-réservé)).
+16. **Aucun dossier ne peut être créé ni supprimé depuis NOX**, à l'exception de la création de
+    `tasks/`.
+17. **`beforeunload` ne couvre pas la navigation interne de Next.js.**
+18. **Le périmètre d'inspection des documents est figé** ; 500 documents maximum.
+19. **Pas de test de rendu React.** Couverture assurée par les tests unitaires, le test
     d'intégration réel et les tests fonctionnels HTTP en mode production.
-16. **Deux tests ignorés sous Windows** : liens symboliques de fichier (privilège requis).
-17. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+20. **Quatre tests ignorés sous Windows** : liens symboliques de fichier (privilège requis). Les
+    cas d'évasion correspondants restent couverts par des jonctions.
+21. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
     clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-009` — Streaming des événements et annulation d'une exécution Claude.**
+**`TASK-010` — Streaming des événements et annulation d'une exécution Claude.**
 
 Objectif : afficher progressivement les événements de Claude Code et permettre à l'utilisateur
 d'interrompre proprement une exécution active, sans ajouter encore l'orchestration OpenAI.
+
+⚠️ **À ne pas commencer avant** l'installation de Claude Code et la validation d'un premier run
+réel contrôlé. Streamer et annuler des événements dont on n'a jamais vu la forme réelle
+reviendrait à empiler des suppositions sur celles de TASK-008.
 
 ## 8. État Git
 
 - Aucun commit créé par Claude Code.
 - Aucun push effectué.
 - Historique Git non modifié.
-- Commit de départ : `5b95054` (`feat: add markdown creation and structured development tasks`),
-  contenant bien `TASK-006` et `TASK-007`.
-- **Répertoire de travail propre** au démarrage de `TASK-008`.
-- Les modifications de `TASK-008` sont locales, non indexées, disponibles pour review.
+- Commit de départ : `bf7f948` (`feat: add manual Claude Code execution`), contenant bien
+  `TASK-008`.
+- **Répertoire de travail propre** au démarrage de `TASK-009`.
+- Les modifications de `TASK-009` sont locales, non indexées, disponibles pour review.

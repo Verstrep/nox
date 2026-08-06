@@ -85,19 +85,26 @@ export function describeUpdateFailure(failure: RunnerFailure): {
 }
 
 /**
- * URL d'un document, en mode lecture ou en mode edition.
+ * URL d'un document, en mode lecture, edition ou confirmation de suppression.
  *
  * Seul endroit ou une URL de document est construite : lecture, edition,
- * retour apres enregistrement et retour apres creation passent tous par ici.
+ * suppression, retour apres enregistrement et retour apres creation passent tous
+ * par ici.
  */
 export function documentUrl(
   projectId: string,
   documentPath: string,
-  options: { edit?: boolean; saved?: boolean; created?: boolean } = {},
+  options: { edit?: boolean; saved?: boolean; created?: boolean; confirmDelete?: boolean } = {},
 ): string {
   const query = new URLSearchParams({ path: documentPath });
   if (options.edit === true) {
     query.set("edit", "1");
+  }
+  // La confirmation vit dans l'URL plutot que dans un etat de composant : le
+  // formulaire est ainsi rendu par le serveur, donc utilisable sans JavaScript
+  // et verifiable par un test qui ne fait que lire du HTML.
+  if (options.confirmDelete === true) {
+    query.set("confirmDelete", "1");
   }
   if (options.saved === true) {
     query.set("saved", "1");
@@ -106,4 +113,23 @@ export function documentUrl(
     query.set("created", "1");
   }
   return `/projects/${projectId}/documents?${query.toString()}`;
+}
+
+/**
+ * URL de la liste des documents, sans document ouvert.
+ *
+ * Utilisee apres une suppression : le document affiche n'existe plus, et
+ * conserver son chemin dans l'URL produirait aussitot une erreur de lecture. Le
+ * chemin supprime voyage donc dans un parametre distinct, qui ne sert qu'a
+ * formuler le message de reussite.
+ */
+export function documentsUrl(
+  projectId: string,
+  options: { deleted?: string } = {},
+): string {
+  const base = `/projects/${projectId}/documents`;
+  if (options.deleted === undefined) {
+    return base;
+  }
+  return `${base}?${new URLSearchParams({ deleted: options.deleted }).toString()}`;
 }

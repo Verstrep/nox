@@ -10,6 +10,8 @@ import type { ListDocumentsResult } from "./repositories/documents/list-document
 import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
 import type { CreateDocumentResult } from "./repositories/documents/create-document.ts";
 import type { CreateTaskDocumentResult } from "./repositories/tasks/create-task-document.ts";
+import type { DeleteDocumentResult } from "./repositories/documents/delete-document.ts";
+import type { DeleteTaskDocumentResult } from "./repositories/tasks/delete-task-document.ts";
 import type { PreflightResult } from "./claude/preflight.ts";
 import { ClaudeRunRegistry } from "./claude/registry.ts";
 import type { StartRunRequest, StartRunResult } from "./claude/runs.ts";
@@ -214,6 +216,75 @@ function fakeCreateTaskDocument(
   });
 }
 
+/** Suppressions de documents recues, pour verifier le passage de relais. */
+const receivedDeleteCalls: { repositoryPath: string; documentPath: string; expectedRevision: string }[] =
+  [];
+
+/**
+ * Suppression simulee : aucun fichier n'est touche par les tests du serveur.
+ * Le comportement reel est couvert par `delete-document.test.ts`, sur de vrais
+ * repositories temporaires.
+ */
+function fakeDelete(
+  repositoryPath: string,
+  documentPath: string,
+  expectedRevision: string,
+): Promise<DeleteDocumentResult> {
+  receivedDeleteCalls.push({ repositoryPath, documentPath, expectedRevision });
+
+  if (documentPath.startsWith("tasks/TASK-")) {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_PROTECTED" });
+  }
+  if (expectedRevision !== CURRENT_REVISION) {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_DELETE_CONFLICT" });
+  }
+  if (documentPath === "docs/ABSENT.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_NOT_FOUND" });
+  }
+
+  return Promise.resolve({ ok: true, path: documentPath, revision: expectedRevision });
+}
+
+/** Suppressions de documents de tache recues. */
+const receivedTaskDeleteCalls: {
+  repositoryPath: string;
+  taskCode: string;
+  expectedRevision: string | null;
+}[] = [];
+
+function fakeDeleteTaskDocument(
+  repositoryPath: string,
+  taskCode: string,
+  expectedRevision: string | null,
+): Promise<DeleteTaskDocumentResult> {
+  receivedTaskDeleteCalls.push({ repositoryPath, taskCode, expectedRevision });
+
+  if (!/^TASK-\d{3,}$/.test(taskCode)) {
+    return Promise.resolve({ ok: false, code: "TASK_CODE_INVALID" });
+  }
+  if (taskCode === "TASK-404") {
+    return Promise.resolve({
+      ok: true,
+      deleted: false,
+      alreadyAbsent: true,
+      path: `tasks/${taskCode}.md`,
+    });
+  }
+  if (expectedRevision === null) {
+    return Promise.resolve({ ok: false, code: "TASK_DOCUMENT_REVISION_UNKNOWN" });
+  }
+  if (expectedRevision !== CURRENT_REVISION) {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_DELETE_CONFLICT" });
+  }
+
+  return Promise.resolve({
+    ok: true,
+    deleted: true,
+    alreadyAbsent: false,
+    path: `tasks/${taskCode}.md`,
+  });
+}
+
 const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
 /**
@@ -286,7 +357,9 @@ before(async () => {
     readDocument: fakeRead,
     updateDocument: fakeUpdate,
     createDocument: fakeCreate,
+    deleteDocument: fakeDelete,
     createTaskDocument: fakeCreateTaskDocument,
+    deleteTaskDocument: fakeDeleteTaskDocument,
     log: () => undefined,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -1201,6 +1274,274 @@ describe("POST /repositories/tasks/create-document", () => {
 
     assert.equal(response.text.includes(TOKEN), false);
     assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+  });
+});
+
+describe("POST /repositories/documents/delete", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const REPOSITORY = "D:\\Projets\\depot";
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      repositoryPath: REPOSITORY,
+      documentPath: "docs/NOTE.md",
+      expectedRevision: CURRENT_REVISION,
+      ...overrides,
+    });
+  }
+
+  it("repond 200 avec le chemin relatif et la revision supprimee", async () => {
+    const response = await call("/repositories/documents/delete", { ...authorized, body: body() });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      ok: true,
+      deleted: { path: "docs/NOTE.md", revision: CURRENT_REVISION },
+    });
+  });
+
+  it("transmet la revision attendue a la couche metier", async () => {
+    receivedDeleteCalls.length = 0;
+    await call("/repositories/documents/delete", { ...authorized, body: body() });
+
+    assert.deepEqual(receivedDeleteCalls, [
+      {
+        repositoryPath: REPOSITORY,
+        documentPath: "docs/NOTE.md",
+        expectedRevision: CURRENT_REVISION,
+      },
+    ]);
+  });
+
+  it("repond 409 sur un conflit de revision", async () => {
+    const response = await call("/repositories/documents/delete", {
+      ...authorized,
+      body: body({ expectedRevision: NEXT_REVISION }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "DOCUMENT_DELETE_CONFLICT");
+  });
+
+  it("repond 403 sur un document de tache protege", async () => {
+    const response = await call("/repositories/documents/delete", {
+      ...authorized,
+      body: body({ documentPath: "tasks/TASK-001.md" }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(errorCode(response.json), "DOCUMENT_PROTECTED");
+  });
+
+  it("repond 404 sur un document absent", async () => {
+    const response = await call("/repositories/documents/delete", {
+      ...authorized,
+      body: body({ documentPath: "docs/ABSENT.md" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "DOCUMENT_NOT_FOUND");
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/repositories/documents/delete", {
+      method: "POST",
+      token: null,
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+  });
+
+  it("refuse un jeton errone", async () => {
+    const response = await call("/repositories/documents/delete", {
+      method: "POST",
+      token: "Bearer mauvais-jeton",
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+  });
+
+  it("n'appelle pas la couche metier sans jeton", async () => {
+    receivedDeleteCalls.length = 0;
+    await call("/repositories/documents/delete", { method: "POST", token: null, body: body() });
+
+    assert.deepEqual(receivedDeleteCalls, []);
+  });
+
+  it("refuse une methode autre que POST", async () => {
+    const response = await call("/repositories/documents/delete", {
+      method: "GET",
+      token: `Bearer ${TOKEN}`,
+    });
+
+    assert.equal(response.status, 405);
+    assert.equal(errorCode(response.json), "METHOD_NOT_ALLOWED");
+  });
+
+  it("refuse un corps sans revision", async () => {
+    const response = await call("/repositories/documents/delete", {
+      ...authorized,
+      body: JSON.stringify({ repositoryPath: REPOSITORY, documentPath: "docs/NOTE.md" }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(errorCode(response.json), "INVALID_REQUEST");
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu dans une reponse d'erreur", async () => {
+    const response = await call("/repositories/documents/delete", {
+      ...authorized,
+      body: body({ expectedRevision: NEXT_REVISION }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(response.text.includes(REPOSITORY), false);
+    assert.equal(response.text.includes("D:\\"), false);
+  });
+});
+
+describe("POST /repositories/tasks/delete-document", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const REPOSITORY = "D:\\Projets\\depot";
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      repositoryPath: REPOSITORY,
+      taskCode: "TASK-001",
+      expectedRevision: CURRENT_REVISION,
+      ...overrides,
+    });
+  }
+
+  it("repond 200 sur une suppression effective", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      body: body(),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      ok: true,
+      deleted: true,
+      alreadyAbsent: false,
+      path: "tasks/TASK-001.md",
+    });
+  });
+
+  it("repond 200 sur un document deja absent", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      body: body({ taskCode: "TASK-404", expectedRevision: null }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      ok: true,
+      deleted: false,
+      alreadyAbsent: true,
+      path: "tasks/TASK-404.md",
+    });
+  });
+
+  it("transmet le code plutot qu'un chemin a la couche metier", async () => {
+    receivedTaskDeleteCalls.length = 0;
+    await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      // Un chemin glisse dans le corps ne doit avoir aucune prise : le contrat
+      // ne le transporte pas, et le runner compose le sien.
+      body: body({ documentPath: "../../hors-depot/SECRET.md" }),
+    });
+
+    assert.deepEqual(receivedTaskDeleteCalls, [
+      { repositoryPath: REPOSITORY, taskCode: "TASK-001", expectedRevision: CURRENT_REVISION },
+    ]);
+  });
+
+  it("repond 409 quand un document present n'a pas de revision connue", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      body: body({ expectedRevision: null }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "TASK_DOCUMENT_REVISION_UNKNOWN");
+  });
+
+  it("repond 409 sur un conflit de revision", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      body: body({ expectedRevision: NEXT_REVISION }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "DOCUMENT_DELETE_CONFLICT");
+  });
+
+  it("repond 400 sur un code invalide", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      body: body({ taskCode: "../secret" }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(errorCode(response.json), "TASK_CODE_INVALID");
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      method: "POST",
+      token: null,
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+  });
+
+  it("n'appelle pas la couche metier sans jeton", async () => {
+    receivedTaskDeleteCalls.length = 0;
+    await call("/repositories/tasks/delete-document", {
+      method: "POST",
+      token: null,
+      body: body(),
+    });
+
+    assert.deepEqual(receivedTaskDeleteCalls, []);
+  });
+
+  it("refuse une methode autre que POST", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      method: "GET",
+      token: `Bearer ${TOKEN}`,
+    });
+
+    assert.equal(response.status, 405);
+    assert.equal(errorCode(response.json), "METHOD_NOT_ALLOWED");
+  });
+
+  it("refuse un corps sans champ expectedRevision", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      body: JSON.stringify({ repositoryPath: REPOSITORY, taskCode: "TASK-001" }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(errorCode(response.json), "INVALID_REQUEST");
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu", async () => {
+    const response = await call("/repositories/tasks/delete-document", {
+      ...authorized,
+      body: body(),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(response.text.includes(REPOSITORY), false);
+    assert.equal(response.text.includes("D:\\"), false);
   });
 });
 

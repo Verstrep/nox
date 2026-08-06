@@ -12,8 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-008 — préparation et lancement manuel d'une tâche Claude
-Code**.
+Dernière étape terminée : **TASK-009 — suppression sécurisée et libellés d'état en anglais**.
 
 | Élément | État |
 | --- | --- |
@@ -30,14 +29,42 @@ Code**.
 | Préflight Git et détection de Claude Code | ✅ fonctionnels |
 | Lancement manuel de Claude Code sur une tâche | ✅ fonctionnel |
 | Suivi d'une exécution et persistance de son résultat | ✅ fonctionnels |
+| Suppression d'un document Markdown | ✅ fonctionnelle |
+| Suppression d'une tâche sans exécution | ✅ fonctionnelle |
 | Streaming des événements, annulation d'une exécution | ⬜ non commencés |
 | Diff complet dans l'interface | ⬜ non commencé |
-| Suppression, renommage, déplacement d'un document | ⬜ non commencés |
+| Renommage, déplacement d'un document | ⬜ non commencés |
+| Archivage, suppression d'une tâche avec exécutions | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
 | Intégration OpenAI (orchestrateur) | ⬜ non commencée |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
+
+## Convention de langue de l'interface
+
+NOX est une interface **française**. Une exception, volontairement étroite : les
+**micro-éléments techniques** s'affichent en anglais.
+
+| En anglais | En français |
+| --- | --- |
+| Badges de statut : `Draft`, `Ready`, `Running`, `Review`, `Done` | Navigation, titres et sous-titres |
+| Badges de synchronisation : `Pending`, `Synced`, `Error`, `Conflict` | Descriptions et textes explicatifs |
+| Badges de priorité : `Low`, `Medium`, `High`, `Critical` | Libellés et aides des formulaires |
+| Actions compactes : `Edit`, `Save`, `Cancel`, `Delete`, `Retry` | Avertissements et confirmations |
+| Transitions : `Mark ready`, `Approve`, `Reopen`, `New run` | Messages d'erreur détaillés |
+
+Ces étiquettes se lisent d'un coup d'œil et portent les mêmes noms que les valeurs internes
+qu'elles désignent : `READY` en base s'affiche `Ready`. Les phrases, elles, restent dans la
+langue où l'on pense la nuance. D'où des mélanges assumés :
+
+```text
+État de la tâche : Ready
+Priorité : High
+```
+
+**Aucune valeur interne n'a changé.** Les statuts stockés en base, les contrats web ↔ runner et
+les documents Markdown déjà générés sont inchangés — seul l'affichage est traduit.
 
 ## Prérequis
 
@@ -305,8 +332,8 @@ signale l'indisponibilité.
 
 ## Modifier un document
 
-Ouvrez un document, puis cliquez sur **Modifier**. Le contenu s'affiche dans une zone de texte
-monospace ; **Enregistrer** l'écrit, **Annuler** revient à la lecture.
+Ouvrez un document, puis cliquez sur **Edit**. Le contenu s'affiche dans une zone de texte
+monospace ; **Save** l'écrit, **Cancel** revient à la lecture.
 
 ### L'écriture agit directement dans le repository
 
@@ -443,6 +470,60 @@ détaillée.md` est un nom parfaitement valide.
 Dans tous ces cas, **aucun fichier n'est créé** et le formulaire conserve destination, nom et
 contenu.
 
+## Supprimer un document
+
+Sur un document ouvert, le bouton **Delete** ouvre une confirmation qui rappelle le nom du
+fichier et son chemin relatif. Un second clic supprime.
+
+### Ce que la suppression fait, et ne fait pas
+
+- **Le fichier est retiré du repository**, directement. NOX n'en conserve aucune copie.
+- **Aucun commit n'est créé.** Vérifiez le changement avec `git status` avant de valider
+  définitivement votre travail. Si le fichier était déjà versionné, Git pourra le restaurer
+  (`git restore <chemin>`) ; sinon, il est **définitivement perdu**.
+- **Aucun dossier n'est supprimé**, même devenu vide. `docs/` appartient à la structure du
+  repository, pas au document qui s'y trouvait.
+- **Un seul fichier à la fois.** Ni suppression récursive, ni sélection multiple, ni corbeille.
+- **Un lien symbolique est refusé.** NOX ne supprime que des fichiers réels, pour que le fichier
+  qui disparaît ne soit jamais une surprise.
+
+### Le contrôle de révision
+
+Comme à l'enregistrement, NOX compare l'empreinte du fichier sur le disque à celle qu'il vous a
+affichée. Si le document a changé entre-temps — modifié dans VS Code, par exemple — **la
+suppression est refusée** et le fichier reste intact.
+
+> Ce document a été modifié depuis son affichage. Rechargez sa version actuelle avant de le
+> supprimer.
+
+Il n'existe **aucun bouton pour forcer** : personne ne peut décider de supprimer une version
+qu'il n'a pas vue. Rechargez la page, relisez, puis décidez.
+
+### Les documents protégés
+
+Les fichiers `tasks/TASK-001.md`, `tasks/TASK-002.md`… n'ont **pas** de bouton Delete. Ils
+appartiennent à une tâche NOX : les supprimer ici laisserait la tâche sans son document, sans que
+rien ne l'enregistre. Passez par **Delete task** sur la page de la tâche, qui supprime les deux
+ensemble.
+
+Cette protection vit dans le runner, pas seulement dans l'interface : un appel direct à l'API est
+refusé avec `DOCUMENT_PROTECTED`, quelle que soit l'orthographe du chemin.
+
+Les **autres** fichiers de `tasks/` — `tasks/NOTES.md`, par exemple — restent des documents
+ordinaires, supprimables comme les autres.
+
+### Erreurs de suppression
+
+| Message | Cause | Correction |
+| --- | --- | --- |
+| « Ce document a été modifié depuis son affichage » | Le disque a changé | Recharger, relire, puis décider |
+| « Ce document appartient à une tâche NOX » | Chemin `tasks/TASK-xxx.md` | Utiliser **Delete task** |
+| « Ce document n'existe plus dans le repository » | Déjà supprimé ailleurs | Recharger la liste |
+| « La suppression a échoué et le document est toujours présent » | Fichier verrouillé | Le fermer, puis réessayer |
+| « Le runner local ne répond pas » | Runner arrêté | Le démarrer, puis réessayer |
+
+Dans tous ces cas, **aucun fichier n'est supprimé**.
+
 ## Créer et suivre des tâches
 
 Depuis la page d'un projet, **Voir les tâches** ouvre le backlog
@@ -482,17 +563,20 @@ qu'un identifiant qui aurait déjà circulé dans un commit ou dans un log.
 
 ### Statuts et transitions
 
-| Statut | Sens | Transitions manuelles possibles |
-| --- | --- | --- |
-| `DRAFT` | Brouillon, statut initial | → `READY`, `BLOCKED` |
-| `READY` | Prête à être implémentée | → `DRAFT`, `BLOCKED`, `COMPLETED` |
-| `BLOCKED` | Bloquée par autre chose | → `DRAFT`, `READY` |
-| `COMPLETED` | Terminée | → `READY` |
-| `RUNNING`, `FAILED`, `REVIEW` | Réservés aux exécutions de Claude Code | aucune |
+| Statut | Affiché | Sens | Transitions manuelles possibles |
+| --- | --- | --- | --- |
+| `DRAFT` | `Draft` | Brouillon, statut initial | `Mark ready`, `Mark blocked` |
+| `READY` | `Ready` | Prête à être implémentée | `Back to draft`, `Mark blocked`, `Mark done` |
+| `BLOCKED` | `Blocked` | Bloquée par autre chose | `Back to draft`, `Mark ready` |
+| `COMPLETED` | `Done` | Travail accepté | `Reopen` |
+| `REVIEW` | `Review` | Exécution réussie, à relire | `Approve`, `Reopen` |
+| `FAILED` | `Failed` | Exécution échouée | `Retry`, `Mark blocked` |
+| `RUNNING` | `Running` | Exécution en cours | aucune |
 
-Les trois derniers ne sont pas sélectionnables : ils décrivent le résultat d'une exécution que
-NOX ne sait pas encore déclencher. Les afficher comme choisissables laisserait annoncer un état
-que rien n'a produit.
+`RUNNING`, `FAILED` et `REVIEW` n'ont **aucune entrée** manuelle : ils sont posés par une
+exécution de Claude Code, et les rendre sélectionnables laisserait annoncer un état que rien n'a
+produit. Ils ont en revanche une **sortie** manuelle — c'est bien vous qui décidez d'accepter un
+travail relu ou de le remettre en file.
 
 ### Le document Markdown associé
 
@@ -538,17 +622,63 @@ La reprise est sûre à répéter :
 Il n'existe aucun bouton pour forcer un écrasement. Un fichier différent à cet emplacement est
 le travail de quelqu'un — ou de quelque chose — d'autre, et c'est à vous de décider.
 
+### Supprimer une tâche
+
+La section **Supprimer la tâche**, en bas de la page, propose un bouton **Delete task**. La
+confirmation rappelle le code, le titre et le chemin du document, puis demande de **recopier le
+code exact** — `TASK-001` — avant d'activer le bouton final. Recopier oblige à lire ce qu'on
+supprime, ce qu'un « Êtes-vous sûr ? » n'obtient de personne.
+
+Une suppression retire **la tâche, ses critères, ses documents à lire, ses commandes de
+validation et son fichier `tasks/TASK-xxx.md`**. Aucun commit n'est créé.
+
+#### Une tâche avec exécutions n'est pas supprimable
+
+Dès qu'une tâche possède **au moins une exécution** — quel que soit son statut, y compris
+annulée ou échouée — le bouton disparaît et une explication prend sa place :
+
+> Cette tâche possède un historique d'exécution. Elle ne peut pas être supprimée. Une
+> fonctionnalité d'archivage sera ajoutée séparément.
+
+Une exécution est un fait : elle a consommé du quota, modifié un repository et produit un compte
+rendu. La supprimer effacerait la trace de ce qui s'est réellement passé. **Aucune exécution
+n'est jamais supprimée par NOX**, et une contrainte de la base l'empêche même si on contourne
+l'interface.
+
+#### Le numéro n'est jamais réattribué
+
+Supprimer `TASK-001` ne libère pas le numéro. Si le compteur du projet en était à 4, la tâche
+suivante sera `TASK-004`.
+
+```text
+TASK-001 supprimée          →  prochaine tâche : TASK-004
+```
+
+Un trou dans la numérotation ne gêne personne ; un identifiant réutilisé désignerait deux
+travaux différents dans Git, dans un log et dans une conversation.
+
+#### L'ordre : le fichier, puis la base
+
+NOX supprime **d'abord** le document Markdown, **ensuite** la tâche en base. Si le runner est
+arrêté, **rien n'est supprimé** — ni le fichier, ni la ligne — et vous pouvez réessayer après
+l'avoir démarré.
+
+Cet ordre n'est pas arbitraire : les deux systèmes ne partagent aucune transaction, et l'un des
+deux échouera un jour entre les deux étapes. Une tâche dont le document a disparu est visible et
+se répare d'un second clic ; un fichier orphelin que plus rien ne désigne ne se retrouve jamais.
+
 ### Ce que NOX ne fait pas encore
 
 - **Une spécification ne se modifie pas après création** : ni le titre, ni l'objectif, ni les
   listes. Seul le statut change.
-- Ni suppression, ni renumérotation, ni duplication, ni dépendances entre tâches.
+- Ni renumérotation, ni duplication, ni dépendances entre tâches.
+- Ni archivage, ni suppression d'une tâche possédant un historique d'exécution.
 
 ## Lancer une tâche dans Claude Code
 
-Depuis la page d'une tâche **Prête**, le bouton **Préparer une exécution** ouvre la page de
-lancement. C'est le seul endroit d'où NOX démarre Claude Code, et c'est toujours vous qui
-cliquez : rien n'est déclenché automatiquement.
+Depuis la page d'une tâche **Ready**, le bouton **New run** ouvre la page de lancement. C'est le
+seul endroit d'où NOX démarre Claude Code, et c'est toujours vous qui cliquez : rien n'est
+déclenché automatiquement.
 
 ### Prérequis
 

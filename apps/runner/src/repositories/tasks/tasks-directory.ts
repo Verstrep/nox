@@ -48,6 +48,18 @@ export type TasksDirectoryResult =
   | { ok: true; directory: string }
   | { ok: false; code: RunnerErrorCode };
 
+/**
+ * Etat de `tasks/` observe sans jamais le creer.
+ *
+ * `present: false` n'est pas une erreur : pour une suppression, un dossier
+ * absent signifie que le document recherche l'est aussi, ce qui est exactement
+ * le resultat vise.
+ */
+export type TasksDirectoryInspection =
+  | { ok: true; present: true; directory: string }
+  | { ok: true; present: false }
+  | { ok: false; code: RunnerErrorCode };
+
 function isAlreadyExistsError(error: unknown): boolean {
   return (
     typeof error === "object" && error !== null && (error as { code?: unknown }).code === "EEXIST"
@@ -94,6 +106,21 @@ export async function ensureTasksDirectory(root: string): Promise<TasksDirectory
     }
   }
 
+  return checkTasksDirectory(root, target, stats);
+}
+
+/**
+ * Verifie la nature d'un `tasks/` deja observe, et son confinement.
+ *
+ * Partage par la creation et par la suppression : les deux posent exactement les
+ * memes questions au meme dossier, et deux copies de ces trois refus finiraient
+ * par diverger.
+ */
+async function checkTasksDirectory(
+  root: string,
+  target: string,
+  stats: Stats,
+): Promise<TasksDirectoryResult> {
   if (stats.isSymbolicLink()) {
     return { ok: false, code: RUNNER_ERROR.TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED };
   }
@@ -117,4 +144,24 @@ export async function ensureTasksDirectory(root: string): Promise<TasksDirectory
   }
 
   return { ok: true, directory: realDirectory };
+}
+
+/**
+ * Retourne l'etat de `tasks/` **sans jamais le creer**.
+ *
+ * La suppression n'a aucune raison de faire apparaitre le dossier qu'elle vient
+ * vider : ce serait creer pour constater qu'il n'y a rien a supprimer. Un
+ * dossier absent est donc rapporte tel quel, et l'appelant en tire la conclusion
+ * qui s'impose.
+ */
+export async function inspectTasksDirectory(root: string): Promise<TasksDirectoryInspection> {
+  const target = path.join(root, TASKS_DIRECTORY_NAME);
+
+  const stats = await lstatOrNull(target);
+  if (stats === null) {
+    return { ok: true, present: false };
+  }
+
+  const checked = await checkTasksDirectory(root, target, stats);
+  return checked.ok ? { ok: true, present: true, directory: checked.directory } : checked;
 }

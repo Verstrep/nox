@@ -90,9 +90,15 @@ modules dédiés décident.
   existant après contrôle de révision.
 - `POST /repositories/documents/create` — authentifiée, crée un document par ouverture
   exclusive, sans jamais écraser ni créer de dossier.
+- `POST /repositories/documents/delete` — authentifiée, supprime **un** document Markdown après
+  contrôle de révision. Refuse les documents gérés par une tâche, ne suit aucun lien, et ne
+  supprime jamais de dossier.
 - `POST /repositories/tasks/create-document` — authentifiée, crée `tasks/<code>.md` à partir
   d'un code de tâche, en créant le dossier `tasks/` s'il manque. Seule route de NOX autorisée
   à créer un dossier, et seulement celui-là.
+- `POST /repositories/tasks/delete-document` — authentifiée, supprime `tasks/<code>.md` dérivé
+  d'un code de tâche. Seule route autorisée à toucher aux documents que la précédente protège.
+  Un document absent est une réussite ; le dossier `tasks/` n'est jamais supprimé.
 - `POST /claude/preflight` — authentifiée, vérifie **en lecture seule** qu'un lancement est
   possible : état Git, branche, upstream, avance/retard, disponibilité de Claude Code.
 - `POST /claude/runs/start` — authentifiée, lance Claude Code et répond `202` sans attendre
@@ -287,8 +293,9 @@ Quatre propriétés font tenir cette chaîne :
   l'identifiant du projet et un chemin relatif ; la Server Action relit le repository en base.
   Un champ caché altéré ne peut donc pas diriger l'écriture ailleurs sur la machine.
 
-Ce que cette chaîne ne fait **pas**, volontairement : créer un document, en supprimer un, le
-renommer, le déplacer, sauvegarder automatiquement, ou proposer d'écraser un conflit.
+Ce que cette chaîne ne fait **pas**, volontairement : créer un document, le renommer, le
+déplacer, sauvegarder automatiquement, ou proposer d'écraser un conflit. La suppression suit une
+chaîne distincte, décrite en § 5.9.
 
 ### 5.5 Création d'un document Markdown
 
@@ -320,8 +327,8 @@ La création partage la chaîne de l'édition, mais pas ses garanties — son ri
   révision. Un document créé apparaît dans l'inventaire parce qu'il est sur le disque, pas parce
   qu'une ligne a été écrite quelque part.
 
-Ce que cette chaîne ne fait **pas**, volontairement : supprimer, renommer, déplacer, créer un
-dossier, ou proposer de remplacer un fichier existant.
+Ce que cette chaîne ne fait **pas**, volontairement : renommer, déplacer, créer un dossier, ou
+proposer de remplacer un fichier existant.
 
 ### 5.6 Création d'une tâche et de son document
 
@@ -424,7 +431,9 @@ La distinction est structurante et vaut d'être explicite :
 | Ce chemin existe-t-il ? Est-ce un repository Git ? Quelle est sa racine ? | **Le runner** | Seul lui voit le système de fichiers de la machine. |
 | Quels documents Markdown existent ? Que contient celui-ci ? | **Le runner** | Même raison : le web n'a aucun accès au disque. |
 | Ce chemin de document sort-il du repository ? | **Le runner** | Le confinement se vérifie sur les chemins réels, après résolution des liens. |
-| Le fichier a-t-il changé depuis son ouverture ? | **Le runner** | Seul lui peut relire les octets réels au moment d'écrire. |
+| Le fichier a-t-il changé depuis son ouverture ? | **Le runner** | Seul lui peut relire les octets réels au moment d'écrire ou de supprimer. |
+| Ce document appartient-il à une tâche ? | **Les deux** | Le runner pour trancher, le web pour ne pas proposer un bouton voué au refus. Une seule fonction, dans `@nox/shared`. |
+| Cette tâche possède-t-elle un historique d'exécution ? | **Le web** | Règle métier, tranchée en base — et doublée par une contrainte Prisma. |
 | Ce fichier existe-t-il déjà ? Ses dossiers parents existent-ils ? | **Le runner** | Même raison, et seule l'ouverture exclusive fait autorité. |
 | Le dossier `tasks/` existe-t-il, et est-ce un vrai dossier ? | **Le runner** | Même raison ; c'est aussi lui qui le crée, s'il manque. |
 | Quel est le chemin final d'un nouveau document ? | **Le web** | Il seul connaît la destination choisie ; il la valide et recompose le chemin. |
@@ -438,3 +447,112 @@ La distinction est structurante et vaut d'être explicite :
 | Ce repository est-il déjà enregistré ? | **Le web** | Seul lui voit la base ; le runner reste sans état. |
 
 Le runner valide **la machine**. Le web valide **le métier**.
+
+
+### 5.9 Suppression d'un document Markdown
+
+```text
+Delete
+   ↓
+Server Action
+   ↓
+Runner
+   ↓ contrôle chemin + révision
+Suppression du fichier
+```
+
+Troisième opération d'écriture de NOX, et la première qui **retire** quelque chose. Son risque
+n'est ni celui de l'édition — perdre une modification concurrente — ni celui de la création —
+écraser un fichier présent. C'est l'irréversibilité : NOX ne conserve rien de ce qu'il supprime.
+Seul Git peut le rendre, et seulement si le fichier y était déjà.
+
+- **Le même confinement, la même révision.** `resolveDocumentPath` et le contrôle d'empreinte
+  sont réutilisés tels quels. Il n'existe pas de quatrième logique de validation de chemin, et
+  supprimer une version qu'on n'a pas vue est refusé exactement comme l'écraser.
+- **Un fichier, jamais un dossier.** L'appel est `unlink`, qui ne peut rien faire d'autre.
+  Aucun `rm -rf`, aucun `rmdir`, et aucun parent devenu vide n'est nettoyé : `docs/` appartient
+  à la structure du repository, pas au document qui s'y trouvait.
+- **Aucun lien suivi.** Un document qui est un lien symbolique est refusé, comme à l'écriture.
+- **Aucune suppression n'est annoncée sans avoir été constatée.** Après `unlink`, le runner
+  vérifie l'absence du fichier avant de répondre. Une suppression qui n'échoue pas mais ne
+  supprime rien est le pire cas : NOX confirmerait un résultat qui n'existe pas.
+
+#### Pourquoi les documents de tâche sont protégés
+
+`tasks/TASK-001.md` n'appartient pas à l'utilisateur de la page Documents : il appartient à une
+ligne de la base. Le supprimer là désynchroniserait les deux — une tâche resterait, son artefact
+aurait disparu, et rien ne l'aurait enregistré. La route générique refuse donc tout chemin de la
+forme `tasks/TASK-<chiffres>.md`, quelle que soit la révision fournie, et **c'est le runner qui
+refuse**, pas l'interface. Les autres fichiers de `tasks/` — `tasks/NOTES.md` — restent des
+documents ordinaires : personne ne les gère à la place de l'utilisateur.
+
+La comparaison est faite sur le chemin en minuscules. Ce n'est pas une commodité : sous Windows,
+`Tasks/task-001.MD` désigne le même fichier, et une comparaison sensible à la casse laisserait
+contourner la protection par une simple variation d'orthographe.
+
+#### Limites de concurrence résiduelles
+
+Le dernier contrôle de nature est fait au plus près de l'`unlink`, mais la fenêtre entre les deux
+**ne se ferme pas** : Node n'expose pas de suppression conditionnée à un descripteur déjà ouvert,
+et Windows n'offre pas d'équivalent portable. Ce qui est garanti, c'est que la fenêtre est bornée
+dans ses conséquences — `unlink` ne suit jamais un lien. Un lien créé entre le contrôle et la
+suppression verrait donc **le lien** retiré, jamais sa cible. NOX ne prétend pas offrir
+davantage, et n'a pas de test pour une course qu'il ne sait pas provoquer de façon déterministe.
+
+### 5.10 Suppression d'une tâche
+
+```text
+Delete task
+      ↓
+Vérification zéro run
+      ↓
+Suppression sûre du Markdown
+      ↓
+Transaction SQLite
+      ↓
+Tâche supprimée
+```
+
+#### Pourquoi le fichier est supprimé avant la tâche SQLite
+
+Cette opération traverse deux systèmes qui ne partagent aucune transaction. L'un des deux
+échouera un jour entre les deux étapes, et le choix se résume à **quelle incohérence on
+préfère** :
+
+| Ordre | Incohérence possible | Réparable ? |
+| --- | --- | --- |
+| Base d'abord | `tasks/TASK-007.md` orphelin, que plus rien dans NOX ne désigne | Non — aucune reprise ne peut le retrouver |
+| Fichier d'abord | Une tâche dont le document a disparu | Oui — d'un second clic |
+
+Le second cas se répare parce que la route de suppression traite un document absent comme une
+**réussite idempotente**. Relancer la suppression repasse sans redemander le fichier, et va
+jusqu'au bout. Le premier cas, lui, se découvre des mois plus tard.
+
+Un échec en base après une suppression réussie du fichier est donc rapporté honnêtement, avec sa
+trace côté serveur. NOX ne recrée surtout pas le fichier en silence : il aurait alors une
+révision différente de celle enregistrée, et le prochain contrôle échouerait sans que personne
+comprenne pourquoi.
+
+#### Pourquoi une tâche avec exécutions n'est pas supprimable
+
+Une exécution est un fait : elle a consommé du quota, modifié un repository et produit un compte
+rendu. Supprimer la tâche emporterait ce compte rendu, ou laisserait des exécutions orphelines —
+les deux sont pires que de conserver une tâche dont on n'a plus l'usage. L'archivage répondra à
+ce besoin ; la suppression n'en est pas le brouillon.
+
+La règle est vérifiée **dans la transaction**, et pas seulement avant : une exécution a pu
+démarrer depuis l'affichage de la page. Elle est doublée par une contrainte `Restrict` de `Run`
+vers `Task`, qui tient même si quelqu'un contourne la fonction métier et appelle Prisma
+directement. Aucun run n'est jamais supprimé par NOX.
+
+#### Le numéro reste réservé
+
+`Project.nextTaskSequence` n'est jamais décrémenté. `TASK-001` supprimée, la tâche suivante est
+`TASK-004` si le compteur en était là. Un trou ne gêne personne ; un identifiant réutilisé
+désignerait deux travaux différents dans Git, dans un log et dans une conversation.
+
+#### Une panne du runner ne supprime rien
+
+Si le runner ne répond pas, la base n'est pas touchée et l'interface le dit. L'utilisateur
+redémarre le runner et recommence. C'est le pendant exact de la règle de TASK-007 : une panne du
+runner ne fait pas perdre une tâche — ici, elle ne la fait pas disparaître à moitié.

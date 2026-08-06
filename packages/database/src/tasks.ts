@@ -312,6 +312,70 @@ export async function updateTaskStatus(
   });
 }
 
+export type DeleteTaskResult = { ok: true } | { ok: false; reason: "not_found" | "has_runs" };
+
+/**
+ * Supprime une tache **sans aucune execution**, avec ses trois listes enfant.
+ *
+ * ## Pourquoi une tache avec historique n'est pas supprimable
+ *
+ * Une execution est un fait : elle a consomme du quota, modifie un repository et
+ * produit un compte rendu. Supprimer la tache emporterait ce compte rendu, ou
+ * laisserait des executions orphelines — les deux sont pires que de conserver
+ * une tache dont on n'a plus l'usage. L'archivage repondra a ce besoin ; la
+ * suppression n'est pas son brouillon.
+ *
+ * ## Ce qui n'est pas touche
+ *
+ * `Project.nextTaskSequence` reste tel quel, et c'est le point le plus
+ * important. Le decrementer reattribuerait le numero supprime a la prochaine
+ * tache, et `TASK-001` designerait alors deux travaux differents dans Git, dans
+ * un log et dans une conversation. Un trou dans la numerotation ne gene
+ * personne ; un identifiant reutilise ment.
+ *
+ * ## Les enfants
+ *
+ * Les trois listes sont supprimees explicitement, alors que le schema les
+ * declare deja en cascade. La cascade suffirait — mais elle est invisible a la
+ * lecture, et une suppression est precisement l'endroit ou il vaut mieux voir ce
+ * qui disparait. Les executions, elles, ne sont **jamais** supprimees : leur
+ * relation est en `Restrict`, ce qui fait echouer la transaction si la
+ * verification ci-dessous etait un jour contournee.
+ */
+export async function deleteTaskWithoutRuns(
+  db: DatabaseClient,
+  projectId: string,
+  taskId: string,
+): Promise<DeleteTaskResult> {
+  return db.$transaction(async (tx): Promise<DeleteTaskResult> => {
+    // `projectId` fait partie du filtre, et pas d'un controle apres coup : une
+    // tache d'un autre projet est introuvable, exactement comme une tache
+    // inexistante. Un identifiant devine ne revele donc pas son existence.
+    const current = await tx.task.findFirst({
+      where: { id: taskId, projectId },
+      select: { id: true },
+    });
+
+    if (current === null) {
+      return { ok: false, reason: "not_found" };
+    }
+
+    // Compte relu **dans** la transaction : la verification de l'appelant a pu
+    // etre faite avant qu'une execution ne demarre.
+    const runs = await tx.run.count({ where: { taskId } });
+    if (runs > 0) {
+      return { ok: false, reason: "has_runs" };
+    }
+
+    await tx.taskAcceptanceCriterion.deleteMany({ where: { taskId } });
+    await tx.taskDocumentReference.deleteMany({ where: { taskId } });
+    await tx.taskValidationCommand.deleteMany({ where: { taskId } });
+    await tx.task.delete({ where: { id: taskId } });
+
+    return { ok: true };
+  });
+}
+
 /** Applique un nouvel etat de synchronisation, sans toucher a la specification. */
 async function setDocumentSync(
   db: DatabaseClient,

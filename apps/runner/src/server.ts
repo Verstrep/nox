@@ -25,6 +25,8 @@ import {
   parseClaudeRunStatusRequest,
   parseCreateProjectDocumentRequest,
   parseCreateTaskDocumentRequest,
+  parseDeleteProjectDocumentRequest,
+  parseDeleteTaskDocumentRequest,
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseResolveRepositoryRequest,
@@ -34,6 +36,8 @@ import {
   type ClaudeRunStatusSuccess,
   type CreateProjectDocumentSuccess,
   type CreateTaskDocumentSuccess,
+  type DeleteProjectDocumentSuccess,
+  type DeleteTaskDocumentSuccess,
   type ListProjectDocumentsSuccess,
   type ReadProjectDocumentSuccess,
   type ResolveRepositorySuccess,
@@ -50,6 +54,10 @@ import {
   createDocument,
   type CreateDocumentResult,
 } from "./repositories/documents/create-document.ts";
+import {
+  deleteDocument,
+  type DeleteDocumentResult,
+} from "./repositories/documents/delete-document.ts";
 import { listDocuments, type ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import { readDocument, type ReadDocumentResult } from "./repositories/documents/read-document.ts";
 import {
@@ -61,6 +69,10 @@ import {
   createTaskDocument,
   type CreateTaskDocumentResult,
 } from "./repositories/tasks/create-task-document.ts";
+import {
+  deleteTaskDocument,
+  type DeleteTaskDocumentResult,
+} from "./repositories/tasks/delete-task-document.ts";
 import { runPreflight, type PreflightResult } from "./claude/preflight.ts";
 import { ClaudeRunRegistry } from "./claude/registry.ts";
 import { startClaudeRun, type StartRunRequest, type StartRunResult } from "./claude/runs.ts";
@@ -81,11 +93,21 @@ export type RunnerDependencies = {
     documentPath: string,
     content: string,
   ) => Promise<CreateDocumentResult>;
+  deleteDocument?: (
+    repositoryPath: string,
+    documentPath: string,
+    expectedRevision: string,
+  ) => Promise<DeleteDocumentResult>;
   createTaskDocument?: (
     repositoryPath: string,
     taskCode: string,
     content: string,
   ) => Promise<CreateTaskDocumentResult>;
+  deleteTaskDocument?: (
+    repositoryPath: string,
+    taskCode: string,
+    expectedRevision: string | null,
+  ) => Promise<DeleteTaskDocumentResult>;
   claudePreflight?: (repositoryPath: string) => Promise<PreflightResult>;
   startClaudeRun?: (request: StartRunRequest) => Promise<StartRunResult>;
   /**
@@ -105,7 +127,9 @@ const DOCUMENTS_LIST_ROUTE = "/repositories/documents/list";
 const DOCUMENTS_READ_ROUTE = "/repositories/documents/read";
 const DOCUMENTS_UPDATE_ROUTE = "/repositories/documents/update";
 const DOCUMENTS_CREATE_ROUTE = "/repositories/documents/create";
+const DOCUMENTS_DELETE_ROUTE = "/repositories/documents/delete";
 const TASKS_CREATE_DOCUMENT_ROUTE = "/repositories/tasks/create-document";
+const TASKS_DELETE_DOCUMENT_ROUTE = "/repositories/tasks/delete-document";
 const CLAUDE_PREFLIGHT_ROUTE = "/claude/preflight";
 const CLAUDE_RUNS_START_ROUTE = "/claude/runs/start";
 const CLAUDE_RUNS_STATUS_ROUTE = "/claude/runs/status";
@@ -193,10 +217,18 @@ export function createRunnerServer(
     dependencies.createDocument ??
     ((repositoryPath: string, documentPath: string, content: string) =>
       createDocument(repositoryPath, documentPath, content));
+  const remove =
+    dependencies.deleteDocument ??
+    ((repositoryPath: string, documentPath: string, expectedRevision: string) =>
+      deleteDocument(repositoryPath, documentPath, expectedRevision));
   const createTask =
     dependencies.createTaskDocument ??
     ((repositoryPath: string, taskCode: string, content: string) =>
       createTaskDocument(repositoryPath, taskCode, content));
+  const removeTask =
+    dependencies.deleteTaskDocument ??
+    ((repositoryPath: string, taskCode: string, expectedRevision: string | null) =>
+      deleteTaskDocument(repositoryPath, taskCode, expectedRevision));
   // Le registre appartient au serveur : il vit aussi longtemps que le processus,
   // et pas une requete de plus.
   const registry = dependencies.runRegistry ?? new ClaudeRunRegistry();
@@ -371,6 +403,44 @@ export function createRunnerServer(
         return;
       }
 
+      if (pathname === DOCUMENTS_DELETE_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        // Corps minuscule — deux chemins relatifs et une empreinte : la limite
+        // par defaut suffit largement, aucun contenu ne transite.
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DOCUMENTS_DELETE_ROUTE, log,
+          parseDeleteProjectDocumentRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await remove(
+          parsed.repositoryPath,
+          parsed.documentPath,
+          parsed.expectedRevision,
+        );
+        if (!result.ok) {
+          logRefusal(requestId, DOCUMENTS_DELETE_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        // `200` et non `204` : la reponse a un corps, et il porte le chemin
+        // relatif reellement supprime ainsi que sa revision. Un `204` obligerait
+        // l'appelant a faire confiance a ce qu'il avait envoye.
+        const payload: DeleteProjectDocumentSuccess = {
+          ok: true,
+          deleted: { path: result.path, revision: result.revision },
+        };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
       if (pathname === TASKS_CREATE_DOCUMENT_ROUTE) {
         if (method !== "POST") {
           sendMethodNotAllowed(response, ["POST"], requestId);
@@ -396,6 +466,45 @@ export function createRunnerServer(
 
         const payload: CreateTaskDocumentSuccess = { ok: true, document: result.document };
         sendJson(response, 201, payload, requestId);
+        return;
+      }
+
+      if (pathname === TASKS_DELETE_DOCUMENT_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, TASKS_DELETE_DOCUMENT_ROUTE, log,
+          parseDeleteTaskDocumentRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Comme a la creation, le corps ne porte aucun chemin : le runner
+        // compose `tasks/<code>.md` lui-meme. C'est ce qui rend cette route sure
+        // malgre le droit exceptionnel qu'elle detient — celui de supprimer un
+        // fichier que la route generique protege.
+        const result = await removeTask(
+          parsed.repositoryPath,
+          parsed.taskCode,
+          parsed.expectedRevision,
+        );
+        if (!result.ok) {
+          logRefusal(requestId, TASKS_DELETE_DOCUMENT_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: DeleteTaskDocumentSuccess = {
+          ok: true,
+          deleted: result.deleted,
+          alreadyAbsent: result.alreadyAbsent,
+          path: result.path,
+        };
+        sendJson(response, 200, payload, requestId);
         return;
       }
 

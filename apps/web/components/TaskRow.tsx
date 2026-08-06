@@ -2,13 +2,8 @@ import { TASK_DOCUMENT_SYNC_STATUS, type DevelopmentTaskSummary } from "@nox/sha
 import Link from "next/link";
 
 import { formatIsoDateTime } from "@/lib/format";
-import {
-  describeTaskPriority,
-  describeTaskStatus,
-  describeTaskSync,
-  taskStatusTone,
-  taskUrl,
-} from "@/lib/task-display";
+import { documentSyncStatusLabel, taskPriorityLabel, taskStatusLabel } from "@/lib/labels";
+import { taskStatusTone, taskUrl } from "@/lib/task-display";
 
 import { StatusBadge } from "./StatusBadge";
 
@@ -41,16 +36,20 @@ export function TaskRow({ projectId, task }: TaskRowProps) {
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <StatusBadge tone={taskStatusTone(task.status)}>
-            {describeTaskStatus(task.status)}
+            {taskStatusLabel(task.status)}
           </StatusBadge>
-          <StatusBadge tone="muted">{describeTaskPriority(task.priority)}</StatusBadge>
+          <StatusBadge tone="muted">{taskPriorityLabel(task.priority)}</StatusBadge>
         </div>
       </div>
 
       <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
         {updatedAt === null ? null : <span>Modifiee le {updatedAt}</span>}
         {needsAttention ? (
-          <span className="text-amber-200/80">· {describeTaskSync(task.documentSyncStatus)}</span>
+          <span className="text-amber-200/80">
+            {/* Le mot « Document » reste francais : c'est lui qui dit de quoi
+                parle la pastille, la ou l'etat lui-meme est une etiquette. */}
+            · Document : {documentSyncStatusLabel(task.documentSyncStatus)}
+          </span>
         ) : null}
       </p>
     </Link>

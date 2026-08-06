@@ -136,6 +136,35 @@ export type CreateProjectDocumentSuccess = {
   document: ProjectDocumentContent;
 };
 
+/**
+ * Demande de suppression d'un document **existant**.
+ *
+ * Meme forme que la mise a jour, moins le contenu : la revision reste
+ * obligatoire, et pour la meme raison. Supprimer sans elle reviendrait a
+ * supprimer un fichier que l'utilisateur n'a pas vu — le pire cas de cette
+ * operation, puisqu'il n'y a rien a reporter ensuite.
+ */
+export type DeleteProjectDocumentRequest = {
+  repositoryPath: string;
+  documentPath: string;
+  expectedRevision: ProjectDocumentRevision;
+};
+
+/**
+ * Reponse d'une suppression reussie.
+ *
+ * Ne contient que le **chemin relatif** et la revision supprimee : aucune fiche
+ * complete, puisqu'il n'y a plus de fichier a decrire. La revision est renvoyee
+ * pour que l'appelant puisse verifier qu'il a bien supprime ce qu'il croyait.
+ */
+export type DeleteProjectDocumentSuccess = {
+  ok: true;
+  deleted: {
+    path: string;
+    revision: ProjectDocumentRevision;
+  };
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -220,6 +249,32 @@ export function parseCreateProjectDocumentRequest(
   };
 }
 
+/**
+ * Valide le corps recu par `POST /repositories/documents/delete`.
+ *
+ * Trois chaines, sans exception. Le **format** de la revision et la protection
+ * des documents de tache sont verifies plus loin par le runner, qui dispose de
+ * codes d'erreur dedies : les distinguer ici les ecraserait tous en un rejet
+ * global de la requete.
+ */
+export function parseDeleteProjectDocumentRequest(
+  value: unknown,
+): DeleteProjectDocumentRequest | null {
+  if (
+    !isRecord(value) ||
+    typeof value["repositoryPath"] !== "string" ||
+    typeof value["documentPath"] !== "string" ||
+    typeof value["expectedRevision"] !== "string"
+  ) {
+    return null;
+  }
+  return {
+    repositoryPath: value["repositoryPath"],
+    documentPath: value["documentPath"],
+    expectedRevision: value["expectedRevision"],
+  };
+}
+
 function isProjectDocumentSummary(value: unknown): value is ProjectDocumentSummary {
   return (
     isRecord(value) &&
@@ -295,4 +350,25 @@ export function isCreateProjectDocumentSuccess(
     return false;
   }
   return isProjectDocumentContent(value["document"]);
+}
+
+/**
+ * Verifie qu'une reponse JSON est une suppression reussie.
+ *
+ * Forme volontairement differente des trois autres : il n'y a plus de document
+ * a relire, donc pas de `ProjectDocumentContent` a valider. Le chemin renvoye
+ * est celui que le runner a normalise, et il reste relatif.
+ */
+export function isDeleteProjectDocumentSuccess(
+  value: unknown,
+): value is DeleteProjectDocumentSuccess {
+  if (!isRecord(value) || value["ok"] !== true) {
+    return false;
+  }
+  const deleted: unknown = value["deleted"];
+  return (
+    isRecord(deleted) &&
+    typeof deleted["path"] === "string" &&
+    isProjectDocumentRevision(deleted["revision"])
+  );
 }

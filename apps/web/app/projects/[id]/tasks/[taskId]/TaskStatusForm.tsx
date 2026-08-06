@@ -3,7 +3,7 @@
 import type { TaskStatus } from "@nox/shared";
 import { useActionState } from "react";
 
-import { describeTaskStatus } from "@/lib/task-display";
+import { taskTransitionLabel } from "@/lib/labels";
 
 import { updateTaskStatusAction } from "./actions";
 import { INITIAL_TASK_STATUS_STATE } from "./form-state";
@@ -11,6 +11,8 @@ import { INITIAL_TASK_STATUS_STATE } from "./form-state";
 type TaskStatusFormProps = {
   projectId: string;
   taskId: string;
+  /** Statut actuel ; sert a nommer le geste, pas seulement sa destination. */
+  from: TaskStatus;
   /** Transitions autorisees depuis le statut actuel ; peut etre vide. */
   transitions: readonly TaskStatus[];
 };
@@ -25,7 +27,7 @@ type TaskStatusFormProps = {
  * La verification serveur reste entiere pour autant — ces boutons sont une
  * commodite, pas une securite.
  */
-export function TaskStatusForm({ projectId, taskId, transitions }: TaskStatusFormProps) {
+export function TaskStatusForm({ projectId, taskId, from, transitions }: TaskStatusFormProps) {
   const [state, formAction, pending] = useActionState(
     updateTaskStatusAction,
     INITIAL_TASK_STATUS_STATE,
@@ -54,7 +56,7 @@ export function TaskStatusForm({ projectId, taskId, transitions }: TaskStatusFor
             disabled={pending}
             className="rounded-md border border-zinc-700 bg-zinc-800/70 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50 disabled:opacity-60"
           >
-            Passer a « {describeTaskStatus(status)} »
+            {taskTransitionLabel(from, status)}
           </button>
         ))}
       </div>

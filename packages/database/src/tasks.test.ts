@@ -12,7 +12,9 @@ import {
   InvalidTaskRecordError,
   createDatabaseClient,
   createProject,
+  createRun,
   createTask,
+  deleteTaskWithoutRuns,
   getTaskById,
   isUniqueConstraintError,
   listTasksByProject,
@@ -433,5 +435,191 @@ describe("validation des lignes lues en base", () => {
     corrupt(task.id, "sequence", "0");
 
     await assert.rejects(getTaskById(db, task.id), InvalidTaskRecordError);
+  });
+});
+
+describe("deleteTaskWithoutRuns", () => {
+  /** Cree une execution minimale, suffisante pour bloquer une suppression. */
+  async function addRun(taskId: string): Promise<void> {
+    const run = await createRun(db, {
+      taskId,
+      prompt: "# Prompt\n",
+      promptSha256: "c".repeat(64),
+      runnerRunId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    });
+    assert.ok(run !== null);
+  }
+
+  it("supprime une tache sans execution", async () => {
+    const projectId = await newProject();
+    const task = await createTask(db, specification(projectId));
+    assert.ok(task !== null);
+
+    const result = await deleteTaskWithoutRuns(db, projectId, task.id);
+
+    assert.deepEqual(result, { ok: true });
+    assert.equal(await getTaskById(db, task.id), null);
+  });
+
+  it("supprime ses criteres, ses references et ses commandes", async () => {
+    const projectId = await newProject();
+    const task = await createTask(
+      db,
+      specification(projectId, {
+        acceptanceCriteria: ["Premier critere.", "Second critere."],
+        documentReferences: ["docs/ARCHITECTURE.md", "docs/DECISIONS.md"],
+        validationCommands: ["npm run test", "npm run lint"],
+      }),
+    );
+    assert.ok(task !== null);
+
+    await deleteTaskWithoutRuns(db, projectId, task.id);
+
+    // Les enfants sont comptes directement : passer par `getTaskById` ne
+    // prouverait rien, la tache ayant disparu.
+    assert.equal(await db.taskAcceptanceCriterion.count({ where: { taskId: task.id } }), 0);
+    assert.equal(await db.taskDocumentReference.count({ where: { taskId: task.id } }), 0);
+    assert.equal(await db.taskValidationCommand.count({ where: { taskId: task.id } }), 0);
+  });
+
+  it("refuse une tache possedant une execution", async () => {
+    const projectId = await newProject();
+    const task = await createTask(db, specification(projectId));
+    assert.ok(task !== null);
+    await addRun(task.id);
+
+    const result = await deleteTaskWithoutRuns(db, projectId, task.id);
+
+    assert.deepEqual(result, { ok: false, reason: "has_runs" });
+    assert.notEqual(await getTaskById(db, task.id), null);
+    assert.equal(await db.run.count({ where: { taskId: task.id } }), 1);
+  });
+
+  it("refuse une tache d'un autre projet", async () => {
+    const projectId = await newProject();
+    const otherProjectId = await newProject();
+    const task = await createTask(db, specification(projectId));
+    assert.ok(task !== null);
+
+    // Meme reponse qu'une tache inexistante : un identifiant devine ne doit pas
+    // reveler son existence ailleurs.
+    const result = await deleteTaskWithoutRuns(db, otherProjectId, task.id);
+
+    assert.deepEqual(result, { ok: false, reason: "not_found" });
+    assert.notEqual(await getTaskById(db, task.id), null);
+  });
+
+  it("refuse une tache inexistante", async () => {
+    const projectId = await newProject();
+    const result = await deleteTaskWithoutRuns(db, projectId, "identifiant-inexistant");
+
+    assert.deepEqual(result, { ok: false, reason: "not_found" });
+  });
+
+  it("ne touche pas aux autres taches du projet", async () => {
+    const projectId = await newProject();
+    const first = await createTask(db, specification(projectId, { title: "Premiere" }));
+    const second = await createTask(db, specification(projectId, { title: "Seconde" }));
+    assert.ok(first !== null && second !== null);
+
+    await deleteTaskWithoutRuns(db, projectId, first.id);
+
+    assert.equal(await getTaskById(db, first.id), null);
+    assert.notEqual(await getTaskById(db, second.id), null);
+    assert.equal((await listTasksByProject(db, projectId)).length, 1);
+  });
+
+  it("laisse le compteur de numerotation inchange", async () => {
+    const projectId = await newProject();
+    const first = await createTask(db, specification(projectId, { title: "Premiere" }));
+    const second = await createTask(db, specification(projectId, { title: "Seconde" }));
+    const third = await createTask(db, specification(projectId, { title: "Troisieme" }));
+    assert.ok(first !== null && second !== null && third !== null);
+    assert.deepEqual([first.code, second.code, third.code], [
+      "TASK-001",
+      "TASK-002",
+      "TASK-003",
+    ]);
+
+    const before = await db.project.findUnique({
+      where: { id: projectId },
+      select: { nextTaskSequence: true },
+    });
+
+    await deleteTaskWithoutRuns(db, projectId, first.id);
+
+    const after = await db.project.findUnique({
+      where: { id: projectId },
+      select: { nextTaskSequence: true },
+    });
+    assert.equal(after?.nextTaskSequence, before?.nextTaskSequence);
+  });
+
+  it("ne reattribue jamais un numero supprime", async () => {
+    const projectId = await newProject();
+    const first = await createTask(db, specification(projectId, { title: "Premiere" }));
+    const second = await createTask(db, specification(projectId, { title: "Seconde" }));
+    const third = await createTask(db, specification(projectId, { title: "Troisieme" }));
+    assert.ok(first !== null && second !== null && third !== null);
+
+    await deleteTaskWithoutRuns(db, projectId, first.id);
+
+    // Le scenario exact de TASK-009 : TASK-001 supprimee, la suivante est
+    // TASK-004. Un trou est prefere a un identifiant qui designerait deux
+    // travaux differents dans Git et dans les logs.
+    const next = await createTask(db, specification(projectId, { title: "Quatrieme" }));
+    assert.equal(next?.code, "TASK-004");
+    assert.equal(next?.documentPath, "tasks/TASK-004.md");
+  });
+
+  it("met a jour les statistiques du projet", async () => {
+    const projectId = await newProject();
+    const first = await createTask(db, specification(projectId, { title: "Premiere" }));
+    const second = await createTask(db, specification(projectId, { title: "Seconde" }));
+    assert.ok(first !== null && second !== null);
+    assert.equal((await listTasksByProject(db, projectId)).length, 2);
+
+    await deleteTaskWithoutRuns(db, projectId, first.id);
+
+    const remaining = await listTasksByProject(db, projectId);
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0]?.code, "TASK-002");
+  });
+
+  it("empeche par contrainte la perte accidentelle d'executions", async () => {
+    const projectId = await newProject();
+    const task = await createTask(db, specification(projectId));
+    assert.ok(task !== null);
+    await addRun(task.id);
+
+    // Contournement volontaire de la regle metier : la relation `Restrict`
+    // doit tenir meme si quelqu'un appelle Prisma directement.
+    await assert.rejects(db.task.delete({ where: { id: task.id } }));
+
+    assert.notEqual(await getTaskById(db, task.id), null);
+    assert.equal(await db.run.count({ where: { taskId: task.id } }), 1);
+  });
+
+  it("annule tout si la transaction echoue", async () => {
+    const projectId = await newProject();
+    const task = await createTask(
+      db,
+      specification(projectId, {
+        acceptanceCriteria: ["Un critere."],
+        validationCommands: ["npm run test"],
+      }),
+    );
+    assert.ok(task !== null);
+
+    // Une execution creee apres la lecture de l'appelant : la verification
+    // refaite dans la transaction la voit, et rien n'est supprime.
+    await addRun(task.id);
+    const result = await deleteTaskWithoutRuns(db, projectId, task.id);
+
+    assert.deepEqual(result, { ok: false, reason: "has_runs" });
+    const survivor = await getTaskById(db, task.id);
+    assert.notEqual(survivor, null);
+    assert.deepEqual(survivor?.acceptanceCriteria, ["Un critere."]);
+    assert.deepEqual(survivor?.validationCommands, ["npm run test"]);
   });
 });

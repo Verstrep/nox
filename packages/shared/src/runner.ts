@@ -123,6 +123,19 @@ export const RUNNER_ERROR = {
   /** La creation a echoue : droits, disque plein, erreur systeme. */
   DOCUMENT_CREATION_FAILED: "DOCUMENT_CREATION_FAILED",
 
+  // --- Suppression d'un document ---------------------------------------------
+  // La suppression partage le controle de revision de l'edition, mais pas ses
+  // suites : une ecriture refusee laisse un texte a reporter, une suppression
+  // refusee ne laisse rien du tout. Les deux conflits meritent donc des messages
+  // differents, et un code se traduit par un seul message.
+
+  /** Ce document est gere par une tache : la route generique refuse d'y toucher. */
+  DOCUMENT_PROTECTED: "DOCUMENT_PROTECTED",
+  /** Le fichier a change depuis son affichage : suppression refusee. */
+  DOCUMENT_DELETE_CONFLICT: "DOCUMENT_DELETE_CONFLICT",
+  /** La suppression a echoue, ou le fichier est toujours la ensuite. */
+  DOCUMENT_DELETE_FAILED: "DOCUMENT_DELETE_FAILED",
+
   // --- Document d'une tache --------------------------------------------------
   // Seule famille d'erreurs liee a une route qui a le droit de creer un dossier.
   // Ce droit est limite a `tasks/`, a la racine du repository, et il s'accompagne
@@ -137,6 +150,14 @@ export const RUNNER_ERROR = {
   TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED: "TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED",
   /** La creation du dossier `tasks/` a echoue : droits, disque, erreur systeme. */
   TASKS_DIRECTORY_CREATION_FAILED: "TASKS_DIRECTORY_CREATION_FAILED",
+  /**
+   * Un document occupe `tasks/<code>.md`, mais NOX ne connait pas sa revision.
+   *
+   * Distinct d'un conflit : il n'y a rien a comparer. La tache n'a jamais ete
+   * synchronisee, un fichier est pourtant apparu, et NOX ne peut pas affirmer
+   * qu'il lui appartient. Supprimer sur cette base reviendrait a deviner.
+   */
+  TASK_DOCUMENT_REVISION_UNKNOWN: "TASK_DOCUMENT_REVISION_UNKNOWN",
 
   // --- Preflight Git avant execution ----------------------------------------
   // Ces refus protegent la relecture du travail de Claude Code : sans un

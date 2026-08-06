@@ -126,9 +126,9 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 - **Aucun fichier hors du repository ne peut être lu.** Le confinement se vérifie sur les chemins
   réels, jamais par comparaison de préfixe de chaîne.
 - **Aucune écriture dans un repository sans tâche qui la demande explicitement.** Depuis
-  TASK-007, seules la **modification** d'un document Markdown, sa **création** et celle du
-  document d'une tâche sont autorisées : ni suppression, ni renommage, ni déplacement sans
-  instruction dédiée.
+  TASK-009, sont autorisées : la **modification** d'un document Markdown, sa **création**, sa
+  **suppression**, ainsi que la création et la suppression du document d'une tâche. Ni
+  renommage, ni déplacement, ni suppression de dossier sans instruction dédiée.
 - **Toute création de fichier passe par une primitive exclusive** (`open` en `wx`). Un
   enchaînement `exists()` puis `writeFile()` n'est jamais une garantie : le fichier peut
   apparaître entre les deux.
@@ -170,7 +170,37 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   au Markdown attendu est adopté ; un document différent produit un conflit, jamais un
   remplacement, et aucun bouton de forçage n'est ajouté.
 - **Une panne du runner ne supprime jamais une tâche.** L'enregistrement en base et l'écriture
-  du document sont deux étapes distinctes : la seconde peut échouer et être reprise.
+  du document sont deux étapes distinctes : la seconde peut échouer et être reprise. Cette règle
+  vaut aussi à la suppression : un runner injoignable laisse la base intacte.
+- **Aucune suppression sans contrôle de confinement.** Une suppression suit exactement le même
+  chemin de validation qu'une lecture ou une écriture : filtrage syntaxique, puis vérification
+  après `realpath`. Aucune quatrième logique de validation de chemin ne doit exister.
+- **Aucune suppression d'un document existant sans contrôle de révision.** Le runner relit les
+  octets, recalcule l'empreinte et refuse de supprimer si elle diffère de celle attendue. Une
+  suppression forcée n'existe pas, et aucun bouton ne doit la proposer.
+- **Aucun document de tâche supprimé par la route générique.** Les chemins de la forme
+  `tasks/TASK-<chiffres>.md` sont refusés par `POST /repositories/documents/delete`, quelle que
+  soit la révision fournie. Ils appartiennent à une tâche et se suppriment avec elle. Cette
+  protection vit dans le runner, pas seulement dans l'interface.
+- **Aucun dossier supprimé par une opération documentaire.** `unlink` uniquement, jamais
+  `rmdir`, jamais de suppression récursive, jamais de nettoyage d'un parent devenu vide.
+- **Aucune suppression à travers un lien.** Un document qui est un lien symbolique est refusé,
+  comme à l'écriture : l'utilisateur doit savoir quel fichier physique disparaît.
+- **Aucune tâche possédant un historique d'exécution n'est supprimée.** La règle est vérifiée
+  dans la transaction, et doublée par une contrainte `Restrict` de `Run` vers `Task` : même un
+  appel direct à Prisma échoue. Aucun run n'est jamais supprimé.
+- **Aucun numéro de tâche n'est réutilisé.** `Project.nextTaskSequence` n'est jamais décrémenté
+  par une suppression. Un trou dans la numérotation est acceptable ; un identifiant réutilisé
+  ne l'est pas.
+- **Le fichier d'une tâche est traité avant sa suppression en base.** L'ordre est
+  `runner → SQLite`, jamais l'inverse : un document orphelin est indétectable, alors qu'une
+  tâche dont le document a disparu est visible et reprenable. Un document absent est traité
+  comme une réussite idempotente.
+- **Les statuts internes restent stables.** `DRAFT`, `READY`, `COMPLETED`… ne changent ni en
+  base, ni dans les contrats, ni dans les documents Markdown déjà générés. Seul leur affichage
+  se traduit.
+- **Les libellés d'interface sont centralisés** dans `apps/web/lib/labels.ts`, et nulle part
+  ailleurs. Un mapping concurrent dans un composant isolé finirait par diverger.
 - **Toute transition de statut passe par `canTransitionTaskStatus`.** Les statuts `RUNNING`,
   `FAILED` et `REVIEW` sont réservés aux futures exécutions et ne se posent jamais à la main.
 - **Les commandes de validation enregistrées ne sont jamais exécutées par NOX.** Depuis

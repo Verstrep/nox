@@ -12,24 +12,20 @@ import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
 import { formatIsoDateTime } from "@/lib/format";
+import {
+  documentSyncStatusLabel,
+  runStatusLabel,
+  taskPriorityLabel,
+  taskStatusLabel,
+} from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
-import {
-  describeRunStatus,
-  formatDuration,
-  newRunUrl,
-  runStatusTone,
-  runUrl,
-} from "@/lib/run-display";
+import { formatDuration, newRunUrl, runStatusTone, runUrl } from "@/lib/run-display";
 import { loadTaskRuns } from "@/lib/runs";
-import {
-  describeTaskPriority,
-  describeTaskStatus,
-  describeTaskSync,
-  taskStatusTone,
-} from "@/lib/task-display";
+import { taskStatusTone, taskUrl } from "@/lib/task-display";
 import { loadTask } from "@/lib/tasks";
 
 import { retryTaskDocumentAction } from "./actions";
+import { DeleteTaskForm } from "./DeleteTaskForm";
 import { TaskStatusForm } from "./TaskStatusForm";
 
 /** Bloc de texte libre, affiche brut : NOX ne rend pas le Markdown. */
@@ -72,7 +68,11 @@ function DocumentSection({
     <SectionCard
       title="Document de tache"
       description="Artefact versionne avec le repository, destine aux agents de developpement."
-      action={<StatusBadge tone={isSynced ? "accent" : "neutral"}>{describeTaskSync(task.documentSyncStatus)}</StatusBadge>}
+      action={
+        <StatusBadge tone={isSynced ? "accent" : "neutral"}>
+          {documentSyncStatusLabel(task.documentSyncStatus)}
+        </StatusBadge>
+      }
     >
       <p className="break-all font-mono text-sm text-zinc-300">{task.documentPath}</p>
 
@@ -103,7 +103,7 @@ function DocumentSection({
               type="submit"
               className="rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
             >
-              Reessayer la creation du document
+              Retry
             </button>
           </form>
         )}
@@ -148,7 +148,7 @@ function RunsSection({
             href={newRunUrl(projectId, task.id)}
             className="inline-block rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
           >
-            Preparer une execution
+            New run
           </Link>
         ) : null
       }
@@ -158,7 +158,7 @@ function RunsSection({
           Aucune execution.{" "}
           {canLaunch
             ? "Preparez-en une pour envoyer cette tache a Claude Code."
-            : "Seule une tache « Prete » peut etre lancee."}
+            : "Seule une tache « Ready » peut etre lancee."}
         </p>
       ) : (
         <ul className="flex flex-col gap-2">
@@ -180,7 +180,7 @@ function RunsSection({
                     </p>
                   </div>
                   <StatusBadge tone={runStatusTone(run.status)}>
-                    {describeRunStatus(run.status)}
+                    {runStatusLabel(run.status)}
                   </StatusBadge>
                 </Link>
               </li>
@@ -198,12 +198,77 @@ function RunsSection({
   );
 }
 
+/**
+ * Suppression d'une tache.
+ *
+ * Le bouton disparait des qu'une execution existe, et l'explication prend sa
+ * place : un bouton grise sans raison visible se lit comme une panne. Le refus
+ * est aussi verifie par la Server Action et par la base — cette section decide
+ * de ce qui est **propose**, pas de ce qui est permis.
+ */
+function DangerSection({
+  projectId,
+  task,
+  runCount,
+  confirming,
+}: {
+  projectId: string;
+  task: DevelopmentTaskDetail;
+  runCount: number;
+  confirming: boolean;
+}) {
+  const isConflict = task.documentSyncStatus === TASK_DOCUMENT_SYNC_STATUS.CONFLICT;
+  const isRunning = task.status === TASK_STATUS.RUNNING;
+
+  return (
+    <SectionCard
+      title="Supprimer la tache"
+      description="Retire la tache de NOX et son document du repository. Sans commit."
+    >
+      {runCount > 0 ? (
+        <p className="text-sm leading-relaxed text-zinc-400">
+          Cette tache possede un historique d&apos;execution. Elle ne peut pas etre supprimee. Une
+          fonctionnalite d&apos;archivage sera ajoutee separement.
+        </p>
+      ) : isRunning ? (
+        <p className="text-sm leading-relaxed text-zinc-400">
+          Une execution est en cours sur cette tache. Attendez sa fin avant de la supprimer.
+        </p>
+      ) : isConflict ? (
+        <p className="text-sm leading-relaxed text-zinc-400">
+          Un fichier different occupe le chemin du document de cette tache. NOX ne peut pas
+          affirmer qu&apos;il lui appartient, et ne le supprimera donc pas. Ouvrez-le, tranchez,
+          puis revenez.
+        </p>
+      ) : (
+        <DeleteTaskForm
+          projectId={projectId}
+          taskId={task.id}
+          taskCode={task.code}
+          title={task.title}
+          documentPath={task.documentPath}
+          confirming={confirming}
+          confirmHref={`${taskUrl(projectId, task.id)}?confirmDelete=1`}
+          cancelHref={taskUrl(projectId, task.id)}
+        />
+      )}
+    </SectionCard>
+  );
+}
+
 export default async function TaskDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string; taskId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id, taskId } = await params;
+  const query = await searchParams;
+  // Tolerant aux valeurs repetees : un lien mal recopie n'ouvre simplement pas
+  // la confirmation, il ne produit pas d'erreur.
+  const rawConfirm = query["confirmDelete"];
+  const confirmingDelete = rawConfirm === "1" || (Array.isArray(rawConfirm) && rawConfirm.includes("1"));
   const project = await loadProject(id);
 
   if (project === null) {
@@ -240,11 +305,9 @@ export default async function TaskDetailPage({
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <StatusBadge tone={taskStatusTone(task.status)}>
-              {describeTaskStatus(task.status)}
+              {taskStatusLabel(task.status)}
             </StatusBadge>
-            <StatusBadge tone="muted">
-              Priorite {describeTaskPriority(task.priority)}
-            </StatusBadge>
+            <StatusBadge tone="muted">Priorite {taskPriorityLabel(task.priority)}</StatusBadge>
           </div>
         </div>
       </header>
@@ -307,14 +370,22 @@ export default async function TaskDetailPage({
           <TaskStatusForm
             projectId={project.id}
             taskId={task.id}
+            from={task.status}
             transitions={allowedTaskStatusTransitions(task.status)}
           />
           <p className="mt-4 text-xs text-zinc-600">
-            Les statuts « En cours », « Echouee » et « A relire » sont poses par une execution de
-            Claude Code, jamais choisis a la main. Accepter un travail relu — « A relire » vers
-            « Terminee » — ne cree aucun commit.
+            Les statuts « Running », « Failed » et « Review » sont poses par une execution de
+            Claude Code, jamais choisis a la main. Accepter un travail relu — « Approve » — ne
+            cree aucun commit.
           </p>
         </SectionCard>
+
+        <DangerSection
+          projectId={project.id}
+          task={task}
+          runCount={runs.length}
+          confirming={confirmingDelete}
+        />
 
         <SectionCard title="Dates">
           <dl className="grid gap-4 sm:grid-cols-2">

@@ -5,13 +5,18 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import {
+  describeDeleteFailure,
+  readDocumentDeleteSubmission,
+} from "@/lib/document-delete";
+import {
   describeUpdateFailure,
   documentUrl,
+  documentsUrl,
   readDocumentEditSubmission,
 } from "@/lib/document-edit";
-import { updateProjectDocument } from "@/lib/runner/client";
+import { deleteProjectDocument, updateProjectDocument } from "@/lib/runner/client";
 
-import type { EditDocumentState } from "./form-state";
+import type { DeleteDocumentState, EditDocumentState } from "./form-state";
 
 const UNKNOWN_PROJECT_MESSAGE =
   "Ce projet n'existe plus dans NOX. Revenez au tableau de bord et rouvrez-le.";
@@ -86,4 +91,66 @@ export async function updateDocumentAction(
   // fichier, pas ce qui vient d'etre envoye.
   revalidatePath(`/projects/${projectId}/documents`);
   redirect(documentUrl(projectId, result.value.path, { saved: true }));
+}
+
+const DELETE_UNEXPECTED_ERROR_MESSAGE =
+  "Une erreur inattendue est survenue pendant la suppression. Le document n'a pas ete supprime ; " +
+  "consultez les logs du serveur pour le detail.";
+
+/**
+ * Supprime un document Markdown ordinaire.
+ *
+ * Le formulaire ne transporte que trois valeurs : l'identifiant du projet, le
+ * chemin relatif du document et la revision affichee. Le chemin du repository
+ * est relu en base — un champ cache altere ne peut donc pas diriger la
+ * suppression vers un autre dossier de la machine.
+ *
+ * Les documents de tache sont refuses ici **et** par le runner. Ce n'est pas une
+ * duplication de logique : c'est la meme fonction de `@nox/shared`, appelee une
+ * fois pour eviter un aller-retour certain, et une fois pour trancher.
+ */
+export async function deleteDocumentAction(
+  _previousState: DeleteDocumentState,
+  formData: FormData,
+): Promise<DeleteDocumentState> {
+  const projectId = readField(formData, "projectId");
+  const submitted = {
+    documentPath: readField(formData, "documentPath"),
+    expectedRevision: readField(formData, "expectedRevision"),
+  };
+
+  const submission = readDocumentDeleteSubmission(submitted);
+  if (!submission.ok) {
+    return { error: submission.message, conflict: false };
+  }
+
+  const { fields } = submission;
+
+  let repositoryPath: string;
+  try {
+    const project = await getProjectById(getDatabaseClient(), projectId);
+    if (project === null) {
+      return { error: UNKNOWN_PROJECT_MESSAGE, conflict: false };
+    }
+    repositoryPath = project.repositoryPath;
+  } catch (error) {
+    console.error("[nox] Echec de la lecture du projet avant suppression :", error);
+    return { error: DELETE_UNEXPECTED_ERROR_MESSAGE, conflict: false };
+  }
+
+  const result = await deleteProjectDocument(
+    repositoryPath,
+    fields.documentPath,
+    fields.expectedRevision,
+  );
+
+  if (!result.ok) {
+    const { message, conflict } = describeDeleteFailure(result.failure);
+    return { error: message, conflict };
+  }
+
+  // Retour a la liste, sans `path` : le document ouvert n'existe plus, et
+  // reafficher son URL produirait aussitot une erreur de lecture.
+  revalidatePath(`/projects/${projectId}/documents`);
+  redirect(documentsUrl(projectId, { deleted: result.value.path }));
 }

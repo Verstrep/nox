@@ -172,6 +172,36 @@ export function taskDocumentPath(code: string): string {
   return `tasks/${code}.md`;
 }
 
+/**
+ * Forme d'un chemin de document **gere par une tache**.
+ *
+ * La comparaison est faite sur le chemin en minuscules, et ce n'est pas une
+ * commodite : sous Windows, `Tasks/task-001.MD` et `tasks/TASK-001.md`
+ * designent le meme fichier. Une comparaison sensible a la casse laisserait
+ * donc passer la protection par une simple variation d'orthographe.
+ */
+const MANAGED_TASK_DOCUMENT_PATTERN = /^tasks\/task-\d{3,}\.md$/;
+
+/**
+ * Ce chemin est-il celui du document d'une tache ?
+ *
+ * Ces fichiers ont un proprietaire : la tache correspondante en base. Les
+ * supprimer depuis la page Documents desynchroniserait les deux, et laisserait
+ * une tache dont l'artefact a disparu sans que rien ne l'ait enregistre. Ils ne
+ * se suppriment donc que par « Delete task », qui traite les deux cotes.
+ *
+ * Le controle porte sur la **forme du chemin**, pas sur l'existence d'une tache :
+ * il vaut donc aussi pour un `tasks/TASK-999.md` orphelin, dont NOX ne peut pas
+ * savoir s'il precede une tache a venir ou en suit une disparue.
+ *
+ * Les autres fichiers de `tasks/` — `tasks/NOTES.md`, `tasks/README.md` —
+ * restent des documents ordinaires : personne ne les gere a la place de
+ * l'utilisateur.
+ */
+export function isManagedTaskDocumentPath(relativePath: string): boolean {
+  return MANAGED_TASK_DOCUMENT_PATTERN.test(relativePath.toLowerCase());
+}
+
 /** Fiche courte d'une tache, suffisante pour le backlog. */
 export type DevelopmentTaskSummary = {
   id: string;

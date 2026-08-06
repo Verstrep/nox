@@ -8,6 +8,8 @@ import {
   startClaudeRun,
   createProjectDocument,
   createTaskDocument,
+  deleteProjectDocument,
+  deleteTaskDocument,
   listProjectDocuments,
   readProjectDocument,
   resolveRepositoryPath,
@@ -729,6 +731,181 @@ describe("createProjectDocument", () => {
 
     assert.equal(failureOf(result).kind, "not_configured");
     assert.equal(called, false);
+  });
+});
+
+describe("deleteProjectDocument", () => {
+  it("accepte une suppression reussie", async () => {
+    const result = await deleteProjectDocument("D:\\depot", "docs/NOTE.md", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, deleted: { path: "docs/NOTE.md", revision: REVISION } }),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.value, { path: "docs/NOTE.md", revision: REVISION });
+  });
+
+  it("envoie le chemin, la revision et le jeton", async () => {
+    const capture: { request?: Request } = {};
+    await deleteProjectDocument("D:\\depot", "docs/NOTE.md", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, deleted: { path: "docs/NOTE.md", revision: REVISION } }, capture),
+    });
+
+    const request = capture.request;
+    assert.ok(request !== undefined);
+    assert.equal(request.method, "POST");
+    assert.equal(new URL(request.url).pathname, "/repositories/documents/delete");
+    assert.equal(request.headers.get("authorization"), `Bearer ${TOKEN}`);
+
+    assert.deepEqual(await request.json(), {
+      repositoryPath: "D:\\depot",
+      documentPath: "docs/NOTE.md",
+      expectedRevision: REVISION,
+    });
+  });
+
+  it("remonte un conflit de revision", async () => {
+    const result = await deleteProjectDocument("D:\\depot", "docs/NOTE.md", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "DOCUMENT_DELETE_CONFLICT" } }),
+    });
+
+    assert.deepEqual(failureOf(result), {
+      kind: "runner_error",
+      code: "DOCUMENT_DELETE_CONFLICT",
+    });
+  });
+
+  it("remonte un refus de protection", async () => {
+    const result = await deleteProjectDocument("D:\\depot", "tasks/TASK-001.md", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(403, { ok: false, error: { code: "DOCUMENT_PROTECTED" } }),
+    });
+
+    assert.deepEqual(failureOf(result), { kind: "runner_error", code: "DOCUMENT_PROTECTED" });
+  });
+
+  it("refuse une reponse hors contrat", async () => {
+    const result = await deleteProjectDocument("D:\\depot", "docs/NOTE.md", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, deleted: { path: "docs/NOTE.md" } }),
+    });
+
+    assert.deepEqual(failureOf(result), { kind: "invalid_response" });
+  });
+
+  it("ne conclut rien d'un runner injoignable", async () => {
+    const result = await deleteProjectDocument("D:\\depot", "docs/NOTE.md", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new Error("ECONNREFUSED")),
+    });
+
+    assert.deepEqual(failureOf(result), { kind: "unreachable" });
+  });
+});
+
+describe("deleteTaskDocument", () => {
+  it("accepte une suppression effective", async () => {
+    const result = await deleteTaskDocument("D:\\depot", "TASK-001", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, {
+        ok: true,
+        deleted: true,
+        alreadyAbsent: false,
+        path: "tasks/TASK-001.md",
+      }),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.deleted, true);
+    assert.equal(result.value.alreadyAbsent, false);
+    assert.equal(result.value.path, "tasks/TASK-001.md");
+  });
+
+  it("accepte une absence comme une reussite", async () => {
+    const result = await deleteTaskDocument("D:\\depot", "TASK-042", null, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, {
+        ok: true,
+        deleted: false,
+        alreadyAbsent: true,
+        path: "tasks/TASK-042.md",
+      }),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.alreadyAbsent, true);
+  });
+
+  it("envoie le code et la revision, jamais un chemin", async () => {
+    const capture: { request?: Request } = {};
+    await deleteTaskDocument("D:\\depot", "TASK-001", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(
+        200,
+        { ok: true, deleted: true, alreadyAbsent: false, path: "tasks/TASK-001.md" },
+        capture,
+      ),
+    });
+
+    const request = capture.request;
+    assert.ok(request !== undefined);
+    assert.equal(new URL(request.url).pathname, "/repositories/tasks/delete-document");
+
+    const body: unknown = await request.json();
+    assert.deepEqual(body, {
+      repositoryPath: "D:\\depot",
+      taskCode: "TASK-001",
+      expectedRevision: REVISION,
+    });
+    // Le contrat ne transporte aucun chemin : c'est le runner qui compose
+    // `tasks/<code>.md`.
+    assert.equal(Object.keys(body as object).includes("documentPath"), false);
+  });
+
+  it("transmet une revision nulle telle quelle", async () => {
+    const capture: { request?: Request } = {};
+    await deleteTaskDocument("D:\\depot", "TASK-042", null, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(
+        200,
+        { ok: true, deleted: false, alreadyAbsent: true, path: "tasks/TASK-042.md" },
+        capture,
+      ),
+    });
+
+    const request = capture.request;
+    assert.ok(request !== undefined);
+    assert.deepEqual(await request.json(), {
+      repositoryPath: "D:\\depot",
+      taskCode: "TASK-042",
+      expectedRevision: null,
+    });
+  });
+
+  it("remonte un fichier inattendu sans revision connue", async () => {
+    const result = await deleteTaskDocument("D:\\depot", "TASK-001", null, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "TASK_DOCUMENT_REVISION_UNKNOWN" } }),
+    });
+
+    assert.deepEqual(failureOf(result), {
+      kind: "runner_error",
+      code: "TASK_DOCUMENT_REVISION_UNKNOWN",
+    });
+  });
+
+  it("ne conclut rien d'un runner injoignable", async () => {
+    const result = await deleteTaskDocument("D:\\depot", "TASK-001", REVISION, {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new Error("ECONNREFUSED")),
+    });
+
+    assert.deepEqual(failureOf(result), { kind: "unreachable" });
   });
 });
 

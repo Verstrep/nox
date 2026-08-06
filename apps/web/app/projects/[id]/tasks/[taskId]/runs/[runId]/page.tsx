@@ -5,9 +5,9 @@ import { notFound } from "next/navigation";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatIsoDateTime } from "@/lib/format";
+import { runStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
 import {
-  describeRunStatus,
   formatDuration,
   formatReportedCost,
   runStatusEndpoint,
@@ -144,7 +144,7 @@ export default async function RunPage({
             <p className="mt-1 truncate text-sm text-zinc-600">{project.name}</p>
           </div>
           <StatusBadge tone={runStatusTone(run.status)}>
-            {describeRunStatus(run.status)}
+            {runStatusLabel(run.status)}
           </StatusBadge>
         </div>
       </header>

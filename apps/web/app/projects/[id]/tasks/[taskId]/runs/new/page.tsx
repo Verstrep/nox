@@ -9,11 +9,12 @@ import { notFound } from "next/navigation";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { RunnerStatusBadge } from "@/components/RunnerStatusBadge";
+import { documentSyncStatusLabel, taskStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
 import { shortSha } from "@/lib/run-display";
 import { buildExecutionPrompt } from "@/lib/run-prompt";
 import { loadPreflight } from "@/lib/runs";
-import { describeTaskStatus, describeTaskSync, taskStatusTone } from "@/lib/task-display";
+import { taskStatusTone } from "@/lib/task-display";
 import { loadTask } from "@/lib/tasks";
 
 import { StartRunForm } from "./StartRunForm";
@@ -75,7 +76,7 @@ export default async function NewRunPage({
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <RunnerStatusBadge />
             <StatusBadge tone={taskStatusTone(task.status)}>
-              {describeTaskStatus(task.status)}
+              {taskStatusLabel(task.status)}
             </StatusBadge>
           </div>
         </div>
@@ -96,12 +97,11 @@ export default async function NewRunPage({
         >
           <ul className="flex flex-col gap-2">
             <Requirement met={isReady}>
-              La tache est au statut « Prete » (actuellement :{" "}
-              {describeTaskStatus(task.status)}).
+              La tache est au statut « Ready » (actuellement : {taskStatusLabel(task.status)}).
             </Requirement>
             <Requirement met={isSynced}>
               Son document Markdown est synchronise (actuellement :{" "}
-              {describeTaskSync(task.documentSyncStatus)}).
+              {documentSyncStatusLabel(task.documentSyncStatus)}).
             </Requirement>
             <Requirement met={hasCriteria}>
               Elle possede au moins un critere d&apos;acceptation.

@@ -5,13 +5,9 @@ import { notFound } from "next/navigation";
 import { EmptyState } from "@/components/EmptyState";
 import { RunnerStatusBadge } from "@/components/RunnerStatusBadge";
 import { TaskRow } from "@/components/TaskRow";
+import { taskStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
-import {
-  backlogUrl,
-  countTasksByStatus,
-  describeTaskStatus,
-  readStatusFilter,
-} from "@/lib/task-display";
+import { backlogUrl, countTasksByStatus, readStatusFilter } from "@/lib/task-display";
 import { loadProjectTasks } from "@/lib/tasks";
 
 /**
@@ -113,7 +109,7 @@ export default async function ProjectTasksPage({
               key={status}
               href={backlogUrl(project.id, status)}
               active={statusFilter === status}
-              label={describeTaskStatus(status)}
+              label={taskStatusLabel(status)}
               count={counts[status]}
             />
           ))}

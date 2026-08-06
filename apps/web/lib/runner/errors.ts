@@ -45,6 +45,19 @@ const DOCUMENT_CONFLICT_MESSAGE =
 const REVISION_MISSING_MESSAGE =
   "Cette page d'edition n'est plus a jour. Rechargez le document avant de l'enregistrer.";
 
+/**
+ * Message du conflit de suppression.
+ *
+ * Volontairement different de celui de l'edition, malgre une cause identique.
+ * Apres un refus d'ecriture, l'utilisateur a un texte a reporter ; apres un
+ * refus de suppression, il n'a rien a sauver — seulement une version qu'il n'a
+ * pas vue et qu'il doit relire avant de decider. Le geste attendu n'est pas le
+ * meme, la phrase non plus.
+ */
+const DOCUMENT_DELETE_CONFLICT_MESSAGE =
+  "Ce document a ete modifie depuis son affichage. Rechargez sa version actuelle avant de le " +
+  "supprimer : le fichier present sur le disque n'est pas celui que vous avez sous les yeux.";
+
 const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
   [RUNNER_ERROR.PATH_REQUIRED]: "Indiquez le chemin du repository Git local.",
   [RUNNER_ERROR.PATH_NOT_ABSOLUTE]:
@@ -105,6 +118,13 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
   [RUNNER_ERROR.DOCUMENT_CREATION_FAILED]:
     "La creation du document a echoue. Verifiez l'espace disque et les droits du dossier ; aucun fichier existant n'a ete modifie.",
 
+  // --- Suppression ----------------------------------------------------------
+  [RUNNER_ERROR.DOCUMENT_DELETE_CONFLICT]: DOCUMENT_DELETE_CONFLICT_MESSAGE,
+  [RUNNER_ERROR.DOCUMENT_PROTECTED]:
+    "Ce document appartient a une tache NOX. Le supprimer ici laisserait la tache sans son fichier : passez par « Delete task » sur la page de la tache, qui supprime les deux ensemble.",
+  [RUNNER_ERROR.DOCUMENT_DELETE_FAILED]:
+    "La suppression a echoue et le document est toujours present. Il est peut-etre ouvert dans un autre programme ; fermez-le, puis reessayez.",
+
   // --- Document d'une tache -------------------------------------------------
   [RUNNER_ERROR.TASKS_DIRECTORY_NOT_DIRECTORY]:
     "Un fichier nomme « tasks » occupe la racine du repository. NOX ne le remplace pas : renommez-le, puis reessayez.",
@@ -112,6 +132,8 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
     "Le dossier « tasks » est un lien. NOX n'ecrit qu'a travers des dossiers reels, pour que l'emplacement du fichier ne soit jamais une surprise.",
   [RUNNER_ERROR.TASKS_DIRECTORY_CREATION_FAILED]:
     "NOX n'a pas pu creer le dossier « tasks » a la racine du repository. Verifiez l'espace disque et les droits du dossier.",
+  [RUNNER_ERROR.TASK_DOCUMENT_REVISION_UNKNOWN]:
+    "Un fichier occupe le chemin du document de cette tache, mais NOX ne l'a jamais synchronise : il ne peut donc pas affirmer qu'il lui appartient. Ouvrez ce fichier pour l'examiner, ou relancez la creation du document, avant de supprimer la tache.",
   // Le code d'une tache est calcule par NOX : ce refus signale une requete
   // falsifiee ou une base incoherente, jamais une faute de saisie.
   [RUNNER_ERROR.TASK_CODE_INVALID]: GENERIC_RUNNER_ERROR_MESSAGE,
@@ -220,6 +242,19 @@ export function isDocumentConflict(failure: RunnerFailure): boolean {
  */
 export function isDocumentAlreadyExists(failure: RunnerFailure): boolean {
   return failure.kind === "runner_error" && failure.code === RUNNER_ERROR.DOCUMENT_ALREADY_EXISTS;
+}
+
+/**
+ * Distingue le refus de supprimer une version non affichee.
+ *
+ * Comme le conflit d'ecriture, ce n'est pas une panne : le fichier est
+ * accessible et la demande correcte, mais le disque a bouge. L'interface doit
+ * alors proposer de recharger, jamais de forcer.
+ */
+export function isDocumentDeleteConflict(failure: RunnerFailure): boolean {
+  return (
+    failure.kind === "runner_error" && failure.code === RUNNER_ERROR.DOCUMENT_DELETE_CONFLICT
+  );
 }
 
 /**

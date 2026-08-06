@@ -1,9 +1,7 @@
-import { RUN_STATUSES } from "@nox/shared";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  describeRunStatus,
   formatDuration,
   formatReportedCost,
   isRunActive,
@@ -13,13 +11,7 @@ import {
   shortSha,
 } from "./run-display.ts";
 
-describe("libelles d'execution", () => {
-  it("nomme chaque statut", () => {
-    for (const status of RUN_STATUSES) {
-      assert.ok(describeRunStatus(status).length > 0, status);
-    }
-  });
-
+describe("etat d'une execution", () => {
   it("distingue actif et termine", () => {
     assert.equal(isRunActive("QUEUED"), true);
     assert.equal(isRunActive("RUNNING"), true);

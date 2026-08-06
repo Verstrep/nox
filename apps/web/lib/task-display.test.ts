@@ -1,16 +1,8 @@
-import { TASK_PRIORITIES, TASK_STATUSES, type DevelopmentTaskSummary } from "@nox/shared";
+import { TASK_STATUSES, type DevelopmentTaskSummary } from "@nox/shared";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import {
-  backlogUrl,
-  countTasksByStatus,
-  describeTaskPriority,
-  describeTaskStatus,
-  describeTaskSync,
-  readStatusFilter,
-  taskUrl,
-} from "./task-display.ts";
+import { backlogUrl, countTasksByStatus, readStatusFilter, taskUrl } from "./task-display.ts";
 
 function summary(overrides: Partial<DevelopmentTaskSummary> = {}): DevelopmentTaskSummary {
   return {
@@ -25,26 +17,6 @@ function summary(overrides: Partial<DevelopmentTaskSummary> = {}): DevelopmentTa
     ...overrides,
   };
 }
-
-describe("libelles", () => {
-  it("nomme chaque statut", () => {
-    for (const status of TASK_STATUSES) {
-      assert.ok(describeTaskStatus(status).length > 0, status);
-    }
-  });
-
-  it("nomme chaque priorite", () => {
-    for (const priority of TASK_PRIORITIES) {
-      assert.ok(describeTaskPriority(priority).length > 0, priority);
-    }
-  });
-
-  it("nomme chaque etat de synchronisation", () => {
-    for (const sync of ["PENDING", "SYNCED", "ERROR", "CONFLICT"] as const) {
-      assert.ok(describeTaskSync(sync).length > 0, sync);
-    }
-  });
-});
 
 describe("countTasksByStatus", () => {
   it("retourne zero pour chaque statut sur un backlog vide", () => {

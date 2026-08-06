@@ -21,6 +21,7 @@ export {
 export {
   InvalidTaskRecordError,
   createTask,
+  deleteTaskWithoutRuns,
   getTaskById,
   listTasksByProject,
   markTaskDocumentConflict,
@@ -28,6 +29,7 @@ export {
   markTaskDocumentSynced,
   updateTaskStatus,
   type CreateTaskInput,
+  type DeleteTaskResult,
   type UpdateTaskStatusResult,
 } from "./tasks.js";
 

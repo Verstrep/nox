@@ -1,5 +1,6 @@
 import type { ProjectDocumentContent } from "@nox/shared";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { describeCategory } from "@/lib/documents";
 import { formatBytes, formatIsoDateTime } from "@/lib/format";
@@ -16,14 +17,22 @@ import { StatusBadge } from "./StatusBadge";
  * insere comme texte, ce qui rend l'affichage sur.
  *
  * `editHref` n'est fourni que lorsque le document a ete lu sans erreur : proposer
- * « Modifier » sur un document que NOX n'a pas su ouvrir n'aurait aucun sens.
+ * « Edit » sur un document que NOX n'a pas su ouvrir n'aurait aucun sens.
+ *
+ * `deleteControl` est un emplacement, pas un bouton : la suppression est un
+ * Client Component colocalise avec sa Server Action, et ce composant-ci reste
+ * un composant de presentation qui ne connait aucune action. Il vaut `null`
+ * lorsque le document est protege — un document de tache — ce qui fait
+ * disparaitre l'affordance plutot que de la proposer pour la refuser ensuite.
  */
 export function DocumentViewer({
   document,
   editHref,
+  deleteControl = null,
 }: {
   document: ProjectDocumentContent;
   editHref: string;
+  deleteControl?: ReactNode;
 }) {
   const updatedAt = formatIsoDateTime(document.updatedAt);
 
@@ -43,12 +52,15 @@ export function DocumentViewer({
             {updatedAt === null ? null : ` · modifie le ${updatedAt}`}
           </p>
 
-          <Link
-            href={editHref}
-            className="rounded-md border border-zinc-700 bg-zinc-800/70 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
-          >
-            Modifier
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={editHref}
+              className="rounded-md border border-zinc-700 bg-zinc-800/70 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Edit
+            </Link>
+            {deleteControl}
+          </div>
         </div>
       </header>
 

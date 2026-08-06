@@ -38,3 +38,20 @@ export function initialEditDocumentState(
     conflict: false,
   };
 }
+
+/**
+ * Etat retourne par la Server Action de suppression.
+ *
+ * Aucune valeur n'y est conservee, contrairement a l'edition : il n'y a pas de
+ * texte a ne pas perdre. Seuls le message et la nature du refus comptent.
+ */
+export type DeleteDocumentState = {
+  error: string | null;
+  /** Vrai lorsque le fichier a change depuis son affichage. */
+  conflict: boolean;
+};
+
+export const INITIAL_DELETE_DOCUMENT_STATE: DeleteDocumentState = {
+  error: null,
+  conflict: false,
+};

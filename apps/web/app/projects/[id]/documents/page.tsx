@@ -1,3 +1,4 @@
+import { isManagedTaskDocumentPath } from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -9,6 +10,7 @@ import { documentUrl } from "@/lib/document-edit";
 import { loadProjectDocument, loadProjectDocuments } from "@/lib/documents";
 import { loadProject } from "@/lib/projects";
 
+import { DeleteDocumentForm } from "./DeleteDocumentForm";
 import { DocumentEditor } from "./DocumentEditor";
 
 /**
@@ -52,8 +54,11 @@ export default async function ProjectDocumentsPage({
   const rawPath = query["path"];
   const selectedPath = typeof rawPath === "string" && rawPath !== "" ? rawPath : null;
   const wantsEditing = isFlagSet(query["edit"]);
+  const wantsDeleteConfirmation = isFlagSet(query["confirmDelete"]);
   const justSaved = isFlagSet(query["saved"]);
   const justCreated = isFlagSet(query["created"]);
+  const rawDeleted = query["deleted"];
+  const justDeleted = typeof rawDeleted === "string" && rawDeleted !== "" ? rawDeleted : null;
 
   const inventory = await loadProjectDocuments(project.repositoryPath);
 
@@ -89,7 +94,9 @@ export default async function ProjectDocumentsPage({
           <code className="font-mono text-zinc-500">decisions/</code>,{" "}
           <code className="font-mono text-zinc-500">plans/</code> et{" "}
           <code className="font-mono text-zinc-500">tasks/</code>. Les documents existants sont
-          modifiables ; NOX n&apos;en cree et n&apos;en supprime aucun.
+          modifiables et supprimables. Les fichiers{" "}
+          <code className="font-mono text-zinc-500">tasks/TASK-xxx.md</code> font exception : ils
+          appartiennent a une tache, et se suppriment depuis la page de celle-ci.
         </p>
       </header>
 
@@ -137,6 +144,16 @@ export default async function ProjectDocumentsPage({
             </p>
           ) : null}
 
+          {justDeleted === null ? null : (
+            <p
+              role="status"
+              className="rounded-lg border border-teal-400/30 bg-teal-400/10 px-4 py-2 text-xs text-teal-200"
+            >
+              <span className="font-mono">{justDeleted}</span> a ete supprime du repository. Aucun
+              commit n&apos;a ete cree : verifiez le changement avec Git.
+            </p>
+          )}
+
           {opened === null ? (
             <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-5 py-16 text-center">
               <p className="text-sm text-zinc-400">Aucun document ouvert</p>
@@ -152,14 +169,33 @@ export default async function ProjectDocumentsPage({
             <DocumentViewer
               document={opened.document}
               editHref={documentUrl(project.id, opened.document.path, { edit: true })}
+              // Le bouton n'apparait que sur un document reellement lu — donc
+              // avec une revision connue et un runner qui a repondu — et jamais
+              // sur un document gere par une tache.
+              deleteControl={
+                isManagedTaskDocumentPath(opened.document.path) ? null : (
+                  <DeleteDocumentForm
+                    projectId={project.id}
+                    name={opened.document.name}
+                    documentPath={opened.document.path}
+                    expectedRevision={opened.document.revision}
+                    confirming={wantsDeleteConfirmation}
+                    confirmHref={documentUrl(project.id, opened.document.path, {
+                      confirmDelete: true,
+                    })}
+                    cancelHref={documentUrl(project.id, opened.document.path)}
+                  />
+                )
+              }
             />
           )}
         </section>
       </main>
 
       <footer className="mt-auto border-t border-zinc-800 pt-6 text-xs text-zinc-600">
-        NOX affiche et enregistre le contenu brut des fichiers. Aucun document n&apos;est cree,
-        supprime ni renomme, et aucune sauvegarde automatique n&apos;a lieu.
+        NOX affiche et enregistre le contenu brut des fichiers. Une suppression retire le fichier
+        du disque sans creer de commit et sans en conserver de copie ; aucun dossier n&apos;est
+        supprime, aucun document n&apos;est renomme, et aucune sauvegarde automatique n&apos;a lieu.
       </footer>
     </div>
   );

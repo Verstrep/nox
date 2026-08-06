@@ -36,6 +36,40 @@ export type CreateTaskDocumentSuccess = {
   document: ProjectDocumentContent;
 };
 
+/**
+ * Demande de suppression du document d'une tache.
+ *
+ * Meme principe que la creation : **aucun chemin n'est transmis**. Le runner
+ * compose `tasks/<code>.md` a partir du code, apres en avoir verifie la forme.
+ *
+ * `expectedRevision` peut valoir `null`, et ce cas est le plus interessant : une
+ * tache jamais synchronisee n'a pas de revision. Le runner ne le traite pas
+ * comme une autorisation de supprimer sans verifier — il le traite comme
+ * l'absence attendue du fichier. Si un document occupe malgre tout le chemin,
+ * la suppression est refusee, faute de pouvoir prouver qu'il appartient a NOX.
+ */
+export type DeleteTaskDocumentRequest = {
+  repositoryPath: string;
+  taskCode: string;
+  expectedRevision: string | null;
+};
+
+/**
+ * Reponse d'une suppression de document de tache.
+ *
+ * `deleted: false` avec `alreadyAbsent: true` est une **reussite** : le resultat
+ * recherche — plus de fichier a ce chemin — est atteint. C'est ce qui permet de
+ * supprimer une tache dont la synchronisation avait echoue avant meme que son
+ * document n'existe.
+ */
+export type DeleteTaskDocumentSuccess = {
+  ok: true;
+  deleted: boolean;
+  alreadyAbsent: boolean;
+  /** Chemin relatif derive du code, renvoye pour l'affichage. */
+  path: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -57,10 +91,51 @@ export function parseCreateTaskDocumentRequest(value: unknown): CreateTaskDocume
   };
 }
 
+/**
+ * Valide le corps recu par `POST /repositories/tasks/delete-document`.
+ *
+ * `expectedRevision` accepte `null` mais **pas** l'absence du champ : une
+ * requete qui l'omet est un desaccord de contrat, alors qu'un `null` explicite
+ * est une information — « cette tache n'a jamais ete synchronisee ». Les
+ * confondre ferait passer un appelant negligent pour un appelant informe.
+ */
+export function parseDeleteTaskDocumentRequest(value: unknown): DeleteTaskDocumentRequest | null {
+  if (
+    !isRecord(value) ||
+    typeof value["repositoryPath"] !== "string" ||
+    typeof value["taskCode"] !== "string" ||
+    !("expectedRevision" in value)
+  ) {
+    return null;
+  }
+
+  const revision: unknown = value["expectedRevision"];
+  if (revision !== null && typeof revision !== "string") {
+    return null;
+  }
+
+  return {
+    repositoryPath: value["repositoryPath"],
+    taskCode: value["taskCode"],
+    expectedRevision: revision,
+  };
+}
+
 /** Verifie qu'une reponse JSON est une creation de document de tache reussie. */
 export function isCreateTaskDocumentSuccess(value: unknown): value is CreateTaskDocumentSuccess {
   if (!isRecord(value) || value["ok"] !== true) {
     return false;
   }
   return isProjectDocumentContent(value["document"]);
+}
+
+/** Verifie qu'une reponse JSON est une suppression de document de tache reussie. */
+export function isDeleteTaskDocumentSuccess(value: unknown): value is DeleteTaskDocumentSuccess {
+  return (
+    isRecord(value) &&
+    value["ok"] === true &&
+    typeof value["deleted"] === "boolean" &&
+    typeof value["alreadyAbsent"] === "boolean" &&
+    typeof value["path"] === "string"
+  );
 }

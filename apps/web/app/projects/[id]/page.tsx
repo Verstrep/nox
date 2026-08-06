@@ -6,6 +6,7 @@ import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { loadProjectDocuments } from "@/lib/documents";
 import { formatDateTime } from "@/lib/format";
+import { taskStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
 import { countTasksByStatus } from "@/lib/task-display";
 import { loadProjectTasks } from "@/lib/tasks";
@@ -150,8 +151,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         >
           <dl className="grid grid-cols-3 gap-4">
             <TaskCount label="Total" value={tasks.length} />
-            <TaskCount label="Pretes" value={taskCounts[TASK_STATUS.READY]} />
-            <TaskCount label="Bloquees" value={taskCounts[TASK_STATUS.BLOCKED]} />
+            <TaskCount label={taskStatusLabel(TASK_STATUS.READY)} value={taskCounts[TASK_STATUS.READY]} />
+            <TaskCount
+              label={taskStatusLabel(TASK_STATUS.BLOCKED)}
+              value={taskCounts[TASK_STATUS.BLOCKED]}
+            />
           </dl>
         </SectionCard>
 

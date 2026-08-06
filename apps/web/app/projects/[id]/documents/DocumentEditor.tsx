@@ -106,7 +106,7 @@ export function DocumentEditor({ projectId, document }: DocumentEditorProps) {
             disabled={pending}
             className="rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300 disabled:opacity-60"
           >
-            {pending ? "Enregistrement en cours…" : "Enregistrer"}
+            {pending ? "Enregistrement en cours…" : "Save"}
           </button>
 
           <button
@@ -115,7 +115,7 @@ export function DocumentEditor({ projectId, document }: DocumentEditorProps) {
             disabled={pending}
             className="rounded-md border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-60"
           >
-            Annuler
+            Cancel
           </button>
 
           <span className="text-xs text-zinc-600">Annuler n&apos;ecrit rien sur le disque.</span>

@@ -153,7 +153,16 @@ model Run {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// `Restrict` et non `Cascade`, contrairement aux trois tables enfant de
+  /// `Task` : un critere d'acceptation n'a aucun sens sans sa tache, alors qu'une
+  /// execution est un fait historique. Elle a consomme du quota, modifie un
+  /// repository et produit un compte rendu ; la faire disparaitre parce que la
+  /// tache disparait effacerait la trace de ce qui s'est reellement passe.
+  ///
+  /// Cette contrainte double la regle metier de `deleteTaskWithoutRuns`. Ce
+  /// n'est pas une redondance : la regle metier produit un message utile, la
+  /// contrainte tient meme si quelqu'un l'ignore et appelle Prisma directement.
+  task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
 
   @@unique([taskId, sequence])
   @@index([taskId, status])

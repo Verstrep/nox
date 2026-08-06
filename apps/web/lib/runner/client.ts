@@ -15,6 +15,8 @@ import {
   isClaudeRunStatusSuccess,
   isCreateProjectDocumentSuccess,
   isCreateTaskDocumentSuccess,
+  isDeleteProjectDocumentSuccess,
+  isDeleteTaskDocumentSuccess,
   isListProjectDocumentsSuccess,
   isStartClaudeRunSuccess,
   isReadProjectDocumentSuccess,
@@ -28,6 +30,10 @@ import {
   type ClaudeRunStatusRequest,
   type CreateProjectDocumentRequest,
   type CreateTaskDocumentRequest,
+  type DeleteProjectDocumentRequest,
+  type DeleteProjectDocumentSuccess,
+  type DeleteTaskDocumentRequest,
+  type DeleteTaskDocumentSuccess,
   type ListProjectDocumentsRequest,
   type StartClaudeRunRequest,
   type ProjectDocumentContent,
@@ -322,6 +328,66 @@ export function createProjectDocument(
     (value) => (value as { document: ProjectDocumentContent }).document,
     options,
     201,
+  );
+}
+
+/**
+ * Supprime un document ordinaire du repository.
+ *
+ * `expectedRevision` est la revision obtenue a l'affichage : le runner refuse la
+ * suppression si le fichier a change depuis. Comme pour l'ecriture, le web ne
+ * decide jamais si l'operation est sure — il transmet et interprete.
+ *
+ * Les documents de tache sont refuses par le runner, quel que soit ce que le web
+ * envoie : la protection ne depend pas de cet appel.
+ */
+export function deleteProjectDocument(
+  repositoryPath: string,
+  documentPath: string,
+  expectedRevision: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<DeleteProjectDocumentSuccess["deleted"]>> {
+  const payload: DeleteProjectDocumentRequest = {
+    repositoryPath,
+    documentPath,
+    expectedRevision,
+  };
+
+  return postAuthenticated(
+    "/repositories/documents/delete",
+    "documents/delete",
+    payload,
+    isDeleteProjectDocumentSuccess,
+    (value) => (value as DeleteProjectDocumentSuccess).deleted,
+    options,
+  );
+}
+
+/**
+ * Supprime le document Markdown d'une tache.
+ *
+ * Le web n'envoie **aucun chemin** : il envoie le code de la tache, et le runner
+ * compose `tasks/<code>.md`. `expectedRevision` est relue en base — jamais recue
+ * du navigateur — et vaut `null` lorsque la tache n'a jamais ete synchronisee.
+ *
+ * Une reponse `alreadyAbsent` est une reussite : il n'y a plus rien a ce chemin,
+ * ce qui est exactement le resultat recherche.
+ */
+export function deleteTaskDocument(
+  repositoryPath: string,
+  taskCode: string,
+  expectedRevision: string | null,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<DeleteTaskDocumentSuccess>> {
+  const payload: DeleteTaskDocumentRequest = { repositoryPath, taskCode, expectedRevision };
+
+  return postAuthenticated(
+    "/repositories/tasks/delete-document",
+    "tasks/delete-document",
+    payload,
+    isDeleteTaskDocumentSuccess,
+    (value) => value as DeleteTaskDocumentSuccess,
+    options,
   );
 }
 

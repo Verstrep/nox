@@ -1,36 +1,22 @@
 /**
- * Libelles et tons d'affichage des taches.
+ * Tons, comptages et URL des taches.
  *
  * Ce module n'importe ni Prisma, ni le client runner : il est donc utilisable
  * par un Client Component, ce que `lib/tasks.ts` ne peut pas etre.
  *
- * Les libelles sont sans accent, comme le reste de l'interface. Le document
- * Markdown genere, lui, est accentue : c'est un fichier destine a etre lu dans
- * le repository, pas une chaine d'interface.
+ * Les **libelles** n'y sont plus : ils vivent tous dans `lib/labels.ts` depuis
+ * TASK-009. Un ton est une decision d'affichage propre aux taches ; un libelle
+ * est une traduction, et il n'en existe qu'une par valeur dans tout NOX.
  */
 
 import {
-  TASK_DOCUMENT_SYNC_STATUS,
-  TASK_PRIORITY,
   TASK_STATUS,
   TASK_STATUSES,
   type DevelopmentTaskSummary,
-  type TaskDocumentSyncStatus,
-  type TaskPriority,
   type TaskStatus,
 } from "@nox/shared";
 
 import type { BadgeTone } from "@/components/StatusBadge";
-
-const STATUS_LABELS: Record<TaskStatus, string> = {
-  [TASK_STATUS.DRAFT]: "Brouillon",
-  [TASK_STATUS.READY]: "Prete",
-  [TASK_STATUS.RUNNING]: "En cours",
-  [TASK_STATUS.BLOCKED]: "Bloquee",
-  [TASK_STATUS.FAILED]: "Echouee",
-  [TASK_STATUS.REVIEW]: "A relire",
-  [TASK_STATUS.COMPLETED]: "Terminee",
-};
 
 const STATUS_TONES: Record<TaskStatus, BadgeTone> = {
   [TASK_STATUS.DRAFT]: "muted",
@@ -42,34 +28,8 @@ const STATUS_TONES: Record<TaskStatus, BadgeTone> = {
   [TASK_STATUS.COMPLETED]: "muted",
 };
 
-const PRIORITY_LABELS: Record<TaskPriority, string> = {
-  [TASK_PRIORITY.LOW]: "Basse",
-  [TASK_PRIORITY.MEDIUM]: "Moyenne",
-  [TASK_PRIORITY.HIGH]: "Haute",
-  [TASK_PRIORITY.CRITICAL]: "Critique",
-};
-
-const SYNC_LABELS: Record<TaskDocumentSyncStatus, string> = {
-  [TASK_DOCUMENT_SYNC_STATUS.PENDING]: "Document a creer",
-  [TASK_DOCUMENT_SYNC_STATUS.SYNCED]: "Document synchronise",
-  [TASK_DOCUMENT_SYNC_STATUS.ERROR]: "Document non cree",
-  [TASK_DOCUMENT_SYNC_STATUS.CONFLICT]: "Emplacement occupe",
-};
-
-export function describeTaskStatus(status: TaskStatus): string {
-  return STATUS_LABELS[status];
-}
-
 export function taskStatusTone(status: TaskStatus): BadgeTone {
   return STATUS_TONES[status];
-}
-
-export function describeTaskPriority(priority: TaskPriority): string {
-  return PRIORITY_LABELS[priority];
-}
-
-export function describeTaskSync(status: TaskDocumentSyncStatus): string {
-  return SYNC_LABELS[status];
 }
 
 /**
