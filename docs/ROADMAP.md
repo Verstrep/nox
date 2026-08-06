@@ -183,29 +183,54 @@ indissociable du lancement qu'elle précède.
 
 ---
 
-## 🟢 8. Runner contrôlé
+## ✅ 8. Lancement manuel d'une tâche Claude Code — `TASK-008`
 
-**Étape active.**
+**Objectif** : transformer une tâche `READY` en exécution réelle de Claude Code, déclenchée
+explicitement, et en rendre le résultat relisible.
 
-**Objectif** : piloter le runner local depuis l'interface.
+- Modèle `Run`, numéroté par un compteur transactionnel propre à chaque tâche
+  ([D-094](DECISIONS.md#d-094--registre-en-mémoire-limite-assumée)).
+- Prompt d'exécution pur et déterministe, régénéré côté serveur, avec son empreinte
+  ([D-088](DECISIONS.md#d-088--le-prompt-est-déterministe-et-régénéré-côté-serveur)).
+- Préflight Git obligatoire, en lecture seule, sans accès réseau
+  ([D-090](DECISIONS.md#d-090--préflight-git-obligatoire-avant-tout-lancement),
+  [D-091](DECISIONS.md#d-091--lupstream-comparé-est-la-référence-locale)).
+- Routes authentifiées `POST /claude/preflight`, `/claude/runs/start` (`202`) et
+  `/claude/runs/status`.
+- Permissions d'outils explicites, calculées, jamais reçues du navigateur
+  ([D-097](DECISIONS.md#d-097--permissions-explicites-calculées-jamais-reçues),
+  [D-098](DECISIONS.md#d-098--une-commande-qui-ne-peut-pas-être-représentée-exactement-bloque-le-lancement)).
+- Environnement nettoyé de toutes les variables `NOX_*`
+  ([D-100](DECISIONS.md#d-100--lenvironnement-du-processus-enfant-est-nettoyé-de-toutes-les-variables-nox)).
+- Registre en mémoire, interrogation périodique, résultat persisté
+  ([D-095](DECISIONS.md#d-095--interrogation-périodique-plutôt-que-flux-dévénements),
+  [D-096](DECISIONS.md#d-096--le-navigateur-ne-parle-jamais-au-runner)).
+- Pages `/tasks/[taskId]/runs/new` et `/tasks/[taskId]/runs/[runId]`.
 
-- ~~Détection de la disponibilité du runner (`/health`)~~ — fait à l'étape 3.
-- Endpoints d'exécution de commandes déclarées.
-- Diffusion des logs en Server-Sent Events.
+**Fin d'étape atteinte** : une tâche `READY` est lancée depuis NOX, modifie réellement le
+repository, et son résultat est relisible sans copier-coller — vérifié par un test fonctionnel
+avec un faux Claude Code, voir [PROJECT_STATE.md](PROJECT_STATE.md).
 
-**Fin d'étape** : l'interface affiche en direct la sortie d'une commande lancée par le runner.
+Hors périmètre volontaire : streaming des événements, annulation manuelle, reprise de session,
+prompt correctif automatique, exécution automatique d'une autre tâche, plusieurs agents en
+parallèle, worktrees, commits automatiques
+([D-095](DECISIONS.md#d-095--interrogation-périodique-plutôt-que-flux-dévénements),
+[D-105](DECISIONS.md#d-105--nox-constate-létat-git-il-ne-le-répare-pas)).
 
 ---
 
-## ⬜ 9. Intégration Claude Code
+## 🟢 9. Streaming et annulation d'une exécution
 
-**Objectif** : envoyer une tâche au CLI et récupérer son compte rendu.
+**Étape active.**
 
-- Lancement de Claude Code par le runner dans le repository du projet.
-- Flux de logs rattaché à une exécution.
-- Annulation d'une exécution en cours.
+**Objectif** : suivre une exécution en direct et pouvoir l'interrompre.
 
-**Fin d'étape** : une tâche rédigée dans NOX modifie réellement un repository, sans copier-coller.
+- Diffusion progressive des événements Claude Code en Server-Sent Events.
+- Bouton d'annulation d'une exécution active, avec arrêt propre du processus.
+- Reprise du flux après une coupure du navigateur.
+
+**Fin d'étape** : l'interface affiche en direct la progression d'une exécution, et permet de
+l'interrompre sans laisser de processus orphelin.
 
 ---
 
@@ -213,8 +238,9 @@ indissociable du lancement qu'elle précède.
 
 **Objectif** : rendre le résultat relisible.
 
-- `git status`, liste des fichiers modifiés, diff consultable.
-- Exécution du lint, du typecheck et du build après une exécution.
+- ~~`git status`, liste des fichiers modifiés~~ — fait à l'étape 8.
+- Diff complet consultable dans l'interface.
+- Résultat des commandes de validation, exécutées par Claude Code, extrait de son compte rendu.
 - Distinction explicite entre échec et commande non lancée.
 
 **Fin d'étape** : la review d'une tâche se fait entièrement dans NOX.

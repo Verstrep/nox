@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 
 import {
   checkRunnerHealth,
+  claudePreflight,
+  fetchClaudeRunStatus,
+  startClaudeRun,
   createProjectDocument,
   createTaskDocument,
   listProjectDocuments,
@@ -892,5 +895,277 @@ describe("createTaskDocument", () => {
 
     assert.equal(failureOf(result).kind, "not_configured");
     assert.equal(called, false);
+  });
+});
+
+describe("claudePreflight", () => {
+  const REPOSITORY = "D:Projetsdepot";
+  const success = {
+    ok: true,
+    claude: { available: true, version: "1.2.3" },
+    git: {
+      clean: true,
+      branch: "main",
+      upstream: "origin/main",
+      head: "a".repeat(40),
+      ahead: 0,
+      behind: 0,
+    },
+  };
+
+  it("retourne l'etat Git et la version de Claude Code", async () => {
+    const result = await claudePreflight(REPOSITORY, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, success),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.git.branch, "main");
+    assert.equal(result.ok && result.value.claude.version, "1.2.3");
+  });
+
+  it("envoie le jeton dans le seul en-tete Authorization", async () => {
+    const capture: { request?: Request } = {};
+
+    await claudePreflight(REPOSITORY, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, success, capture),
+    });
+
+    const request = capture.request;
+    assert.ok(request !== undefined);
+    assert.equal(new URL(request.url).pathname, "/claude/preflight");
+    assert.equal(request.headers.get("authorization"), `Bearer ${TOKEN}`);
+    assert.equal((await request.text()).includes(TOKEN), false);
+  });
+
+  it("traduit chaque refus de preflight", async () => {
+    for (const [status, code] of [
+      [422, "REPOSITORY_DIRTY"],
+      [422, "GIT_DETACHED_HEAD"],
+      [422, "GIT_UPSTREAM_MISSING"],
+      [422, "GIT_NOT_SYNCHRONIZED"],
+      [503, "CLAUDE_NOT_AVAILABLE"],
+    ] as const) {
+      const result = await claudePreflight(REPOSITORY, {
+        environment: ENVIRONMENT,
+        fetch: stubFetch(status, { ok: false, error: { code } }),
+      });
+
+      const failure = failureOf(result);
+      assert.equal(failure.kind, "runner_error");
+      assert.equal(failure.kind === "runner_error" ? failure.code : null, code);
+      assert.ok(describeRunnerFailure(failure).length > 20);
+    }
+  });
+
+  it("signale un runner injoignable", async () => {
+    const result = await claudePreflight(REPOSITORY, {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new Error("connexion refusee")),
+    });
+
+    assert.equal(failureOf(result).kind, "unreachable");
+  });
+
+  it("refuse une reponse hors contrat", async () => {
+    const result = await claudePreflight(REPOSITORY, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, claude: { available: true } }),
+    });
+
+    assert.equal(failureOf(result).kind, "invalid_response");
+  });
+});
+
+describe("startClaudeRun", () => {
+  const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  const request = {
+    runId: RUN_ID,
+    repositoryPath: "D:Projetsdepot",
+    prompt: "Prompt d'execution.",
+    expectedGitHead: "a".repeat(40),
+    validationCommands: ["npm run test"],
+  };
+  const accepted = {
+    ok: true,
+    run: { runId: RUN_ID, status: "RUNNING", startedAt: "2026-08-06T10:00:00.000Z" },
+  };
+
+  it("accepte un statut 202 : la demande est acceptee, rien n'est termine", async () => {
+    const result = await startClaudeRun(request, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(202, accepted),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.startedAt, "2026-08-06T10:00:00.000Z");
+  });
+
+  it("refuse un 200 : un lancement n'est pas une operation terminee", async () => {
+    const result = await startClaudeRun(request, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, accepted),
+    });
+
+    assert.equal(failureOf(result).kind, "invalid_response");
+  });
+
+  it("envoie exactement les cinq champs du contrat", async () => {
+    const capture: { request?: Request } = {};
+
+    await startClaudeRun(request, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(202, accepted, capture),
+    });
+
+    const sent = capture.request;
+    assert.ok(sent !== undefined);
+    assert.equal(new URL(sent.url).pathname, "/claude/runs/start");
+
+    const body = (await sent.json()) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(body).sort(), [
+      "expectedGitHead",
+      "prompt",
+      "repositoryPath",
+      "runId",
+      "validationCommands",
+    ]);
+    // Aucune liste d'outils ni aucun executable ne circule : le runner les
+    // calcule lui-meme.
+    assert.equal("allowedTools" in body, false);
+    assert.equal("executable" in body, false);
+  });
+
+  it("traduit un run deja actif", async () => {
+    const result = await startClaudeRun(request, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "CLAUDE_RUN_ALREADY_ACTIVE" } }),
+    });
+
+    const failure = failureOf(result);
+    assert.equal(failure.kind === "runner_error" ? failure.code : null, "CLAUDE_RUN_ALREADY_ACTIVE");
+  });
+
+  it("traduit un HEAD modifie", async () => {
+    const result = await startClaudeRun(request, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "GIT_HEAD_CHANGED" } }),
+    });
+
+    const failure = failureOf(result);
+    assert.equal(failure.kind === "runner_error" ? failure.code : null, "GIT_HEAD_CHANGED");
+  });
+
+  it("n'appelle pas le runner sans configuration", async () => {
+    let called = false;
+
+    const result = await startClaudeRun(request, {
+      environment: {},
+      fetch: () => {
+        called = true;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+
+    assert.equal(failureOf(result).kind, "not_configured");
+    assert.equal(called, false);
+  });
+});
+
+describe("fetchClaudeRunStatus", () => {
+  const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  const snapshot = {
+    ok: true,
+    run: {
+      runId: RUN_ID,
+      status: "COMPLETED",
+      startedAt: "2026-08-06T10:00:00.000Z",
+      finishedAt: "2026-08-06T10:05:00.000Z",
+      exitCode: 0,
+      errorCode: null,
+      stderrTail: null,
+      resultText: "Compte rendu.",
+      claudeSessionId: "session-abc",
+      durationMs: 300000,
+      durationApiMs: 250000,
+      numTurns: 6,
+      reportedCostUsd: 0.12,
+      git: {
+        branch: "main",
+        upstream: "origin/main",
+        headBefore: "a".repeat(40),
+        headAfter: "a".repeat(40),
+        diffStat: " 1 file changed",
+        changedFiles: ["src/a.ts"],
+      },
+    },
+  };
+
+  it("retourne l'etat d'une execution", async () => {
+    const result = await fetchClaudeRunStatus(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, snapshot),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.status, "COMPLETED");
+    assert.equal(result.ok && result.value.resultText, "Compte rendu.");
+  });
+
+  it("accepte une execution encore active, aux champs absents", async () => {
+    const running = {
+      ok: true,
+      run: {
+        ...snapshot.run,
+        status: "RUNNING",
+        finishedAt: null,
+        exitCode: null,
+        resultText: null,
+        claudeSessionId: null,
+        durationMs: null,
+        durationApiMs: null,
+        numTurns: null,
+        reportedCostUsd: null,
+        git: { ...snapshot.run.git, headAfter: null, diffStat: null, changedFiles: [] },
+      },
+    };
+
+    const result = await fetchClaudeRunStatus(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, running),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.status, "RUNNING");
+  });
+
+  it("traduit une execution inconnue du runner", async () => {
+    const result = await fetchClaudeRunStatus(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(404, { ok: false, error: { code: "CLAUDE_RUN_NOT_FOUND" } }),
+    });
+
+    const failure = failureOf(result);
+    assert.equal(failure.kind === "runner_error" ? failure.code : null, "CLAUDE_RUN_NOT_FOUND");
+    assert.match(describeRunnerFailure(failure), /redemarrage/i);
+  });
+
+  it("refuse un statut inconnu du contrat", async () => {
+    const result = await fetchClaudeRunStatus(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, run: { ...snapshot.run, status: "PARTI" } }),
+    });
+
+    assert.equal(failureOf(result).kind, "invalid_response");
+  });
+
+  it("refuse un identifiant hors contrat dans la reponse", async () => {
+    const result = await fetchClaudeRunStatus(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, run: { ...snapshot.run, runId: "pas-un-uuid" } }),
+    });
+
+    assert.equal(failureOf(result).kind, "invalid_response");
   });
 });

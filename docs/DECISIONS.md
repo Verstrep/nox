@@ -1018,3 +1018,233 @@ ne les découpe pas et ne les lance pas.
 runner existe pour empêcher tant qu'aucune tâche ne l'autorise. Les stocker maintenant permet à
 la spécification d'être complète — l'agent saura quoi lancer — sans ouvrir le droit de le faire.
 Ce droit relèvera d'une tâche dédiée, avec ses propres garanties.
+
+### D-085 — Claude Code est lancé en CLI, avec l'authentification existante
+
+**Décision.** NOX lance l'exécutable `claude` déjà installé sur la machine. Il ne demande, ne
+stocke et ne transmet aucune clé d'API Anthropic, et n'utilise aucun SDK.
+
+**Justification.** L'utilisateur a déjà une authentification qui fonctionne — abonnement ou clé
+— et elle vit dans Claude Code, pas dans NOX. Lui en redemander une créerait un second secret à
+gérer, à faire tourner et à ne pas laisser fuiter, pour un bénéfice nul. Le CLI apporte en prime
+tout ce qu'un SDK obligerait à réimplémenter : la boucle d'agent, les outils de fichiers, la
+gestion du contexte. NOX n'a qu'à décider *quand* lancer et *avec quelles permissions*.
+
+### D-086 — Mode non interactif, sortie JSON
+
+**Décision.** L'invocation utilise `-p --output-format json`, avec un nombre de tours borné.
+
+**Justification.** Un serveur ne peut pas répondre à des questions posées dans un terminal :
+tout mode qui attendrait une saisie bloquerait indéfiniment. La sortie JSON est ce qui distingue
+un résultat exploitable d'un texte à deviner — c'est elle qui permet d'enregistrer une durée, un
+nombre de tours et un identifiant de session sans les extraire à coups d'expressions régulières.
+
+### D-087 — Le prompt part par l'entrée standard
+
+**Décision.** Le prompt est écrit sur `stdin`, puis l'entrée est fermée. Il n'apparaît dans
+aucun argument.
+
+**Justification.** Un prompt fait des milliers de caractères. Le mettre sur une ligne de
+commande l'exposerait à toutes les limites de longueur du système et à tous les problèmes
+d'échappement — et rendrait sa fuite triviale dans un `ps`. `stdin` n'a ni l'une, ni les autres.
+
+### D-088 — Le prompt est déterministe et régénéré côté serveur
+
+**Décision.** `renderClaudeExecutionPrompt` est une fonction pure. Le prompt affiché sur la page
+de préparation et celui envoyé au processus sont produits par le même appel, et la Server Action
+le **régénère** à partir de la tâche en base plutôt que de reprendre ce que le navigateur
+renvoie. Son empreinte SHA-256 est conservée avec l'exécution.
+
+**Justification.** Une exécution doit être reproductible : un prompt qui varierait rendrait
+impossible de comprendre, six mois plus tard, pourquoi deux passages sur la même tâche ont donné
+des résultats différents. Régénérer côté serveur ferme par ailleurs la seule porte par laquelle
+un formulaire altéré pourrait dicter ses instructions à l'agent.
+
+### D-089 — Le prompt référence les documents, il ne les recopie pas
+
+**Décision.** Le prompt cite les chemins des documents à lire ; il n'en embarque pas le contenu.
+
+**Justification.** L'agent sait lire des fichiers — c'est même sa première capacité. Recopier la
+documentation coûterait des jetons à chaque exécution et, pire, figerait une version : le prompt
+deviendrait faux dès la première modification d'un document, sans que rien ne le signale.
+
+### D-090 — Préflight Git obligatoire avant tout lancement
+
+**Décision.** Aucune exécution ne démarre sans une vérification préalable, en lecture seule, de
+l'état du repository et de la disponibilité de Claude Code.
+
+**Justification.** Toute la valeur du résultat tient à une question : « qu'est-ce que l'agent a
+changé ? ». Elle n'a de réponse que si l'état de départ est connu. Vérifier après coup ne
+servirait à rien — le mélange serait déjà fait.
+
+### D-091 — L'upstream comparé est la référence locale
+
+**Décision.** `ahead` et `behind` sont calculés contre `@{upstream}` tel que la machine le
+connaît. Aucun `fetch` n'est fait, et l'interface le dit explicitement.
+
+**Justification.** Un `fetch` serait une opération réseau et une modification du repository, ni
+l'une ni l'autre demandées par l'utilisateur. Reste à choisir entre annoncer une fraîcheur qu'on
+ne peut pas garantir et dire exactement ce qu'on sait : la seconde option est la seule honnête,
+et l'écrire dans l'interface vaut mieux que de laisser croire à une vérification qui n'a pas eu
+lieu.
+
+### D-092 — Un repository sale ou désynchronisé bloque le lancement
+
+**Décision.** Modifications non commitées, `HEAD` détaché, upstream absent, branche en avance ou
+en retard : chacun de ces états refuse le lancement, avec son propre message.
+
+**Justification.** Ce sont les quatre façons de rendre la relecture impossible. Un refus coûte
+trente secondes à l'utilisateur ; un lancement dans ces conditions coûte une session entière à
+démêler ce qui vient de qui. Le message nomme la cause précise plutôt qu'un « repository non
+conforme » qui obligerait à chercher.
+
+### D-093 — Une seule exécution active, dans le runner
+
+**Décision.** Le runner refuse un second lancement tant qu'une exécution est active, tous
+projets confondus. La contrainte est vérifiée là, et pas dans le web.
+
+**Justification.** Deux Claude Code simultanés se marcheraient dessus dès qu'ils toucheraient au
+même repository, et rendraient toute relecture impossible même sur des repositories différents —
+un humain ne relit pas deux diffs en parallèle. La vérification appartient au runner parce que
+lui seul voit les processus réels ; le web pourrait croire qu'il n'y en a aucun alors qu'un
+onglet oublié en a lancé un.
+
+### D-094 — Registre en mémoire, limite assumée
+
+**Décision.** Les exécutions vivent dans un registre en mémoire du runner : vingt entrées
+terminées, vingt-quatre heures de rétention, et une entrée active jamais supprimée. Un
+redémarrage perd le suivi.
+
+**Justification.** Persister l'état d'un processus reviendrait à écrire en base depuis le
+runner, ce que toute l'architecture interdit depuis TASK-003. La limite est réelle mais bornée :
+elle ne concerne qu'une exécution en cours, et le web sait la reconnaître. Il la traite alors
+comme ce qu'elle est — un suivi perdu — et le dit, plutôt que de deviner une issue.
+
+### D-095 — Interrogation périodique plutôt que flux d'événements
+
+**Décision.** Le navigateur interroge un Route Handler toutes les deux secondes. Ni SSE, ni
+WebSocket pendant TASK-008.
+
+**Justification.** La question à laquelle le navigateur a besoin de répondre est binaire : est-ce
+fini ? Une interrogation toutes les deux secondes y répond, coûte une requête locale, et se
+raccroche toute seule après une coupure. Un flux d'événements apporterait le détail token par
+token — utile, mais c'est une autre fonctionnalité, avec sa reconnexion, son tampon et son
+ordonnancement. Elle mérite sa propre tâche.
+
+### D-096 — Le navigateur ne parle jamais au runner
+
+**Décision.** L'interrogation passe par un Route Handler de Next.js, qui appelle le runner côté
+serveur.
+
+**Justification.** Le jeton partagé ne doit pas quitter le serveur — règle posée à TASK-003 et
+jamais assouplie depuis. Un appel direct depuis le navigateur obligerait à l'y exposer, ou à
+ouvrir une route non authentifiée sur un processus qui lance des commandes.
+
+### D-097 — Permissions explicites, calculées, jamais reçues
+
+**Décision.** Les outils autorisés sont une liste fermée — lecture, recherche, modification,
+création, Git en lecture seule — plus **une règle exacte par commande de validation
+enregistrée**. Les commandes destructrices sont refusées nommément en défense supplémentaire.
+Rien de tout cela ne vient du navigateur.
+
+**Justification.** C'est le cœur de la sécurité de TASK-008. Un agent hérite des droits qu'on
+lui donne : lui donner `Bash` sans restriction reviendrait à lui donner la machine. Une règle
+*exacte* plutôt qu'un préfixe évite qu'autoriser `npm run test` autorise aussi tout ce qui
+commence pareil. Et les refus nominatifs couvrent le cas où une version future de Claude Code
+élargirait ses autorisations par défaut.
+
+### D-098 — Une commande qui ne peut pas être représentée exactement bloque le lancement
+
+**Décision.** Les caractères acceptés dans une commande de validation forment une liste fermée.
+Opérateurs de chaînage, redirections, substitution, guillemets et virgules sont refusés — et le
+refus **empêche le lancement** au lieu d'élargir les permissions.
+
+**Justification.** Une liste d'interdits se contourne : il suffit d'un opérateur auquel personne
+n'a pensé. Une liste d'autorisés se trompe dans l'autre sens — elle refuse une commande légitime
+— et cette erreur-là se répare en une seconde, sans conséquence. La virgule mérite une mention :
+c'est elle qui sépare les règles transmises au processus, donc l'accepter permettrait d'en
+fabriquer une de plus.
+
+### D-099 — `--dangerously-skip-permissions` n'est jamais passé
+
+**Décision.** Ce drapeau n'apparaît nulle part dans le code, et un test vérifie son absence des
+arguments réellement construits.
+
+**Justification.** Il annulerait d'un coup tout le travail de D-097 et D-098. Le test existe
+parce qu'une protection dont personne ne vérifie la présence finit par disparaître dans un
+« juste pour déboguer » que plus personne ne retire.
+
+### D-100 — L'environnement du processus enfant est nettoyé de toutes les variables NOX
+
+**Décision.** Toute variable commençant par `NOX_` est retirée avant le lancement. Les variables
+`ANTHROPIC_*`, elles, sont laissées intactes.
+
+**Justification.** Le runner connaît son propre jeton et l'URL de sa base ; un agent qui peut les
+lire peut appeler le runner lui-même. Le filtre porte sur le préfixe entier plutôt que sur une
+liste nominative parce qu'une variable ajoutée plus tard serait sinon transmise par oubli — et
+l'oubli irait dans le mauvais sens. Les variables Anthropic sont épargnées pour la raison
+inverse : NOX n'en ajoute aucune, mais celle qui existe appartient à la configuration de
+l'utilisateur, et la retirer casserait une authentification qui marchait.
+
+### D-101 — Sous Windows, le processus est terminé avec ses descendants
+
+**Décision.** Au dépassement du délai, l'arrêt passe par `taskkill /T` sous Windows, et par
+`SIGTERM` puis `SIGKILL` ailleurs. Seul un identifiant de processus créé par NOX est visé.
+
+**Justification.** Sous Windows, `claude` est généralement un `claude.cmd` lancé par `cmd.exe`,
+qui lance à son tour le vrai programme. Un signal envoyé à l'enveloppe la termine et laisse le
+programme tourner : le délai maximal n'aurait alors aucun effet. Constaté pendant les tests — un
+délai de 0,5 seconde produisait une attente de soixante.
+
+### D-102 — Aucun test ne lance le vrai Claude Code
+
+**Décision.** Les tests automatisés et le test fonctionnel utilisent un faux Claude Code : un
+script Node qui imite le contrat de l'outil et enregistre ce qu'il a reçu.
+
+**Justification.** Lancer le vrai consommerait du quota à chaque exécution de la suite, la
+rendrait dépendante du réseau, et donnerait des résultats non reproductibles. Le faux permet en
+prime de provoquer à volonté ce que le vrai ne produit qu'accidentellement : une limite
+d'utilisation, une sortie illisible, un dépassement de délai, un commit interdit.
+
+### D-103 — Transitions automatisées séparées des transitions manuelles
+
+**Décision.** Deux tables distinctes : l'une pour ce que l'utilisateur peut cliquer, l'autre
+pour ce qu'une exécution peut poser. `READY → RUNNING` et `RUNNING → REVIEW / FAILED / BLOCKED`
+n'appartiennent qu'à la seconde.
+
+**Justification.** Les deux répondent à des questions différentes — « a-t-il le droit de
+cliquer ici » et « ce résultat justifie-t-il ce statut ». Une table unique rendrait `RUNNING`
+sélectionnable à la main, ce que TASK-007 interdit explicitement, et permettrait d'annoncer un
+travail en cours qu'aucun processus ne fait.
+
+### D-104 — Une réussite mène à `REVIEW`, jamais à `COMPLETED`
+
+**Décision.** Une exécution réussie fait passer la tâche en relecture. Seul l'utilisateur la
+marque terminée, et ce geste ne crée aucun commit.
+
+**Justification.** Un résultat de Claude Code est un travail à relire, pas un travail validé.
+Passer directement à « terminée » ferait de l'outil son propre juge, et retirerait de la boucle
+la seule personne qui puisse dire si le besoin est réellement satisfait.
+
+### D-105 — NOX constate l'état Git, il ne le répare pas
+
+**Décision.** Aucun `reset`, `restore`, `checkout` ou `clean` automatique, quelle que soit
+l'issue. Une violation — commit créé, branche changée — est signalée, et le repository est laissé
+tel quel.
+
+**Justification.** Réparer automatiquement détruirait précisément ce que l'utilisateur doit
+relire pour comprendre ce qui s'est passé. Un commit interdit reste un commit interdit ; le
+supprimer sans le montrer serait échanger un problème visible contre un problème invisible.
+
+### D-106 — Détection prudente des limites d'utilisation
+
+**Décision.** Une limite Claude n'est annoncée que si le sous-type JSON l'affirme, ou si le
+texte contient à la fois un marqueur de limite et un mot qui le rattache à Claude. En cas de
+doute, une erreur générique est retournée. Aucune heure de réinitialisation n'est jamais
+déduite.
+
+**Justification.** Annoncer à tort « limite atteinte » enverrait l'utilisateur attendre une
+réinitialisation qui n'a pas lieu d'être, alors qu'une erreur générique le renvoie simplement aux
+logs. Le double critère évite le faux positif le plus probable : un compte rendu qui parle du
+*rate limit* implémenté dans le code de l'utilisateur. Et une heure inventée serait pire
+qu'aucune.

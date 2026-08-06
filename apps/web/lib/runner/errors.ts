@@ -116,6 +116,47 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
   // falsifiee ou une base incoherente, jamais une faute de saisie.
   [RUNNER_ERROR.TASK_CODE_INVALID]: GENERIC_RUNNER_ERROR_MESSAGE,
 
+  // --- Preflight avant execution --------------------------------------------
+  // Chacun de ces refus se corrige en quelques secondes ; le message dit donc
+  // quoi faire, pas seulement ce qui ne va pas.
+  [RUNNER_ERROR.CLAUDE_NOT_AVAILABLE]:
+    "Claude Code est introuvable sur cette machine. Installez-le, ou indiquez son chemin dans NOX_CLAUDE_EXECUTABLE, puis redemarrez le runner.",
+  [RUNNER_ERROR.REPOSITORY_DIRTY]:
+    "Le repository contient des modifications non commitees. Commitez ou remisez votre travail avant de lancer : sans un etat de depart propre, il serait impossible de distinguer vos changements de ceux de Claude.",
+  [RUNNER_ERROR.GIT_DETACHED_HEAD]:
+    "Le repository n'est sur aucune branche (HEAD detache). Revenez sur une branche avant de lancer une execution.",
+  [RUNNER_ERROR.GIT_UPSTREAM_MISSING]:
+    "La branche courante n'a pas de branche distante associee. Poussez-la une premiere fois (git push -u), puis reessayez.",
+  [RUNNER_ERROR.GIT_NOT_SYNCHRONIZED]:
+    "La branche courante est en avance ou en retard sur sa reference distante connue. Poussez ou recuperez vos commits avant de lancer.",
+  [RUNNER_ERROR.GIT_PREFLIGHT_FAILED]:
+    "La verification Git prealable a echoue. Consultez les logs du runner pour le detail.",
+
+  // --- Execution -------------------------------------------------------------
+  [RUNNER_ERROR.CLAUDE_RUN_ALREADY_ACTIVE]:
+    "Une execution Claude Code est deja en cours. NOX n'en autorise qu'une a la fois : attendez sa fin avant d'en lancer une autre.",
+  [RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND]:
+    "Le runner ne suit plus cette execution. Elle a probablement ete interrompue par un redemarrage du runner : NOX ne peut pas dire ce que le processus a fait, verifiez l'etat du repository vous-meme.",
+  [RUNNER_ERROR.CLAUDE_TIMEOUT]:
+    "L'execution a depasse le delai maximal et a ete arretee. L'etat du repository a ete capture tel quel ; NOX n'a rien restaure.",
+  [RUNNER_ERROR.CLAUDE_LIMIT_REACHED]:
+    "Une limite d'utilisation Claude a ete detectee. L'execution est bloquee : relancez-la plus tard, quand votre quota sera de nouveau disponible. NOX n'affiche pas d'heure de reinitialisation, faute de la connaitre.",
+  [RUNNER_ERROR.CLAUDE_COMMAND_NOT_ALLOWED]:
+    "Une commande de validation enregistree avec cette tache ne peut pas etre autorisee sans risque. Corrigez-la dans la tache : NOX ne l'elargit pas pour la faire passer.",
+  [RUNNER_ERROR.GIT_HEAD_CHANGED]:
+    "Le repository a change depuis la verification prealable. Rechargez la page pour repartir de l'etat actuel.",
+  [RUNNER_ERROR.GIT_POLICY_VIOLATION]:
+    "L'execution a modifie l'historique Git alors que c'etait interdit — un commit ou un changement de branche. NOX n'a rien restaure : verifiez l'etat du repository avant toute autre chose.",
+  [RUNNER_ERROR.CLAUDE_START_FAILED]:
+    "Le processus Claude Code n'a pas pu etre lance. Verifiez son installation et les logs du runner.",
+  [RUNNER_ERROR.CLAUDE_PROCESS_FAILED]:
+    "L'execution s'est terminee sur une erreur. Consultez le compte rendu et la sortie d'erreur ci-dessous.",
+  [RUNNER_ERROR.CLAUDE_OUTPUT_INVALID]:
+    "La sortie de Claude Code n'a pas pu etre analysee. La version installee ne produit peut-etre pas le format attendu.",
+  // Ces deux codes signalent une demande que l'interface n'aurait pas du emettre.
+  [RUNNER_ERROR.CLAUDE_RUN_ID_INVALID]: GENERIC_RUNNER_ERROR_MESSAGE,
+  [RUNNER_ERROR.CLAUDE_PROMPT_INVALID]: GENERIC_RUNNER_ERROR_MESSAGE,
+
   // Ces codes traduisent un desaccord de contrat entre le web et le runner :
   // l'utilisateur ne peut rien y faire, seul le message generique a du sens.
   [RUNNER_ERROR.UNAUTHORIZED]:

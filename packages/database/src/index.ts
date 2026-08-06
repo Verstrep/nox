@@ -32,6 +32,25 @@ export {
 } from "./tasks.js";
 
 export {
+  InvalidRunRecordError,
+  blockRun,
+  cancelTaskExecution,
+  completeRun,
+  createRun,
+  failRun,
+  getRunById,
+  hasActiveRun,
+  listRunsByTask,
+  markRunRunning,
+  startTaskExecution,
+  updateRunFromRunner,
+  type CreateRunInput,
+  type RunGitInput,
+  type RunOutcomeInput,
+  type RunnerRunReport,
+} from "./runs.js";
+
+export {
   DATABASE_URL_ENV_VAR,
   databaseFileExists,
   findRepositoryRoot,

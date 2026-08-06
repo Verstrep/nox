@@ -1,6 +1,8 @@
 import {
   TASK_DOCUMENT_SYNC_STATUS,
+  TASK_STATUS,
   allowedTaskStatusTransitions,
+  type DevelopmentRunSummary,
   type DevelopmentTaskDetail,
 } from "@nox/shared";
 import Link from "next/link";
@@ -11,6 +13,14 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
 import { formatIsoDateTime } from "@/lib/format";
 import { loadProject } from "@/lib/projects";
+import {
+  describeRunStatus,
+  formatDuration,
+  newRunUrl,
+  runStatusTone,
+  runUrl,
+} from "@/lib/run-display";
+import { loadTaskRuns } from "@/lib/runs";
 import {
   describeTaskPriority,
   describeTaskStatus,
@@ -110,6 +120,84 @@ function DocumentSection({
   );
 }
 
+/**
+ * Historique des executions.
+ *
+ * Le bouton de lancement n'apparait que sur une tache `READY` : une tache en
+ * cours ne peut pas etre relancee, et une tache en relecture doit d'abord etre
+ * tranchee par l'utilisateur.
+ */
+function RunsSection({
+  projectId,
+  task,
+  runs,
+}: {
+  projectId: string;
+  task: DevelopmentTaskDetail;
+  runs: readonly DevelopmentRunSummary[];
+}) {
+  const canLaunch = task.status === TASK_STATUS.READY;
+
+  return (
+    <SectionCard
+      title="Executions"
+      description="Passages de Claude Code sur cette tache, du plus recent au plus ancien."
+      action={
+        canLaunch ? (
+          <Link
+            href={newRunUrl(projectId, task.id)}
+            className="inline-block rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
+          >
+            Preparer une execution
+          </Link>
+        ) : null
+      }
+    >
+      {runs.length === 0 ? (
+        <p className="text-sm text-zinc-500">
+          Aucune execution.{" "}
+          {canLaunch
+            ? "Preparez-en une pour envoyer cette tache a Claude Code."
+            : "Seule une tache « Prete » peut etre lancee."}
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {runs.map((run) => {
+            const startedAt = formatIsoDateTime(run.startedAt ?? run.createdAt);
+            const duration = formatDuration(run.durationMs);
+
+            return (
+              <li key={run.id}>
+                <Link
+                  href={runUrl(projectId, task.id, run.id)}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3 transition-colors hover:border-zinc-700"
+                >
+                  <div className="min-w-0">
+                    <p className="font-mono text-xs text-zinc-500">{run.code}</p>
+                    <p className="mt-1 text-xs text-zinc-600">
+                      {startedAt ?? "-"}
+                      {duration === null ? null : ` · ${duration}`}
+                    </p>
+                  </div>
+                  <StatusBadge tone={runStatusTone(run.status)}>
+                    {describeRunStatus(run.status)}
+                  </StatusBadge>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {task.status === TASK_STATUS.RUNNING ? (
+        <p className="mt-5 text-xs text-zinc-600">
+          Une execution est en cours : elle doit se terminer avant qu&apos;une autre soit possible.
+        </p>
+      ) : null}
+    </SectionCard>
+  );
+}
+
 export default async function TaskDetailPage({
   params,
 }: {
@@ -130,6 +218,7 @@ export default async function TaskDetailPage({
     notFound();
   }
 
+  const runs = await loadTaskRuns(task.id);
   const createdAt = formatIsoDateTime(task.createdAt);
   const updatedAt = formatIsoDateTime(task.updatedAt);
 
@@ -209,6 +298,8 @@ export default async function TaskDetailPage({
 
         <DocumentSection projectId={project.id} task={task} />
 
+        <RunsSection projectId={project.id} task={task} runs={runs} />
+
         <SectionCard
           title="Statut"
           description="Les transitions proposees sont les seules autorisees depuis l'etat actuel."
@@ -219,8 +310,9 @@ export default async function TaskDetailPage({
             transitions={allowedTaskStatusTransitions(task.status)}
           />
           <p className="mt-4 text-xs text-zinc-600">
-            Les statuts « En cours », « Echouee » et « A relire » sont reserves aux executions de
-            Claude Code : ils ne se posent pas a la main.
+            Les statuts « En cours », « Echouee » et « A relire » sont poses par une execution de
+            Claude Code, jamais choisis a la main. Accepter un travail relu — « A relire » vers
+            « Terminee » — ne cree aucun commit.
           </p>
         </SectionCard>
 

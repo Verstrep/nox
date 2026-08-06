@@ -61,9 +61,15 @@ describe("transitions de statut", () => {
     ["BLOCKED", "DRAFT"],
     ["BLOCKED", "READY"],
     ["COMPLETED", "READY"],
+    // Ajoutees par TASK-008 : une execution peut poser `REVIEW` et `FAILED`,
+    // et c'est ensuite l'utilisateur qui tranche.
+    ["REVIEW", "COMPLETED"],
+    ["REVIEW", "READY"],
+    ["FAILED", "READY"],
+    ["FAILED", "BLOCKED"],
   ];
 
-  it("autorise exactement les huit transitions manuelles prevues", () => {
+  it("autorise exactement les transitions manuelles prevues", () => {
     for (const [from, to] of ALLOWED) {
       assert.equal(canTransitionTaskStatus(from, to), true, `${from} -> ${to} devrait etre permis`);
     }
@@ -97,12 +103,17 @@ describe("transitions de statut", () => {
     }
   });
 
-  it("laisse les statuts reserves sans issue manuelle", () => {
+  it("reconnait les statuts reserves", () => {
     for (const reserved of RESERVED_TASK_STATUSES) {
-      assert.deepEqual([...allowedTaskStatusTransitions(reserved)], []);
       assert.equal(isReservedTaskStatus(reserved), true);
     }
     assert.equal(isReservedTaskStatus("DRAFT"), false);
+  });
+
+  it("laisse une tache en cours d'execution sans issue manuelle", () => {
+    // Seule la fin du processus peut sortir une tache de `RUNNING` : un clic ne
+    // le doit pas, sans quoi NOX afficherait un etat que le processus contredit.
+    assert.deepEqual([...allowedTaskStatusTransitions("RUNNING")], []);
   });
 
   it("propose les transitions attendues depuis chaque statut manuel", () => {
@@ -110,6 +121,8 @@ describe("transitions de statut", () => {
     assert.deepEqual([...allowedTaskStatusTransitions("READY")], ["DRAFT", "BLOCKED", "COMPLETED"]);
     assert.deepEqual([...allowedTaskStatusTransitions("BLOCKED")], ["DRAFT", "READY"]);
     assert.deepEqual([...allowedTaskStatusTransitions("COMPLETED")], ["READY"]);
+    assert.deepEqual([...allowedTaskStatusTransitions("REVIEW")], ["COMPLETED", "READY"]);
+    assert.deepEqual([...allowedTaskStatusTransitions("FAILED")], ["READY", "BLOCKED"]);
   });
 });
 

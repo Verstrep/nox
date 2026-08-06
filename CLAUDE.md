@@ -173,8 +173,25 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   du document sont deux étapes distinctes : la seconde peut échouer et être reprise.
 - **Toute transition de statut passe par `canTransitionTaskStatus`.** Les statuts `RUNNING`,
   `FAILED` et `REVIEW` sont réservés aux futures exécutions et ne se posent jamais à la main.
-- **Les commandes de validation enregistrées ne sont jamais exécutées** sans une tâche
-  ultérieure qui l'autorise explicitement. Elles sont du texte, pas un ordre.
+- **Les commandes de validation enregistrées ne sont jamais exécutées par NOX.** Depuis
+  TASK-008, elles sont **autorisées** à Claude Code, une par une et à l'identique ; le runner,
+  lui, n'en exécute aucune.
+- **Toute exécution exige un repository propre et synchronisé.** Sans état de départ connu, il
+  devient impossible de dire ce que l'agent a changé.
+- **Le lancement d'une exécution est toujours explicite.** NOX ne déclenche jamais Claude Code
+  de lui-même, ni pour réessayer, ni pour enchaîner une tâche.
+- **Une seule exécution active à la fois**, tous projets confondus, pour la V1.
+- **Aucun prompt libre ne vient du navigateur.** Le prompt est régénéré côté serveur à partir de
+  la tâche en base ; les règles d'outils sont calculées, jamais reçues.
+- **Aucune clé d'API Anthropic dans NOX.** L'authentification est celle déjà configurée dans
+  Claude Code. NOX n'en demande pas, n'en stocke pas, n'en transmet pas.
+- **`--dangerously-skip-permissions` n'est jamais passé**, sous aucune condition.
+- **Les secrets de NOX sont retirés de l'environnement du processus enfant.** Toute variable
+  `NOX_*` est supprimée avant le lancement.
+- **Aucun commit ni push automatique**, et aucune réparation Git automatique : NOX constate
+  l'état laissé sur le disque, il ne le restaure pas.
+- **Un résultat de Claude Code ne vaut pas validation humaine.** Une exécution réussie fait
+  passer la tâche en `REVIEW`, jamais directement en `COMPLETED`.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
   documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code

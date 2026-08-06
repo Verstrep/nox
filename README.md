@@ -12,7 +12,8 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-007 — gestion structurée des tâches de développement**.
+Dernière étape terminée : **TASK-008 — préparation et lancement manuel d'une tâche Claude
+Code**.
 
 | Élément | État |
 | --- | --- |
@@ -26,8 +27,11 @@ Dernière étape terminée : **TASK-007 — gestion structurée des tâches de d
 | Création d'un document Markdown | ✅ fonctionnelle |
 | Backlog, création et suivi des tâches | ✅ fonctionnels |
 | Document Markdown d'une tâche (`tasks/TASK-xxx.md`) | ✅ fonctionnel |
-| Exécution des commandes de validation | ⬜ non commencée |
-| Lancement de Claude Code, logs, exécutions | ⬜ non commencés |
+| Préflight Git et détection de Claude Code | ✅ fonctionnels |
+| Lancement manuel de Claude Code sur une tâche | ✅ fonctionnel |
+| Suivi d'une exécution et persistance de son résultat | ✅ fonctionnels |
+| Streaming des événements, annulation d'une exécution | ⬜ non commencés |
+| Diff complet dans l'interface | ⬜ non commencé |
 | Suppression, renommage, déplacement d'un document | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
 | Intégration OpenAI (orchestrateur) | ⬜ non commencée |
@@ -536,12 +540,139 @@ le travail de quelqu'un — ou de quelque chose — d'autre, et c'est à vous de
 
 ### Ce que NOX ne fait pas encore
 
-- **Aucune exécution.** Les commandes de validation sont du texte enregistré avec la tâche. NOX
-  ne les interprète pas et ne les lance pas.
-- **Claude Code n'est jamais lancé**, et aucun appel à un fournisseur de modèle n'existe.
 - **Une spécification ne se modifie pas après création** : ni le titre, ni l'objectif, ni les
   listes. Seul le statut change.
 - Ni suppression, ni renumérotation, ni duplication, ni dépendances entre tâches.
+
+## Lancer une tâche dans Claude Code
+
+Depuis la page d'une tâche **Prête**, le bouton **Préparer une exécution** ouvre la page de
+lancement. C'est le seul endroit d'où NOX démarre Claude Code, et c'est toujours vous qui
+cliquez : rien n'est déclenché automatiquement.
+
+### Prérequis
+
+NOX utilise l'installation de Claude Code **déjà présente sur votre machine**, avec
+**l'authentification que vous y avez déjà configurée**.
+
+> NOX ne demande, ne stocke et ne transmet **aucune clé d'API Anthropic**. Si vous pouvez lancer
+> `claude` dans un terminal, NOX le peut aussi. Si vous ne le pouvez pas, NOX ne le pourra pas
+> non plus, et il vous le dira au lieu de vous réclamer une clé.
+
+Vérifiez d'abord que l'outil répond :
+
+```bash
+claude --version
+```
+
+Trois variables facultatives règlent le comportement, dans le `.env` de la racine :
+
+| Variable | Défaut | Rôle |
+| --- | --- | --- |
+| `NOX_CLAUDE_EXECUTABLE` | `claude` | Nom ou chemin de l'exécutable. Un `claude.cmd` Windows est géré. |
+| `NOX_CLAUDE_MAX_TURNS` | `80` | Nombre maximal de tours, borné entre 1 et 500. |
+| `NOX_CLAUDE_TIMEOUT_MINUTES` | `120` | Délai maximal, borné entre 1 et 600. |
+
+Une valeur hors bornes **empêche le runner de démarrer**, avec un message qui dit laquelle : elle
+n'est jamais rabotée en silence.
+
+### Commitez et poussez avant de lancer
+
+Claude Code modifie **directement** votre repository local. NOX refuse de lancer si :
+
+- le repository contient des modifications non commitées ;
+- `HEAD` est détaché ;
+- la branche courante n'a pas d'upstream ;
+- la branche est en avance ou en retard sur sa référence distante connue.
+
+Ces refus ne sont pas de la rigidité administrative : sans un état de départ propre, il devient
+impossible de distinguer ce que l'agent a changé de ce qui traînait déjà, et la relecture perd
+tout son sens.
+
+> **Sur l'avance et le retard** : NOX compare votre branche à la référence distante **telle que
+> votre machine la connaît**, c'est-à-dire depuis votre dernier `git fetch`. Il ne contacte pas
+> le serveur distant, et ne prétend donc pas garantir que votre branche est à jour vis-à-vis de
+> lui.
+
+### La page de préparation
+
+Elle montre, avant tout lancement :
+
+- **le prompt exact** qui sera envoyé, et son empreinte SHA-256 ;
+- **les commandes qui seront autorisées** — uniquement celles enregistrées avec la tâche ;
+- **l'état du repository** : branche, upstream, `HEAD`, propreté, avance et retard ;
+- **la version de Claude Code** détectée ;
+- **la liste des préconditions**, chacune cochée ou non.
+
+Le prompt n'est pas modifiable pendant TASK-008. Une exécution doit rester reproductible, et le
+prompt stocké doit correspondre à la tâche telle qu'elle est écrite.
+
+### Ce que Claude Code a le droit de faire
+
+| Autorisé | Refusé |
+| --- | --- |
+| Lire, chercher, modifier et créer des fichiers | Créer un commit, pousser, changer de branche |
+| `git status`, `git diff`, `git log`, `git show` | `git reset`, `git checkout`, `git clean`, `git rebase`, `git merge` |
+| Les commandes de validation **enregistrées avec la tâche**, à l'identique | `rm`, `del`, `Remove-Item`, `curl`, `wget` |
+
+Une commande de validation qui ne peut pas être représentée exactement — parce qu'elle contient
+un opérateur de chaînage, une redirection ou un guillemet — **bloque le lancement**. NOX ne
+l'élargit pas pour la faire passer : corrigez-la dans la tâche.
+
+`--dangerously-skip-permissions` n'est **jamais** passé, et les variables `NOX_*` sont retirées
+de l'environnement du processus : l'agent ne peut ni lire le jeton du runner, ni joindre la base.
+
+### Pendant l'exécution
+
+La page du run se met à jour toute seule, par interrogation toutes les deux secondes. Il n'y a
+pas de flux d'événements en direct pendant TASK-008 : NOX vous dit *si* c'est fini, pas ce que
+l'agent est en train de taper.
+
+**Vous pouvez fermer l'onglet.** Claude Code continue dans le runner, et rouvrir la page suffit
+à récupérer le résultat.
+
+**Redémarrer le runner, en revanche, interrompt le suivi.** L'état des exécutions vit en mémoire.
+NOX marque alors l'exécution bloquée et vous invite à vérifier l'état du repository vous-même —
+il ne prétend pas connaître le résultat d'un processus qu'il a cessé de suivre.
+
+**Une seule exécution à la fois**, tous projets confondus.
+
+### Le résultat
+
+| Issue | Exécution | Tâche |
+| --- | --- | --- |
+| Terminée sans erreur | `Terminée` | `À relire` |
+| Erreur du processus ou sortie illisible | `Échouée` | `Échouée` |
+| Limite Claude, délai dépassé, suivi perdu | `Bloquée` | `Bloquée` |
+
+Une réussite mène à **`À relire`**, jamais directement à « terminée » : un résultat de Claude
+Code est un travail à relire, pas un travail validé. C'est vous qui l'acceptez, et cette
+acceptation ne crée aucun commit.
+
+La page affiche le compte rendu de l'agent, la durée, le nombre de tours, le coût **rapporté par
+Claude Code** — « non fourni » quand l'outil ne le communique pas, jamais une estimation —, les
+fichiers modifiés, `git diff --stat`, et la confirmation que `HEAD` n'a pas bougé. Le diff
+complet n'est pas affiché : relisez-le dans votre éditeur.
+
+### En cas de limite Claude
+
+NOX détecte prudemment les limites d'utilisation. Quand il en repère une, l'exécution est
+bloquée et le message vous invite à relancer plus tard. **Aucune heure de réinitialisation n'est
+affichée** : NOX ne la connaît pas, et une heure inventée serait pire qu'aucune. Si l'erreur est
+ambiguë, NOX affiche une erreur générique plutôt que d'affirmer une limite qui n'existe peut-être
+pas.
+
+### Si l'exécution enfreint les règles
+
+Un commit créé malgré l'interdiction, un changement de branche : NOX le **constate** et marque
+l'exécution en échec. Il ne répare rien — pas de `reset`, pas de `restore`. Réparer
+automatiquement détruirait justement ce que vous devez relire pour comprendre ce qui s'est
+passé.
+
+### Les tests n'appellent jamais Claude
+
+Aucun test automatisé de NOX ne lance le vrai Claude Code : la suite utilise un faux exécutable
+qui imite son contrat. Elle ne consomme donc aucun quota et ne dépend d'aucun réseau.
 
 ## Lancer le runner
 
@@ -583,6 +714,9 @@ lancés ensemble : le runner peut être redémarré sans toucher au web, et inve
 | `/repositories/documents/update` | `POST` | `Bearer` obligatoire | Remplace un document existant, après contrôle de révision |
 | `/repositories/documents/create` | `POST` | `Bearer` obligatoire | Crée un document (`201`), sans jamais écraser ni créer de dossier |
 | `/repositories/tasks/create-document` | `POST` | `Bearer` obligatoire | Crée `tasks/<code>.md` (`201`), en créant `tasks/` s'il manque |
+| `/claude/preflight` | `POST` | `Bearer` obligatoire | Vérifie l'état Git et la présence de Claude Code, en lecture seule |
+| `/claude/runs/start` | `POST` | `Bearer` obligatoire | Lance Claude Code (`202`), sans attendre la fin |
+| `/claude/runs/status` | `POST` | `Bearer` obligatoire | État d'une exécution, depuis le registre en mémoire |
 
 ### Tester `/health`
 
@@ -678,6 +812,8 @@ NOX/
 │   │   │           └── tasks/      Backlog filtrable
 │   │   │               ├── new/        Formulaire de tâche + Server Action
 │   │   │               └── [taskId]/   Détail, transitions, reprise
+│   │   │                   └── runs/   Préparation et résultat d'une exécution
+│   │   ├── app/api/                Route Handler d'interrogation d'un run
 │   │   ├── components/         Composants d'interface réutilisables
 │   │   ├── lib/
 │   │   │   ├── runner/         Client HTTP du runner (serveur uniquement)
@@ -688,17 +824,30 @@ NOX/
 │   │   │   ├── task-sync.ts        Synchronisation idempotente du document
 │   │   │   ├── task-display.ts     Libellés, compteurs, filtres
 │   │   │   ├── tasks.ts            Chargement des tâches pour les pages
+│   │   │   ├── run-prompt.ts       Prompt d'exécution et son empreinte
+│   │   │   ├── run-report.ts       Traduction du rapport du runner
+│   │   │   ├── run-display.ts      Libellés, durées, URL des exécutions
+│   │   │   ├── runs.ts             Chargement et réconciliation des runs
 │   │   │   └── ...             Validation métier et lecture des données
 │   │   └── public/             Fichiers statiques
 │   │
 │   └── runner/                 Runner local Node.js
+│       ├── fixtures/           Faux Claude Code, pour les tests uniquement
 │       └── src/
 │           ├── index.ts        Démarrage et arrêt propre
 │           ├── config.ts       Configuration validée au démarrage
 │           ├── server.ts       Routage HTTP
 │           ├── http/           Authentification, corps JSON, réponses
+│           ├── claude/
+│           │   ├── executable.ts   Résolution sans shell, environnement nettoyé
+│           │   ├── preflight.ts    Vérifications avant lancement
+│           │   ├── launcher.ts     Lancement, stdin, délai, arrêt de l'arbre
+│           │   ├── output.ts       Analyse JSON et détection de limite
+│           │   ├── registry.ts     Registre en mémoire des exécutions
+│           │   └── runs.ts         Cycle de vie complet d'une exécution
 │           └── repositories/
 │               ├── resolve-repository.ts   Résolution Git (execFile, sans shell)
+│               ├── git-state.ts            État Git en lecture seule
 │               ├── documents/              Inventaire, lecture, écriture, création, confinement
 │               └── tasks/                  Document de tâche et dossier `tasks/`
 │
@@ -709,11 +858,15 @@ NOX/
 │   │   ├── src/documents.ts    Contrat des documents Markdown
 │   │   ├── src/tasks.ts        Priorités, transitions, codes, types métier
 │   │   ├── src/task-markdown.ts    Générateur pur et déterministe
-│   │   └── src/task-documents.ts   Contrat de la route des documents de tâche
+│   │   ├── src/task-documents.ts   Contrat de la route des documents de tâche
+│   │   ├── src/runs.ts             Codes RUN, états finaux, bornes, transitions
+│   │   ├── src/claude-prompt.ts    Prompt d'exécution pur et déterministe
+│   │   ├── src/claude-commands.ts  Validation des commandes et permissions
+│   │   └── src/claude.ts           Contrat des routes Claude Code
 │   │
 │   └── database/               Accès aux données (@nox/database)
 │       ├── prisma/             Schéma et migrations versionnées
-│       ├── src/                Client, chemins, requêtes sur Project et Task
+│       ├── src/                Client, chemins, requêtes sur Project, Task et Run
 │       └── prisma.config.ts    Configuration du CLI Prisma
 │
 ├── data/                       Base SQLite locale (contenu non versionné)

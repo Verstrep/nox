@@ -50,7 +50,12 @@ before(async () => {
   // repository temporaire : c'est toute la chaine web -> HTTP -> disque qui est
   // exercee ici.
   server = createRunnerServer(
-    { host: "127.0.0.1", port: 0, token: TOKEN },
+    {
+      host: "127.0.0.1",
+      port: 0,
+      token: TOKEN,
+      claude: { executable: "claude-inexistant", maxTurns: 10, timeoutMinutes: 1 },
+    },
     {
       log: () => undefined,
       resolveRepository: (repositoryPath) =>

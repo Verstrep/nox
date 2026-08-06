@@ -3,31 +3,31 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 6 août 2026, à l'issue de `TASK-007`.
+**Dernière mise à jour** : 6 août 2026, à l'issue de `TASK-008`.
 
 ---
 
 ## 1. Phase actuelle
 
-**NOX sait découper le travail.** Après avoir su enregistrer un projet, parler à un runner
-local et maintenir les documents Markdown d'un repository, NOX représente désormais les unités
-de travail elles-mêmes : des tâches structurées, numérotées, suivies, et accompagnées du
-document que liront les agents.
+**NOX lance Claude Code.** La boucle que le projet cherchait à fermer depuis le début l'est
+enfin sur son premier maillon : une tâche rédigée dans NOX modifie réellement un repository,
+sans qu'aucun prompt ne soit copié-collé.
 
-C'est la première fonctionnalité de NOX qui écrit **des deux côtés** — une ligne dans SQLite et
-un fichier dans Git — et la première dont l'état peut diverger entre les deux. Ce risque est
-traité explicitement, par quatre états de synchronisation et une reprise idempotente.
+C'est aussi la première fonctionnalité dont une étape **dure plus longtemps qu'une requête
+HTTP**. Le web possède les données métier, le runner possède le processus, et l'interrogation
+périodique réconcilie les deux. Fermer le navigateur n'interrompt rien ; redémarrer le runner,
+si — et NOX le dit plutôt que de deviner.
 
-Aucune exécution n'est déclenchée : les commandes de validation sont stockées, jamais lancées,
-et Claude Code n'est appelé nulle part.
+Le lancement reste **toujours explicite**. Aucune orchestration automatique, aucun appel OpenAI,
+aucune clé d'API Anthropic dans NOX.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 7 — gestion structurée des tâches
-(terminée)**. L'étape 8 (runner contrôlé) devient l'étape active.
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 8 — lancement manuel d'une tâche
+Claude Code (terminée)**. L'étape 9 (streaming et annulation) devient l'étape active.
 
 ## 2. Tâche active
 
-`TASK-007 — Gestion structurée des tâches de développement` : **terminée**, en attente de review
-humaine.
+`TASK-008 — Préparation et lancement manuel d'une tâche Claude Code` : **terminée**, en attente
+de review humaine.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
@@ -36,122 +36,116 @@ disponibles pour relecture.
 
 ### 3.1 Contrat partagé — `packages/shared/`
 
-- `src/tasks.ts` : `TASK_PRIORITY` (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`),
-  `TASK_DOCUMENT_SYNC_STATUS` (`PENDING`, `SYNCED`, `ERROR`, `CONFLICT`), leurs gardes,
-  `taskPriorityRank`, la table des transitions autorisées (`canTransitionTaskStatus`,
-  `allowedTaskStatusTransitions`, `RESERVED_TASK_STATUSES`), `formatTaskCode`, `isTaskCode`,
-  `taskDocumentPath`, et les types `DevelopmentTaskSummary`, `DevelopmentTaskDetail`,
-  `TaskSpecification`.
-- `src/task-markdown.ts` : `renderTaskMarkdown`, fonction pure et déterministe.
-- `src/task-documents.ts` : contrat de `POST /repositories/tasks/create-document`.
-- 4 nouveaux codes d'erreur dans `RUNNER_ERROR` (46 au total) : `TASK_CODE_INVALID`,
-  `TASKS_DIRECTORY_NOT_DIRECTORY`, `TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED`,
-  `TASKS_DIRECTORY_CREATION_FAILED`.
-- `TaskStatus` n'est **pas** redéclaré : il vit dans `statuses.ts` depuis TASK-001.
-- Le package a désormais un `tsconfig.build.json` distinct, comme `@nox/database` : les tests
-  restent typecheckés sans être émis dans `dist/`.
+- `src/runs.ts` : états finaux (`FINAL_RUN_STATUSES`, `isFinalRunStatus`), `formatRunCode`,
+  `isRunnerRunId`, bornes de tout contenu extérieur (`RUN_LIMITS`, `boundText`, `boundTail`),
+  table des transitions **automatisées** (`canAutomateTaskStatusTransition`),
+  `taskStatusForRunOutcome`, et les types `DevelopmentRunSummary` / `DevelopmentRunDetail`.
+- `src/claude-prompt.ts` : `renderClaudeExecutionPrompt`, pure et déterministe.
+- `src/claude-commands.ts` : validation des commandes de validation et construction de la
+  politique d'outils.
+- `src/claude.ts` : contrat des trois routes Claude Code.
+- 18 nouveaux codes d'erreur dans `RUNNER_ERROR` (64 au total).
+- Les transitions **manuelles** de `src/tasks.ts` gagnent quatre sorties : `REVIEW → COMPLETED`,
+  `REVIEW → READY`, `FAILED → READY`, `FAILED → BLOCKED`. Les trois statuts réservés restent
+  sans **entrée** manuelle.
 
 ### 3.2 Modèle de données — `packages/database/`
 
-Migration `20260806081236_add_development_tasks`, appliquée sans perte sur la base de
-développement.
+Migration `20260806125516_add_claude_runs`, appliquée sans perte sur la base de développement.
 
-| Modèle | Rôle | Contraintes |
-| --- | --- | --- |
-| `Project.nextTaskSequence` | Compteur de numéros, valeur initiale `1` | Ne recule jamais |
-| `Task` | Spécification d'une unité de travail | `@@unique([projectId, sequence])` |
-| `TaskAcceptanceCriterion` | Un critère, à sa position | `@@unique([taskId, position])` |
-| `TaskDocumentReference` | Un chemin relatif à lire | `@@unique([taskId, position])` |
-| `TaskValidationCommand` | Une commande, jamais exécutée | `@@unique([taskId, position])` |
+| Élément | Rôle |
+| --- | --- |
+| `Task.nextRunSequence` | Compteur d'exécutions propre à la tâche, valeur initiale `1` |
+| `Run` | Une exécution, avec `@@unique([taskId, sequence])` |
 
-Les trois listes enfant sont supprimées en cascade avec leur tâche. Le code affiché
-(`TASK-001`) n'est **pas** stocké : il se dérive de `sequence`, immuable.
+`Run` conserve le **prompt exact** envoyé et son empreinte : la spécification de la tâche pourra
+évoluer, le prompt réellement transmis, non. Les champs Claude et Git sont facultatifs — ils
+n'existent qu'une fois le processus terminé, et certains ne sont garantis par aucune version.
 
-Fonctions d'accès (`src/tasks.ts`) : `listTasksByProject`, `getTaskById`, `createTask`,
-`updateTaskStatus`, `markTaskDocumentSynced`, `markTaskDocumentError`,
-`markTaskDocumentConflict`. Elles retournent des types métier de `@nox/shared` et revalident
-chaque chaîne lue en base (`InvalidTaskRecordError`).
+Fonctions d'accès (`src/runs.ts`) : `createRun`, `getRunById`, `listRunsByTask`,
+`markRunRunning`, `completeRun`, `failRun`, `blockRun`, `updateRunFromRunner`, `hasActiveRun`,
+`startTaskExecution`, `cancelTaskExecution`.
 
-### 3.3 Allocation des numéros
+**Un état final ne redevient jamais actif.** C'est cette règle qui rend l'interrogation
+idempotente : une réponse tardive ne peut pas rouvrir une exécution conclue, ni remettre en
+`RUNNING` une tâche que l'utilisateur relit déjà. Le run et sa tâche sont mis à jour dans la
+même transaction.
 
-`createTask` ouvre une transaction, incrémente `nextTaskSequence` par un ordre SQL atomique et
-utilise la valeur réservée. `count() + 1` est explicitement écarté
-([D-075](DECISIONS.md#d-075--allocation-transactionnelle-du-numéro)).
+### 3.3 Prompt d'exécution
 
-Vérifié par un test de **quinze créations concurrentes** : quinze codes uniques, quinze lignes
-en base. Un test distinct vérifie qu'un numéro libéré n'est jamais réattribué, et un autre que
-deux projets numérotent indépendamment.
+Fonction pure. Il nomme la tâche, impose la lecture de `CLAUDE.md`, d'`AGENTS.md`, du document
+de tâche et des documents référencés, énonce l'objectif, le contexte, les critères et le
+hors-périmètre, puis les règles — dont l'interdiction de commiter, de pousser et de changer de
+branche. Il annonce explicitement les commandes autorisées comme **les seules préautorisées**, et
+demande un compte rendu structuré en huit sections.
 
-### 3.4 Générateur Markdown
+Il ne contient **ni chemin absolu, ni jeton, ni variable d'environnement, ni statut, ni
+priorité**, et **référence** les documents au lieu de les recopier. Son empreinte SHA-256 est
+affichée avant lancement et conservée avec l'exécution.
 
-`renderTaskMarkdown` produit toujours le même fichier pour les mêmes données. Il normalise ses
-propres fins de ligne, ramène titre et entrées de liste à une seule ligne, encadre les chemins
-en code inline et les commandes dans un bloc `bash` — en allongeant la clôture autant qu'il le
-faut si la valeur contient elle-même des accents graves. Les sections facultatives vides ne
-laissent pas de titre orphelin, et le fichier se termine par exactement un saut de ligne.
+### 3.4 Préflight — `apps/runner/src/claude/preflight.ts`
 
-Il ne contient **ni statut, ni priorité, ni date**
-([D-083](DECISIONS.md#d-083--le-statut-et-la-priorité-ne-figurent-pas-dans-le-markdown)) : c'est
-ce qui rend la comparaison de l'adoption fiable.
+`POST /claude/preflight`, authentifiée, **strictement en lecture**. Cinq commandes Git via
+`execFile` sans shell, aucune écriture, aucun `fetch`.
 
-### 3.5 API du runner
+Refus possibles : `REPOSITORY_DIRTY`, `GIT_DETACHED_HEAD`, `GIT_UPSTREAM_MISSING`,
+`GIT_NOT_SYNCHRONIZED`, `GIT_PREFLIGHT_FAILED`, `CLAUDE_NOT_AVAILABLE`. Git est vérifié avant
+Claude Code : un repository sale se corrige en trente secondes, une installation manquante non.
 
-`POST /repositories/tasks/create-document`, authentifiée, réponse `201`.
+L'avance et le retard sont mesurés contre la **référence upstream locale**. L'interface le dit
+explicitement plutôt que de laisser croire à une vérification du serveur distant.
 
-Le corps transporte `repositoryPath`, `taskCode` et `content` — **aucun chemin**. Le runner
-valide la forme du code (`TASK-` suivi d'au moins trois chiffres) et compose lui-même
-`tasks/<code>.md`.
+### 3.5 Invocation de Claude Code
 
-Enchaînement : validation du code → repository → contenu (demi-caractère Unicode isolé, taille)
-→ préparation de `tasks/` → création exclusive → relecture. Le contenu est validé **avant** la
-préparation du dossier : une requête mal formée ne laisse pas derrière elle un dossier vide.
+| Aspect | Choix |
+| --- | --- |
+| Mode | `-p --output-format json --max-turns <borné>` |
+| Prompt | Écrit sur `stdin`, puis l'entrée est fermée |
+| `cwd` | Racine canonique du repository, aucun dossier supplémentaire |
+| Environnement | Toutes les variables `NOX_*` retirées ; `ANTHROPIC_*` intactes |
+| Permissions | `Read`, `Edit`, `Write`, `Glob`, `Grep`, Git en lecture seule, plus une règle **exacte** par commande enregistrée |
+| Refus explicites | `git commit/push/reset/checkout/switch/clean/restore/rebase/merge/stash`, `rm`, `rmdir`, `del`, `Remove-Item`, `curl`, `wget` |
+| Jamais passé | `--dangerously-skip-permissions`, `--continue`, `--resume`, `--add-dir`, config MCP, modèle imposé, clé d'API |
+| Délai | Configurable, borné ; arrêt de l'arbre de processus, puis arrêt forcé |
 
-### 3.6 Le dossier `tasks/`
+Sous Windows, un `claude.cmd` est enveloppé dans `cmd.exe /d /s /c` avec une **liste d'arguments
+fixe** — aucune concaténation, et le prompt reste hors de la ligne de commande.
 
-Seule création de dossier de tout NOX
-([D-081](DECISIONS.md#d-081--le-dossier-tasks-est-la-seule-création-de-dossier-autorisée)).
+Une commande de validation qui ne peut pas être représentée exactement **bloque le lancement**.
+Les caractères acceptés forment une liste fermée : opérateurs de chaînage, redirections,
+guillemets et virgules sont refusés — la virgule parce qu'elle sépare les règles transmises.
 
-- `mkdir` sans `recursive` : un dossier, jamais une arborescence.
-- Permissions `0o755` — le bit d'exécution est indispensable à un dossier.
-- Une création concurrente (`EEXIST`) n'est pas une réussite implicite : la nature de ce qui
-  occupe la place est revérifiée après coup.
-- Refus si `tasks` est un **fichier** (`TASKS_DIRECTORY_NOT_DIRECTORY`), un **lien ou une
-  jonction** (`TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED`), ou si le chemin réel sort du repository.
-- Aucun sous-dossier n'est jamais créé.
+### 3.6 Registre en mémoire
 
-### 3.7 Synchronisation et reprise
+Vingt exécutions terminées conservées, vingt-quatre heures de rétention, **une seule active**
+tous projets confondus. Une entrée active n'est jamais supprimée, quels que soient son âge et le
+nombre d'entrées. Le premier état final gagne : une fin de processus arrivant après un
+dépassement de délai n'efface pas la raison de l'arrêt.
 
-Quatre états, affichés dans le backlog et sur la page de détail : `PENDING`, `SYNCED`, `ERROR`,
-`CONFLICT`.
+Un redémarrage du runner perd le registre — limite assumée, et **visible** : le web marque
+l'exécution bloquée avec `CLAUDE_RUN_NOT_FOUND` et invite à vérifier le repository, sans
+prétendre connaître le résultat.
 
-La création d'une tâche se fait en deux étapes dissociées : transaction SQLite d'abord,
-écriture du document ensuite. Un échec de la seconde ne remet **jamais** la première en cause,
-et la redirection vers la page de détail a lieu dans tous les cas.
+### 3.7 Interrogation et persistance
 
-`synchronizeTaskDocument` est le seul chemin, pour la première tentative comme pour les
-suivantes : création exclusive, puis interprétation de ce que le disque répond. Un fichier dont
-le contenu correspond exactement au Markdown attendu est **adopté** sans réécriture ; un contenu
-différent produit `CONFLICT`, sans que le fichier soit touché. Aucun bouton de forçage
-([D-080](DECISIONS.md#d-080--reprise-idempotente-sans-écrasement)).
+Le navigateur interroge un Route Handler de Next.js toutes les deux secondes. Il ne parle
+**jamais** au runner : le jeton ne quitte pas le serveur. Le Route Handler vérifie la chaîne
+projet → tâche → exécution, réconcilie l'état, et ne renvoie que le statut.
+
+Un runner injoignable ne conclut rien — l'exécution continue peut-être. Un runner qui répond
+mais ne connaît plus l'exécution conclut, lui : le suivi est perdu et le restera.
 
 ### 3.8 Interface
 
 | Page | Contenu |
 | --- | --- |
-| `/projects/[id]` | Carte Taches : total, prêtes, bloquées, liens vers le backlog et la création |
-| `/projects/[id]/tasks` | Backlog filtrable par statut, filtre porté par l'URL |
-| `/projects/[id]/tasks/new` | Formulaire complet, protection des modifications non enregistrées |
-| `/projects/[id]/tasks/[taskId]` | Détail, transitions, état du document, reprise |
+| `/projects/[id]/tasks/[taskId]` | Historique des exécutions, bouton de préparation si `READY` |
+| `…/runs/new` | Préconditions, état Git, commandes autorisées, prompt et empreinte, avertissement |
+| `…/runs/[runId]` | Statut, métadonnées Claude, compte rendu, état Git, erreur, prompt envoyé |
+| `/api/…/runs/[runId]/status` | Route Handler d'interrogation, données publiques uniquement |
 
-Ordre du backlog : tâches non terminées d'abord, puis priorité décroissante, puis numéro
-croissant. Un filtre inconnu est ignoré et la page s'affiche entière — jamais d'exception.
-
-Les transitions sont proposées sous forme d'un bouton par transition autorisée : ce que
-l'interface offre correspond exactement à ce que le serveur accepte. La vérification serveur
-reste entière (`updateTaskStatus`), et `projectId` sert de **filtre** de recherche — une tâche
-d'un autre projet est introuvable, pas « refusée ».
-
-Toutes ces pages lisent SQLite : elles restent consultables runner arrêté.
+Le prompt n'est pas modifiable : ce n'est pas un champ du formulaire. Trois valeurs seulement
+sont transmises — projet, tâche, `HEAD` attendu.
 
 ### 3.9 Validations exécutées
 
@@ -159,110 +153,105 @@ Toutes ces pages lisent SQLite : elles restent consultables runner arrêté.
 | --- | --- |
 | `npm install` | ✅ aucune dépendance ajoutée |
 | `npm run db:generate` | ✅ client Prisma régénéré |
-| `npm run db:migrate` | ✅ migration appliquée, les deux projets existants intacts |
-| `npm run test` | ✅ **626 tests, 112 suites, 0 échec, 2 ignorés** |
+| `npm run db:migrate` | ✅ migration appliquée, projets et tâches existants intacts |
+| `npm run test` | ✅ **902 tests, 167 suites, 0 échec, 2 ignorés** |
 | `npm run lint` | ✅ exit 0 |
 | `npm run typecheck` | ✅ exit 0, 4 workspaces |
-| `npm run build` | ✅ exit 0, 9 routes |
+| `npm run build` | ✅ exit 0, 12 routes |
 
-Les 2 tests ignorés sont ceux de TASK-005 (liens symboliques de fichier sous Windows,
-privilège requis) ; leurs équivalents sont couverts par des jonctions.
+Les 2 tests ignorés sont ceux de TASK-005 (liens symboliques de fichier sous Windows).
 
 ### 3.10 Test fonctionnel réellement exécuté
 
-Repository Git temporaire **sans dossier `tasks/`**, runner lancé depuis `dist/`, web lancé en
-**mode production**, repository enregistré via le vrai formulaire.
+Repository Git temporaire **avec un remote `bare` local**, propre et synchronisé. Runner lancé
+depuis `dist/` avec un **faux Claude Code** ; web lancé en **mode production**.
 
-**120 vérifications, toutes passées** (69 + 18 + 33), réparties en trois phases car le runner
-doit être arrêté puis redémarré au milieu du scénario.
+**145 vérifications, toutes passées**, en cinq phases.
 
-Couvert : backlog vide, création d'une tâche complète, code `TASK-001`, données et listes
-ordonnées en base, création automatique de `tasks/`, contenu du Markdown, ouverture du document
-dans le lecteur, transition `DRAFT` → `READY` sans réécriture du fichier (`mtime` inchangé),
-refus d'un statut réservé, `TASK-002`, filtres du backlog (dont une valeur inconnue et une
-tentative d'injection), statistiques de la page projet.
+- **67** : enregistrement, création d'une tâche, passage à `READY`, page de préparation (prompt,
+  empreinte, commandes autorisées, état Git, version), lancement, `RUN-001`, métadonnées Claude
+  persistées, tâche en `REVIEW`, fichier réellement modifié, `HEAD` inchangé, page de résultat,
+  acceptation du travail.
+- **49** : limite d'utilisation → `BLOCKED` sans heure inventée ; sortie non JSON → `FAILED` ;
+  repository sale → refus avec le run conservé ; branche en avance → refus ; vérification des
+  arguments réellement passés.
+- **6 + 6** : lancement d'une exécution longue rendant la main en moins de huit secondes, puis
+  vérification qu'elle s'est terminée seule et que son résultat a été persisté — **sans qu'aucun
+  navigateur ne reste ouvert**.
+- **11** : runner redémarré pendant une exécution → run et tâche `BLOCKED`,
+  `CLAUDE_RUN_NOT_FOUND`, aucun résultat inventé, page invitant à vérifier le repository.
 
-Puis, **runner arrêté** : deux tâches créées malgré la panne, conservées en base avec
-`documentSyncStatus = ERROR`, message sûr, page de détail et backlog toujours complets, aucun
-fichier écrit.
+Vérifié sur les arguments réellement transmis au processus : prompt arrivé par `stdin`, `cwd`
+égal à la racine, **aucune variable `NOX_*`**, aucun `--dangerously-skip-permissions`, aucune
+clé d'API, `Bash(npm run test)` autorisée, `Bash(git push:*)` refusée.
 
-Puis, **runner redémarré** : reprise réussie, document créé ; adoption d'un fichier identique
-déjà présent, vérifiée par un `mtime` inchangé ; conflit avec un fichier étranger, dont le
-contenu et l'horodatage restent intacts, y compris après une seconde tentative.
-
-Vérifications finales : quatre documents exactement dans `tasks/`, aucun fichier temporaire,
-aucun dossier supplémentaire, quatre numéros uniques, compteur du projet à 5.
-
-Nettoyage : projet de test supprimé de la base, repository temporaire effacé, runner et web
-arrêtés, ports 3000 et 4310 libérés. Les projets `Icon dungeon` et `NOX` sont intacts.
+Nettoyage : projet de test supprimé, repository et remote temporaires effacés, faux Claude
+retiré, runner et web arrêtés, ports libérés. Les projets `Icon dungeon` et `NOX` sont intacts,
+et la base ne contient aucune exécution.
 
 ## 4. Éléments non commencés
 
-- Exécution des commandes de validation par le runner.
-- Génération et prévisualisation du prompt d'une tâche, lancement de Claude Code CLI.
-- Streaming de logs : ni SSE ni WebSocket ; aucun modèle `Run`.
+- Streaming des événements Claude Code, annulation manuelle d'une exécution.
+- Reprise d'une session Claude, prompt correctif automatique.
+- Diff complet dans l'interface ; extraction du résultat des validations.
 - Modification d'une spécification après création, suppression, renumérotation, duplication,
   dépendances entre tâches.
-- Suppression, renommage et déplacement de documents ; création de dossiers hors `tasks/`.
-- Aperçu Markdown rendu, recherche plein texte, historique, diff visuel.
-- Édition, suppression, archivage d'un projet et changement de son statut.
-- Intégration OpenAI, suivi des coûts.
+- Plusieurs agents en parallèle, worktrees, plusieurs comptes Claude.
+- Commits et push automatiques.
+- Intégration OpenAI, suivi des coûts au-delà de ce que Claude Code rapporte.
 - Authentification utilisateur, multi-utilisateur, déploiement.
 
 ## 5. Blocages connus
 
 **Aucun blocage.** Toutes les validations passent.
 
+⚠️ **Une réserve à connaître** : la syntaxe des arguments de Claude Code n'a **pas** pu être
+vérifiée contre un binaire local — `claude` n'est pas installé sur la machine de développement.
+Les drapeaux suivent la forme documentée du mode non interactif ; `buildClaudeArguments`,
+`formatBashRule` et `probeClaudeVersion` sont isolées pour qu'un écart se corrige en un seul
+endroit. Le premier lancement réel le confirmera ou l'infirmera.
+
 ## 6. Dette technique et limites
 
-1. **La modification manuelle d'un `tasks/TASK-xxx.md` ne met pas à jour la tâche.** La base est
-   la source de vérité ; l'interface le rappelle sur chaque page de tâche
-   ([D-073](DECISIONS.md#d-073--la-base-est-la-source-de-vérité-pendant-task-007)).
-2. **Une spécification ne se modifie pas après création.** Seul le statut change. Corriger une
-   faute de frappe dans un objectif impose aujourd'hui de créer une nouvelle tâche.
-3. **La comparaison d'adoption est exacte, au caractère près.** Un fichier écrit par NOX puis
-   normalisé par un outil tiers — fins de ligne, BOM — sera vu comme différent et produira un
-   conflit. C'est le comportement voulu, mais il peut surprendre.
-4. **Un trou dans la numérotation est possible** après un échec survenu entre la réservation et
-   l'enregistrement ([D-076](DECISIONS.md#d-076--les-trous-de-numérotation-sont-acceptés)).
-5. **Aucun dossier ne peut être créé depuis NOX**, à l'exception de `tasks/`.
-6. **Une coupure de courant pendant une création** peut laisser un fichier vide ou partiel, sans
-   possibilité de nettoyage. Le document étant neuf, aucune donnée antérieure n'est en jeu.
-7. **Le remplacement de fichier n'est pas garanti atomique sous Windows** (édition). La garantie
-   réelle est « jamais de contenu partiel »
-   ([D-056](DECISIONS.md#d-056--écriture-par-fichier-temporaire-et-remplacement)).
-8. **`beforeunload` ne couvre pas la navigation interne de Next.js.** Cliquer sur un lien pendant
-   une saisie non enregistrée perd le texte sans avertissement.
-9. **Les documents créés hors des cinq destinations restent invisibles.** Le périmètre
-   d'inspection est figé
-   ([D-041](DECISIONS.md#d-041--emplacements-inspectés-limités-pas-de-parcours-complet)).
-10. **Au-delà de 500 documents, l'inventaire est refusé** plutôt que tronqué.
-11. **Ordre de la catégorie `CORE`** : le tri insensible à la casse place `docs/ARCHITECTURE.md`
-    avant `README.md`.
-12. **Aucun cache.** Chaque affichage réinterroge le runner.
-13. **Pas de test de rendu React.** Couverture assurée par les tests unitaires, le test
+1. **Un redémarrage du runner perd le suivi d'une exécution en cours.** Le registre est en
+   mémoire ([D-094](DECISIONS.md#d-094--registre-en-mémoire-limite-assumée)).
+2. **Aucun streaming** : l'interrogation dit si c'est fini, pas ce que l'agent écrit
+   ([D-095](DECISIONS.md#d-095--interrogation-périodique-plutôt-que-flux-dévénements)).
+3. **Aucune annulation manuelle.** Une exécution partie va au bout, ou atteint son délai.
+4. **Une seule exécution active**, tous projets confondus.
+5. **Le résultat des commandes de validation n'est pas extrait** : il figure dans le compte rendu
+   de l'agent, en texte libre. NOX ne l'interprète pas.
+6. **Le diff complet n'est pas affiché** — seuls les fichiers modifiés et `git diff --stat`.
+7. **Les arguments de Claude Code n'ont pas été vérifiés contre un binaire local** (voir § 5).
+8. **La détection de limite d'utilisation est heuristique.** Prudente par construction : en cas
+   de doute elle retourne une erreur générique
+   ([D-106](DECISIONS.md#d-106--détection-prudente-des-limites-dutilisation)).
+9. **La modification manuelle d'un `tasks/TASK-xxx.md` ne met pas à jour la tâche.**
+10. **Une spécification ne se modifie pas après création.** Seul le statut change.
+11. **Un trou dans la numérotation** des tâches et des exécutions est possible après un échec
+    survenu entre la réservation et l'enregistrement.
+12. **Aucun dossier ne peut être créé depuis NOX**, à l'exception de `tasks/`.
+13. **`beforeunload` ne couvre pas la navigation interne de Next.js.**
+14. **Le périmètre d'inspection des documents est figé** ; 500 documents maximum.
+15. **Pas de test de rendu React.** Couverture assurée par les tests unitaires, le test
     d'intégration réel et les tests fonctionnels HTTP en mode production.
-14. **Deux tests ignorés sous Windows** : liens symboliques de fichier (privilège requis).
-15. Limites héritées : pré-contrôle d'unicité non atomique, jeton en clair dans `.env`, runner
-    unique, indicateur de disponibilité non temps réel, TypeScript 5.9 et ESLint 9 figés,
-    Node ≥ 22.18 requis.
+16. **Deux tests ignorés sous Windows** : liens symboliques de fichier (privilège requis).
+17. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+    clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-008` — Préparation et lancement manuel d'une tâche Claude Code.**
+**`TASK-009` — Streaming des événements et annulation d'une exécution Claude.**
 
-Objectif : transformer une tâche `READY` en prompt Claude Code, la lancer explicitement via le
-runner, enregistrer son exécution et afficher son résultat, sans orchestration OpenAI
-automatique.
+Objectif : afficher progressivement les événements de Claude Code et permettre à l'utilisateur
+d'interrompre proprement une exécution active, sans ajouter encore l'orchestration OpenAI.
 
 ## 8. État Git
 
 - Aucun commit créé par Claude Code.
 - Aucun push effectué.
 - Historique Git non modifié.
-- Commit de départ : `f86abb7` (`feat: add secure markdown editing`).
-- **Le répertoire de travail n'était pas propre** au démarrage de `TASK-007` : les modifications
-  de `TASK-006` n'avaient pas été commitées. Elles ont été laissées intactes ; le diff local
-  contient donc les deux tâches.
-- Les modifications de `TASK-006` et `TASK-007` sont locales, non indexées, disponibles pour
-  review.
+- Commit de départ : `5b95054` (`feat: add markdown creation and structured development tasks`),
+  contenant bien `TASK-006` et `TASK-007`.
+- **Répertoire de travail propre** au démarrage de `TASK-008`.
+- Les modifications de `TASK-008` sont locales, non indexées, disponibles pour review.

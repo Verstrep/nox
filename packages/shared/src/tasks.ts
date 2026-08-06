@@ -82,10 +82,12 @@ export const isTaskDocumentSyncStatus = createStatusGuard(TASK_DOCUMENT_SYNC_STA
 /**
  * Transitions manuelles autorisees, par statut de depart.
  *
- * `RUNNING`, `FAILED` et `REVIEW` sont volontairement sans issue **et** sans
- * entree : ils decrivent le resultat d'une execution de Claude Code, que NOX ne
- * sait pas encore declencher. Les rendre selectionnables a la main permettrait
- * d'annoncer un etat que rien n'a produit.
+ * `RUNNING`, `FAILED` et `REVIEW` restent sans **entree** manuelle : ils
+ * decrivent le resultat d'une execution de Claude Code, et les rendre
+ * selectionnables permettrait d'annoncer un etat que rien n'a produit. Depuis
+ * TASK-008 ils ont en revanche une **sortie** manuelle : une execution peut les
+ * poser, et c'est bien l'utilisateur qui decide ensuite d'accepter le travail
+ * (`REVIEW → COMPLETED`) ou de le remettre en file (`FAILED → READY`).
  *
  * La table est declaree pour **tous** les statuts, sans valeur par defaut : un
  * statut ajoute plus tard ne peut pas passer inapercu, `Record` obligeant a le
@@ -96,12 +98,18 @@ const ALLOWED_TASK_STATUS_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]>
   [TASK_STATUS.READY]: [TASK_STATUS.DRAFT, TASK_STATUS.BLOCKED, TASK_STATUS.COMPLETED],
   [TASK_STATUS.BLOCKED]: [TASK_STATUS.DRAFT, TASK_STATUS.READY],
   [TASK_STATUS.COMPLETED]: [TASK_STATUS.READY],
+  [TASK_STATUS.REVIEW]: [TASK_STATUS.COMPLETED, TASK_STATUS.READY],
+  [TASK_STATUS.FAILED]: [TASK_STATUS.READY, TASK_STATUS.BLOCKED],
+  // Une tache en cours d'execution n'a aucune issue manuelle : c'est la fin du
+  // processus qui la fait sortir de cet etat, jamais un clic.
   [TASK_STATUS.RUNNING]: [],
-  [TASK_STATUS.FAILED]: [],
-  [TASK_STATUS.REVIEW]: [],
 };
 
-/** Statuts reserves aux futures executions : jamais choisis a la main. */
+/**
+ * Statuts que l'utilisateur ne peut jamais **choisir** comme cible.
+ *
+ * Ils sont poses par le cycle de vie d'une execution, et par lui seul.
+ */
 export const RESERVED_TASK_STATUSES: readonly TaskStatus[] = [
   TASK_STATUS.RUNNING,
   TASK_STATUS.FAILED,

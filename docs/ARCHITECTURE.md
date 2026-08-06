@@ -93,6 +93,12 @@ modules dédiés décident.
 - `POST /repositories/tasks/create-document` — authentifiée, crée `tasks/<code>.md` à partir
   d'un code de tâche, en créant le dossier `tasks/` s'il manque. Seule route de NOX autorisée
   à créer un dossier, et seulement celui-là.
+- `POST /claude/preflight` — authentifiée, vérifie **en lecture seule** qu'un lancement est
+  possible : état Git, branche, upstream, avance/retard, disponibilité de Claude Code.
+- `POST /claude/runs/start` — authentifiée, lance Claude Code et répond `202` sans attendre
+  la fin du processus.
+- `POST /claude/runs/status` — authentifiée, retourne l'état d'une exécution depuis le registre
+  en mémoire.
 - Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
 - Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
 - Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
@@ -139,8 +145,8 @@ code spécifique à React ou à Node. Ce package doit rester importable des deux
 **Aujourd'hui** :
 
 - Schéma Prisma et migrations versionnées (`prisma/`).
-- Modèles `Project`, `Task`, `TaskAcceptanceCriterion`, `TaskDocumentReference` et
-  `TaskValidationCommand`.
+- Modèles `Project`, `Task`, `TaskAcceptanceCriterion`, `TaskDocumentReference`,
+  `TaskValidationCommand` et `Run`.
 - Fabrique du client Prisma (`src/client.ts`), avec cache sur `globalThis` pour survivre au
   rechargement de modules de Next.js en développement.
 - Fonctions d'accès concrètes (`src/projects.ts`, `src/tasks.ts`). Elles reçoivent le client en
@@ -151,7 +157,7 @@ code spécifique à React ou à Node. Ce package doit rester importable des deux
 - Résolution du chemin de la base (`src/paths.ts`), ancrée sur la racine du monorepo et non sur
   le répertoire courant.
 
-**À terme** : modèles `Run`, `Conversation`, `Message`.
+**À terme** : modèles `Conversation`, `Message`.
 
 Règles : seul `apps/web` importe ce package. Le runner reste sans état — il exécute et rapporte,
 il n'écrit pas en base. Aucun composant React n'appelle Prisma directement.
@@ -361,7 +367,55 @@ La reprise est **idempotente et sans écrasement** : elle tente toujours la cré
 adopte un fichier dont le contenu correspond exactement au Markdown attendu, et signale un
 conflit dès qu'il diffère. Aucun forçage n'est proposé.
 
-### 5.7 Répartition des validations
+### 5.7 Lancement d'une exécution Claude Code
+
+```text
+Tâche READY
+      ↓
+Prévisualisation déterministe
+      ↓
+Préflight runner
+      ↓
+Run SQLite QUEUED
+      ↓
+Runner lance Claude Code
+      ↓
+Registre mémoire
+      ↓
+Polling Next.js
+      ↓
+Résultat persisté
+      ↓
+Task REVIEW / FAILED / BLOCKED
+```
+
+C'est la première chaîne de NOX dont une étape **dure plus longtemps qu'une requête HTTP**.
+Tout le reste en découle.
+
+- **Le web possède les données métier, le runner possède le processus.** La base connaît le
+  prompt, l'historique et les statuts ; elle ne sait rien d'un PID. Le runner sait qu'un
+  processus tourne ; il n'écrit dans aucune base. Aucun des deux n'empiète sur l'autre.
+- **Le polling réconcilie les deux.** Le navigateur interroge un Route Handler de Next.js
+  toutes les deux secondes ; celui-ci demande l'état au runner et le persiste. Le jeton ne
+  quitte jamais le serveur, et le navigateur ne voit qu'un statut.
+- **Fermer le navigateur n'arrête pas Claude.** Le processus n'est lié à aucune requête : il
+  survit à la page qui l'a lancé, et rouvrir celle-ci suffit à récupérer le résultat.
+- **Redémarrer le runner perd l'exécution en cours.** Le registre est en mémoire — limite
+  assumée pour TASK-008. Le web, ne retrouvant plus une exécution qu'il croyait active, la
+  marque bloquée et le dit ; il ne prétend jamais connaître le résultat d'un processus qu'il a
+  cessé de suivre.
+- **Aucun appel OpenAI, aucune clé d'API Anthropic.** NOX utilise l'authentification déjà
+  configurée dans Claude Code, et retire toutes ses propres variables `NOX_*` de
+  l'environnement de l'enfant.
+- **Un seul run actif**, tous projets confondus. Deux agents simultanés sur la même machine
+  rendraient toute relecture impossible.
+
+Le préflight n'est pas une formalité : sans état de départ propre et synchronisé, le `git diff`
+de fin mélangerait le travail de l'agent à ce qui traînait déjà. Il compare la branche à la
+**référence upstream locale**, sans `fetch` — NOX dit donc ce que Git sait, jamais ce que le
+serveur distant contient.
+
+### 5.8 Répartition des validations
 
 La distinction est structurante et vaut d'être explicite :
 
@@ -376,6 +430,10 @@ La distinction est structurante et vaut d'être explicite :
 | Quel est le chemin final d'un nouveau document ? | **Le web** | Il seul connaît la destination choisie ; il la valide et recompose le chemin. |
 | Quel est le chemin du document d'une tâche ? | **Le runner** | Il le déduit du code ; le web n'envoie aucun chemin. |
 | Quel numéro porte cette tâche ? Cette transition est-elle permise ? | **Le web** | Règles métier, tranchées en base ; le runner reste sans état. |
+| Le repository est-il propre, synchronisé, sur une branche ? | **Le runner** | Seul lui peut interroger Git. |
+| Claude Code est-il installé, et dans quelle version ? | **Le runner** | Seul lui voit les exécutables de la machine. |
+| Cette commande de validation peut-elle être autorisée ? | **Les deux** | Le web pour l'afficher avant lancement, le runner pour trancher. Une seule fonction, dans `@nox/shared`. |
+| Cette tâche est-elle lançable ? Quel prompt envoyer ? | **Le web** | Règles métier ; le prompt est régénéré depuis la base, jamais reçu. |
 | Le nom est-il renseigné ? La description est-elle trop longue ? | **Le web** | Règles métier, sans rapport avec la machine. |
 | Ce repository est-il déjà enregistré ? | **Le web** | Seul lui voit la base ; le runner reste sans état. |
 

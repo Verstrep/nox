@@ -20,18 +20,25 @@ import {
   NOX_VERSION,
   RUNNER_ERROR,
   RUNNER_SERVICE_NAME,
+  RUN_STATUS,
+  parseClaudePreflightRequest,
+  parseClaudeRunStatusRequest,
   parseCreateProjectDocumentRequest,
   parseCreateTaskDocumentRequest,
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseResolveRepositoryRequest,
+  parseStartClaudeRunRequest,
   parseUpdateProjectDocumentRequest,
+  type ClaudePreflightSuccess,
+  type ClaudeRunStatusSuccess,
   type CreateProjectDocumentSuccess,
   type CreateTaskDocumentSuccess,
   type ListProjectDocumentsSuccess,
   type ReadProjectDocumentSuccess,
   type ResolveRepositorySuccess,
   type RunnerHealthResponse,
+  type StartClaudeRunSuccess,
   type UpdateProjectDocumentSuccess,
 } from "@nox/shared";
 
@@ -54,6 +61,9 @@ import {
   createTaskDocument,
   type CreateTaskDocumentResult,
 } from "./repositories/tasks/create-task-document.ts";
+import { runPreflight, type PreflightResult } from "./claude/preflight.ts";
+import { ClaudeRunRegistry } from "./claude/registry.ts";
+import { startClaudeRun, type StartRunRequest, type StartRunResult } from "./claude/runs.ts";
 
 /** Fonctions remplacables dans les tests. */
 export type RunnerDependencies = {
@@ -76,6 +86,15 @@ export type RunnerDependencies = {
     taskCode: string,
     content: string,
   ) => Promise<CreateTaskDocumentResult>;
+  claudePreflight?: (repositoryPath: string) => Promise<PreflightResult>;
+  startClaudeRun?: (request: StartRunRequest) => Promise<StartRunResult>;
+  /**
+   * Registre des executions.
+   *
+   * Injectable pour que les tests disposent d'une instance neuve : la contrainte
+   * « un seul run actif » serait sinon partagee entre deux tests.
+   */
+  runRegistry?: ClaudeRunRegistry;
   /** Journalisation ; remplacee par une fonction muette dans les tests. */
   log?: (message: string) => void;
 };
@@ -87,6 +106,9 @@ const DOCUMENTS_READ_ROUTE = "/repositories/documents/read";
 const DOCUMENTS_UPDATE_ROUTE = "/repositories/documents/update";
 const DOCUMENTS_CREATE_ROUTE = "/repositories/documents/create";
 const TASKS_CREATE_DOCUMENT_ROUTE = "/repositories/tasks/create-document";
+const CLAUDE_PREFLIGHT_ROUTE = "/claude/preflight";
+const CLAUDE_RUNS_START_ROUTE = "/claude/runs/start";
+const CLAUDE_RUNS_STATUS_ROUTE = "/claude/runs/status";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -175,6 +197,15 @@ export function createRunnerServer(
     dependencies.createTaskDocument ??
     ((repositoryPath: string, taskCode: string, content: string) =>
       createTaskDocument(repositoryPath, taskCode, content));
+  // Le registre appartient au serveur : il vit aussi longtemps que le processus,
+  // et pas une requete de plus.
+  const registry = dependencies.runRegistry ?? new ClaudeRunRegistry();
+  const preflight =
+    dependencies.claudePreflight ??
+    ((repositoryPath: string) => runPreflight(repositoryPath, config.claude));
+  const startRun =
+    dependencies.startClaudeRun ??
+    ((request: StartRunRequest) => startClaudeRun(request, config.claude, registry));
   const log = dependencies.log ?? ((message: string) => { console.log(message); });
 
   /** Journalise un refus metier : le code seul, jamais le chemin recu. */
@@ -365,6 +396,103 @@ export function createRunnerServer(
 
         const payload: CreateTaskDocumentSuccess = { ok: true, document: result.document };
         sendJson(response, 201, payload, requestId);
+        return;
+      }
+
+      if (pathname === CLAUDE_PREFLIGHT_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, CLAUDE_PREFLIGHT_ROUTE, log,
+          parseClaudePreflightRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await preflight(parsed.repositoryPath);
+        if (!result.ok) {
+          logRefusal(requestId, CLAUDE_PREFLIGHT_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        // Aucun chemin absolu dans la reponse : branche, upstream et `HEAD`
+        // suffisent a l'affichage, et le chemin est deja connu de l'appelant.
+        const payload: ClaudePreflightSuccess = {
+          ok: true,
+          claude: { available: true, version: result.claudeVersion },
+          git: result.git,
+        };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === CLAUDE_RUNS_START_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        // Le corps transporte un prompt entier : meme limite que les routes
+        // d'ecriture de documents.
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, CLAUDE_RUNS_START_ROUTE, log,
+          parseStartClaudeRunRequest, MAX_DOCUMENT_BODY_BYTES,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await startRun(parsed);
+        if (!result.ok) {
+          logRefusal(requestId, CLAUDE_RUNS_START_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        // `202` et non `200` : la demande est acceptee, le travail commence,
+        // mais rien n'est termine. Le resultat s'obtient par interrogation.
+        const payload: StartClaudeRunSuccess = {
+          ok: true,
+          run: {
+            runId: parsed.runId,
+            status: RUN_STATUS.RUNNING,
+            startedAt: result.startedAt.toISOString(),
+          },
+        };
+        sendJson(response, 202, payload, requestId);
+        return;
+      }
+
+      if (pathname === CLAUDE_RUNS_STATUS_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, CLAUDE_RUNS_STATUS_ROUTE, log,
+          parseClaudeRunStatusRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const snapshot = registry.snapshot(parsed.runId);
+        if (snapshot === null) {
+          // Cas normal apres un redemarrage du runner : le web en tirera la
+          // conclusion qui s'impose, sans que NOX pretende connaitre l'issue.
+          logRefusal(requestId, CLAUDE_RUNS_STATUS_ROUTE, RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND);
+          sendRunnerError(response, RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND, requestId);
+          return;
+        }
+
+        const payload: ClaudeRunStatusSuccess = { ok: true, run: snapshot };
+        sendJson(response, 200, payload, requestId);
         return;
       }
 

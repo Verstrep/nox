@@ -138,6 +138,51 @@ export const RUNNER_ERROR = {
   /** La creation du dossier `tasks/` a echoue : droits, disque, erreur systeme. */
   TASKS_DIRECTORY_CREATION_FAILED: "TASKS_DIRECTORY_CREATION_FAILED",
 
+  // --- Preflight Git avant execution ----------------------------------------
+  // Ces refus protegent la relecture du travail de Claude Code : sans un
+  // repository propre et synchronise au depart, il devient impossible de dire
+  // ce que l'agent a change et ce qui trainait deja.
+
+  /** L'executable Claude Code est introuvable ou ne repond pas. */
+  CLAUDE_NOT_AVAILABLE: "CLAUDE_NOT_AVAILABLE",
+  /** Le repository contient des modifications non commitees. */
+  REPOSITORY_DIRTY: "REPOSITORY_DIRTY",
+  /** `HEAD` est detache : aucune branche courante. */
+  GIT_DETACHED_HEAD: "GIT_DETACHED_HEAD",
+  /** La branche courante n'a pas d'upstream configure. */
+  GIT_UPSTREAM_MISSING: "GIT_UPSTREAM_MISSING",
+  /** La branche locale est en avance ou en retard sur son upstream connu. */
+  GIT_NOT_SYNCHRONIZED: "GIT_NOT_SYNCHRONIZED",
+  /** Une commande Git du preflight a echoue ou expire. */
+  GIT_PREFLIGHT_FAILED: "GIT_PREFLIGHT_FAILED",
+
+  // --- Execution de Claude Code ---------------------------------------------
+
+  /** Une execution Claude est deja active : la V1 n'en autorise qu'une. */
+  CLAUDE_RUN_ALREADY_ACTIVE: "CLAUDE_RUN_ALREADY_ACTIVE",
+  /** Le runner ne connait pas cette execution — souvent apres un redemarrage. */
+  CLAUDE_RUN_NOT_FOUND: "CLAUDE_RUN_NOT_FOUND",
+  /** L'identifiant d'execution n'a pas la forme attendue. */
+  CLAUDE_RUN_ID_INVALID: "CLAUDE_RUN_ID_INVALID",
+  /** Le prompt est vide, trop volumineux, ou contient un octet interdit. */
+  CLAUDE_PROMPT_INVALID: "CLAUDE_PROMPT_INVALID",
+  /** Une commande de validation ne peut pas etre autorisee sans risque. */
+  CLAUDE_COMMAND_NOT_ALLOWED: "CLAUDE_COMMAND_NOT_ALLOWED",
+  /** Le processus Claude Code n'a pas pu etre lance. */
+  CLAUDE_START_FAILED: "CLAUDE_START_FAILED",
+  /** Le processus s'est termine anormalement. */
+  CLAUDE_PROCESS_FAILED: "CLAUDE_PROCESS_FAILED",
+  /** La sortie de Claude Code n'est pas le JSON attendu. */
+  CLAUDE_OUTPUT_INVALID: "CLAUDE_OUTPUT_INVALID",
+  /** L'execution a depasse le delai maximal et a ete arretee. */
+  CLAUDE_TIMEOUT: "CLAUDE_TIMEOUT",
+  /** Une limite d'utilisation Claude a ete detectee avec une confiance suffisante. */
+  CLAUDE_LIMIT_REACHED: "CLAUDE_LIMIT_REACHED",
+  /** `HEAD` a change entre le preflight et le lancement. */
+  GIT_HEAD_CHANGED: "GIT_HEAD_CHANGED",
+  /** L'execution a viole les regles Git : commit, changement de branche, sortie du perimetre. */
+  GIT_POLICY_VIOLATION: "GIT_POLICY_VIOLATION",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

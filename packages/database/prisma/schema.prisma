@@ -82,6 +82,12 @@ model Task {
   documentSyncStatus String
   documentSyncError  String?
 
+  /// Prochain numero d'execution a attribuer pour cette tache.
+  ///
+  /// Meme regle que `Project.nextTaskSequence` : il ne recule jamais, et un
+  /// trou vaut mieux qu'un `RUN-002` qui designerait deux executions.
+  nextRunSequence Int @default(1)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -89,9 +95,68 @@ model Task {
   acceptanceCriteria TaskAcceptanceCriterion[]
   documentReferences TaskDocumentReference[]
   validationCommands TaskValidationCommand[]
+  runs               Run[]
 
   @@unique([projectId, sequence])
   @@index([projectId, status])
+}
+
+/// Une execution : un passage de Claude Code sur une tache.
+///
+/// Le prompt est conserve **exactement** tel qu'il a ete envoye, avec son
+/// empreinte. C'est ce qui rend une execution relisible des mois plus tard :
+/// la specification de la tache aura pu evoluer, le prompt reellement envoye,
+/// non.
+///
+/// Les champs Claude et Git sont facultatifs : ils n'existent qu'une fois le
+/// processus termine, et certains ne sont pas garantis par toutes les versions
+/// de Claude Code. Aucune valeur n'est inventee pour combler un manque.
+model Run {
+  id     String @id @default(cuid())
+  taskId String
+
+  /// Numero attribue a la creation, unique dans la tache et jamais modifie.
+  sequence Int
+
+  status String
+
+  prompt       String
+  promptSha256 String
+
+  /// Identifiant transmis au runner ; cle de son registre en memoire.
+  runnerRunId String
+
+  claudeSessionId String?
+  resultText      String?
+  stderrTail      String?
+
+  exitCode     Int?
+  errorCode    String?
+  errorMessage String?
+
+  durationMs      Int?
+  durationApiMs   Int?
+  numTurns        Int?
+  /// Cout rapporte par Claude Code. Jamais calcule ni estime par NOX.
+  reportedCostUsd Float?
+
+  gitBranch     String?
+  gitUpstream   String?
+  gitHeadBefore String?
+  gitHeadAfter  String?
+  gitDiffStat   String?
+  /// Chemins relatifs des fichiers modifies, un par ligne.
+  changedFiles  String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, sequence])
+  @@index([taskId, status])
 }
 
 /// Un critere d'acceptation, a la position ou l'utilisateur l'a saisi.

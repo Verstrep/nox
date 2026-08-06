@@ -11,17 +11,25 @@
  */
 
 import {
+  isClaudePreflightSuccess,
+  isClaudeRunStatusSuccess,
   isCreateProjectDocumentSuccess,
   isCreateTaskDocumentSuccess,
   isListProjectDocumentsSuccess,
+  isStartClaudeRunSuccess,
   isReadProjectDocumentSuccess,
   isResolveRepositorySuccess,
   isRunnerErrorResponse,
   isRunnerHealthResponse,
   isUpdateProjectDocumentSuccess,
+  type ClaudePreflightRequest,
+  type ClaudePreflightSuccess,
+  type ClaudeRunSnapshot,
+  type ClaudeRunStatusRequest,
   type CreateProjectDocumentRequest,
   type CreateTaskDocumentRequest,
   type ListProjectDocumentsRequest,
+  type StartClaudeRunRequest,
   type ProjectDocumentContent,
   type ProjectDocumentSummary,
   type ReadProjectDocumentRequest,
@@ -314,6 +322,77 @@ export function createProjectDocument(
     (value) => (value as { document: ProjectDocumentContent }).document,
     options,
     201,
+  );
+}
+
+/**
+ * Verifie qu'un repository est pret a recevoir une execution Claude Code.
+ *
+ * Strictement en lecture : cette route ne modifie rien, ne touche pas au reseau,
+ * et ne consomme aucun quota Claude — elle se contente d'interroger Git et de
+ * demander sa version a l'executable.
+ */
+export function claudePreflight(
+  repositoryPath: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ClaudePreflightSuccess>> {
+  const payload: ClaudePreflightRequest = { repositoryPath };
+
+  return postAuthenticated(
+    "/claude/preflight",
+    "claude/preflight",
+    payload,
+    isClaudePreflightSuccess,
+    (value) => value as ClaudePreflightSuccess,
+    options,
+  );
+}
+
+/**
+ * Lance une execution Claude Code.
+ *
+ * Le runner repond `202` sans attendre la fin du processus : c'est ce qui permet
+ * a l'utilisateur de fermer son navigateur sans interrompre l'execution.
+ *
+ * Rien de ce que le navigateur envoie n'atteint cette fonction : le prompt est
+ * regenere cote serveur, les commandes sont relues en base, et `repositoryPath`
+ * vient du projet.
+ */
+export function startClaudeRun(
+  request: StartClaudeRunRequest,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<{ startedAt: string }>> {
+  return postAuthenticated(
+    "/claude/runs/start",
+    "claude/runs/start",
+    request,
+    isStartClaudeRunSuccess,
+    (value) => ({ startedAt: (value as { run: { startedAt: string } }).run.startedAt }),
+    options,
+    202,
+  );
+}
+
+/**
+ * Interroge l'etat d'une execution.
+ *
+ * Appelee uniquement depuis le serveur : le navigateur passe par un Route
+ * Handler de Next.js, jamais directement par le runner — le jeton ne doit pas
+ * quitter le serveur.
+ */
+export function fetchClaudeRunStatus(
+  runId: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ClaudeRunSnapshot>> {
+  const payload: ClaudeRunStatusRequest = { runId };
+
+  return postAuthenticated(
+    "/claude/runs/status",
+    "claude/runs/status",
+    payload,
+    isClaudeRunStatusSuccess,
+    (value) => (value as { run: ClaudeRunSnapshot }).run,
+    options,
   );
 }
 

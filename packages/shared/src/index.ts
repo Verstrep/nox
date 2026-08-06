@@ -70,6 +70,64 @@ export type {
 export { renderTaskMarkdown } from "./task-markdown.js";
 
 export {
+  FINAL_RUN_STATUSES,
+  RUN_CODE_PREFIX,
+  RUN_LIMITS,
+  boundTail,
+  boundText,
+  canAutomateTaskStatusTransition,
+  formatRunCode,
+  isFinalRunStatus,
+  isRunnerRunId,
+  taskStatusForRunOutcome,
+} from "./runs.js";
+
+export type {
+  DevelopmentRunDetail,
+  DevelopmentRunSummary,
+  RunClaudeReport,
+  RunGitState,
+} from "./runs.js";
+
+export {
+  CLAUDE_BASE_ALLOWED_TOOLS,
+  CLAUDE_DENIED_COMMANDS,
+  CLAUDE_GIT_READ_ONLY_COMMANDS,
+  MAX_VALIDATION_COMMAND_LENGTH,
+  buildClaudeToolPolicy,
+  checkValidationCommand,
+  formatBashRule,
+} from "./claude-commands.js";
+
+export type {
+  ClaudeToolPolicy,
+  ClaudeToolPolicyResult,
+  CommandRefusal,
+} from "./claude-commands.js";
+
+export { renderClaudeExecutionPrompt } from "./claude-prompt.js";
+
+export {
+  isClaudePreflightSuccess,
+  isClaudeRunStatusSuccess,
+  isStartClaudeRunSuccess,
+  parseClaudePreflightRequest,
+  parseClaudeRunStatusRequest,
+  parseStartClaudeRunRequest,
+} from "./claude.js";
+
+export type {
+  ClaudePreflightGit,
+  ClaudePreflightRequest,
+  ClaudePreflightSuccess,
+  ClaudeRunSnapshot,
+  ClaudeRunStatusRequest,
+  ClaudeRunStatusSuccess,
+  StartClaudeRunRequest,
+  StartClaudeRunSuccess,
+} from "./claude.js";
+
+export {
   isCreateTaskDocumentSuccess,
   parseCreateTaskDocumentRequest,
 } from "./task-documents.js";

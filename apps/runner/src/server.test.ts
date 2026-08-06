@@ -10,11 +10,21 @@ import type { ListDocumentsResult } from "./repositories/documents/list-document
 import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
 import type { CreateDocumentResult } from "./repositories/documents/create-document.ts";
 import type { CreateTaskDocumentResult } from "./repositories/tasks/create-task-document.ts";
+import type { PreflightResult } from "./claude/preflight.ts";
+import { ClaudeRunRegistry } from "./claude/registry.ts";
+import type { StartRunRequest, StartRunResult } from "./claude/runs.ts";
 import type { UpdateDocumentResult } from "./repositories/documents/update-document.ts";
 import type { ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
 
 const TOKEN = "jeton-de-test-0123456789abcdef";
-const CONFIG: RunnerConfig = { host: "127.0.0.1", port: 0, token: TOKEN };
+const CONFIG: RunnerConfig = {
+  host: "127.0.0.1",
+  port: 0,
+  token: TOKEN,
+  // Aucun processus Claude n'est lance par ces tests : les routes concernees
+  // recoivent des doublures.
+  claude: { executable: "claude-inexistant", maxTurns: 10, timeoutMinutes: 1 },
+};
 const CANONICAL_PATH = "D:\\Projets\\depot-fictif";
 
 const SAMPLE_DOCUMENT = {
@@ -204,12 +214,73 @@ function fakeCreateTaskDocument(
   });
 }
 
+const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+/**
+ * Preflight simule : aucune commande Git n'est lancee par les tests du serveur,
+ * et aucune version de Claude Code n'est cherchee. Le comportement reel est
+ * couvert par `claude/preflight.test.ts`, sur de vrais repositories.
+ */
+function fakePreflight(repositoryPath: string): Promise<PreflightResult> {
+  const refusals: Record<string, string> = {
+    sale: "REPOSITORY_DIRTY",
+    detache: "GIT_DETACHED_HEAD",
+    "sans-upstream": "GIT_UPSTREAM_MISSING",
+    desynchronise: "GIT_NOT_SYNCHRONIZED",
+    "sans-claude": "CLAUDE_NOT_AVAILABLE",
+  };
+
+  const refusal = refusals[repositoryPath];
+  if (refusal !== undefined) {
+    return Promise.resolve({ ok: false, code: refusal as never });
+  }
+
+  return Promise.resolve({
+    ok: true,
+    claudeVersion: "9.9.9",
+    git: {
+      clean: true,
+      branch: "main",
+      upstream: "origin/main",
+      head: "a".repeat(40),
+      ahead: 0,
+      behind: 0,
+    },
+  });
+}
+
+/** Demandes de lancement recues, pour verifier le passage de relais. */
+const receivedStartCalls: StartRunRequest[] = [];
+
+/** Lancement simule : aucun processus n'est cree par les tests du serveur. */
+function fakeStartRun(request: StartRunRequest): Promise<StartRunResult> {
+  receivedStartCalls.push(request);
+
+  if (request.validationCommands.some((command) => command.startsWith("rm "))) {
+    return Promise.resolve({ ok: false, code: "CLAUDE_COMMAND_NOT_ALLOWED" as never });
+  }
+  if (request.repositoryPath === "occupe") {
+    return Promise.resolve({ ok: false, code: "CLAUDE_RUN_ALREADY_ACTIVE" as never });
+  }
+  if (request.expectedGitHead !== "a".repeat(40)) {
+    return Promise.resolve({ ok: false, code: "GIT_HEAD_CHANGED" as never });
+  }
+
+  return Promise.resolve({ ok: true, startedAt: new Date("2026-08-06T10:00:00.000Z") });
+}
+
+/** Registre neuf : la contrainte « un seul run actif » ne doit pas fuir entre tests. */
+const testRegistry = new ClaudeRunRegistry();
+
 let server: Server;
 let baseUrl: string;
 
 before(async () => {
   // Le serveur est cree sans port fixe : le systeme en attribue un libre.
   server = createRunnerServer(CONFIG, {
+    claudePreflight: fakePreflight,
+    startClaudeRun: fakeStartRun,
+    runRegistry: testRegistry,
     resolveRepository: fakeResolve,
     listDocuments: fakeList,
     readDocument: fakeRead,
@@ -1126,6 +1197,266 @@ describe("POST /repositories/tasks/create-document", () => {
     const response = await call("/repositories/tasks/create-document", {
       ...authorized,
       body: body({ taskCode: "TASK-999" }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+  });
+});
+
+describe("POST /claude/preflight", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({ repositoryPath: "D:Projetsdepot", ...overrides });
+  }
+
+  it("repond 200 avec l'etat Git et la version de Claude Code", async () => {
+    const response = await call("/claude/preflight", { ...authorized, body: body() });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      ok: true,
+      claude: { available: true, version: "9.9.9" },
+      git: {
+        clean: true,
+        branch: "main",
+        upstream: "origin/main",
+        head: "a".repeat(40),
+        ahead: 0,
+        behind: 0,
+      },
+    });
+  });
+
+  it("ne renvoie aucun chemin absolu", async () => {
+    const response = await call("/claude/preflight", { ...authorized, body: body() });
+
+    assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+    assert.equal(response.text.includes(TOKEN), false);
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/claude/preflight", { method: "POST", token: null, body: body() });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+  });
+
+  it("refuse une methode autre que POST", async () => {
+    const response = await call("/claude/preflight", { method: "GET", token: `Bearer ${TOKEN}` });
+
+    assert.equal(response.status, 405);
+  });
+
+  it("traduit un repository sale en 422", async () => {
+    const response = await call("/claude/preflight", {
+      ...authorized,
+      body: body({ repositoryPath: "sale" }),
+    });
+
+    assert.equal(response.status, 422);
+    assert.equal(errorCode(response.json), "REPOSITORY_DIRTY");
+  });
+
+  it("traduit les refus Git structurels en 422", async () => {
+    for (const [repositoryPath, code] of [
+      ["detache", "GIT_DETACHED_HEAD"],
+      ["sans-upstream", "GIT_UPSTREAM_MISSING"],
+      ["desynchronise", "GIT_NOT_SYNCHRONIZED"],
+    ] as const) {
+      const response = await call("/claude/preflight", {
+        ...authorized,
+        body: body({ repositoryPath }),
+      });
+
+      assert.equal(response.status, 422, repositoryPath);
+      assert.equal(errorCode(response.json), code);
+    }
+  });
+
+  it("traduit une absence de Claude Code en 503", async () => {
+    const response = await call("/claude/preflight", {
+      ...authorized,
+      body: body({ repositoryPath: "sans-claude" }),
+    });
+
+    assert.equal(response.status, 503);
+    assert.equal(errorCode(response.json), "CLAUDE_NOT_AVAILABLE");
+  });
+
+  it("refuse un corps mal forme", async () => {
+    const response = await call("/claude/preflight", { ...authorized, body: "{}" });
+
+    assert.equal(response.status, 400);
+    assert.equal(errorCode(response.json), "INVALID_REQUEST");
+  });
+});
+
+describe("POST /claude/runs/start", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      runId: RUN_ID,
+      repositoryPath: "D:Projetsdepot",
+      prompt: "Prompt d'execution.",
+      expectedGitHead: "a".repeat(40),
+      validationCommands: ["npm run test"],
+      ...overrides,
+    });
+  }
+
+  it("repond 202 : la demande est acceptee, rien n'est termine", async () => {
+    const response = await call("/claude/runs/start", { ...authorized, body: body() });
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(response.json, {
+      ok: true,
+      run: { runId: RUN_ID, status: "RUNNING", startedAt: "2026-08-06T10:00:00.000Z" },
+    });
+  });
+
+  it("transmet la demande complete a la couche metier", async () => {
+    receivedStartCalls.length = 0;
+    await call("/claude/runs/start", { ...authorized, body: body() });
+
+    assert.equal(receivedStartCalls.length, 1);
+    assert.equal(receivedStartCalls[0]?.runId, RUN_ID);
+    assert.equal(receivedStartCalls[0]?.prompt, "Prompt d'execution.");
+    assert.deepEqual(receivedStartCalls[0]?.validationCommands, ["npm run test"]);
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/claude/runs/start", { method: "POST", token: null, body: body() });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("traduit un run deja actif en 409", async () => {
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: body({ repositoryPath: "occupe" }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "CLAUDE_RUN_ALREADY_ACTIVE");
+  });
+
+  it("traduit un HEAD modifie en 409", async () => {
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: body({ expectedGitHead: "b".repeat(40) }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "GIT_HEAD_CHANGED");
+  });
+
+  it("traduit une commande refusee en 422", async () => {
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: body({ validationCommands: ["rm -rf dist"] }),
+    });
+
+    assert.equal(response.status, 422);
+    assert.equal(errorCode(response.json), "CLAUDE_COMMAND_NOT_ALLOWED");
+  });
+
+  it("refuse un corps auquel il manque un champ", async () => {
+    for (const raw of [
+      JSON.stringify({ runId: RUN_ID, prompt: "x", expectedGitHead: "y", validationCommands: [] }),
+      JSON.stringify({
+        runId: RUN_ID,
+        repositoryPath: "x",
+        expectedGitHead: "y",
+        validationCommands: [],
+      }),
+      JSON.stringify({
+        runId: RUN_ID,
+        repositoryPath: "x",
+        prompt: "y",
+        expectedGitHead: "z",
+        validationCommands: [1],
+      }),
+    ]) {
+      const response = await call("/claude/runs/start", { ...authorized, body: raw });
+      assert.equal(response.status, 400);
+      assert.equal(errorCode(response.json), "INVALID_REQUEST");
+    }
+  });
+
+  it("refuse un corps depassant la limite", async () => {
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: body({ prompt: "x".repeat(MAX_DOCUMENT_BODY_BYTES + 1024) }),
+    });
+
+    assert.equal(response.status, 413);
+    assert.equal(errorCode(response.json), "PAYLOAD_TOO_LARGE");
+  });
+});
+
+describe("POST /claude/runs/status", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+
+  it("retourne l'etat d'une execution connue", async () => {
+    testRegistry.register(RUN_ID);
+    testRegistry.start(RUN_ID, new Date("2026-08-06T10:00:00.000Z"));
+
+    const response = await call("/claude/runs/status", {
+      ...authorized,
+      body: JSON.stringify({ runId: RUN_ID }),
+    });
+
+    assert.equal(response.status, 200);
+    const payload = response.json as { run?: { status?: string; runId?: string } };
+    assert.equal(payload.run?.status, "RUNNING");
+    assert.equal(payload.run?.runId, RUN_ID);
+  });
+
+  it("retourne 404 pour une execution inconnue du registre", async () => {
+    const response = await call("/claude/runs/status", {
+      ...authorized,
+      body: JSON.stringify({ runId: "3f2504e0-4f89-41d3-9a0c-999999999999" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "CLAUDE_RUN_NOT_FOUND");
+  });
+
+  it("conserve le resultat final apres la fin de l'execution", async () => {
+    const finished = "3f2504e0-4f89-41d3-9a0c-0305e82c3399";
+    // Le registre n'accepte qu'une execution active : celle du test precedent
+    // doit d'abord etre conclue.
+    testRegistry.finish(RUN_ID, "COMPLETED");
+    testRegistry.register(finished);
+    testRegistry.finish(finished, "COMPLETED", { resultText: "Fini.", exitCode: 0 });
+
+    const response = await call("/claude/runs/status", {
+      ...authorized,
+      body: JSON.stringify({ runId: finished }),
+    });
+
+    const payload = response.json as { run?: { status?: string; resultText?: string } };
+    assert.equal(payload.run?.status, "COMPLETED");
+    assert.equal(payload.run?.resultText, "Fini.");
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/claude/runs/status", {
+      method: "POST",
+      token: null,
+      body: JSON.stringify({ runId: RUN_ID }),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu", async () => {
+    const response = await call("/claude/runs/status", {
+      ...authorized,
+      body: JSON.stringify({ runId: RUN_ID }),
     });
 
     assert.equal(response.text.includes(TOKEN), false);
