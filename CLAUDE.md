@@ -126,8 +126,24 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 - **Aucun fichier hors du repository ne peut être lu.** Le confinement se vérifie sur les chemins
   réels, jamais par comparaison de préfixe de chaîne.
 - **Aucune écriture dans un repository sans tâche qui la demande explicitement.** Depuis
-  TASK-005, seule la **modification d'un document Markdown existant** est autorisée : ni
-  création, ni suppression, ni renommage, ni déplacement sans instruction dédiée.
+  TASK-007, seules la **modification** d'un document Markdown, sa **création** et celle du
+  document d'une tâche sont autorisées : ni suppression, ni renommage, ni déplacement sans
+  instruction dédiée.
+- **Toute création de fichier passe par une primitive exclusive** (`open` en `wx`). Un
+  enchaînement `exists()` puis `writeFile()` n'est jamais une garantie : le fichier peut
+  apparaître entre les deux.
+- **Aucune opération de création ne peut écraser un fichier existant**, quelles que soient les
+  circonstances.
+- **Aucun dossier n'est créé** sans tâche qui le demande. Un parent manquant est une erreur,
+  pas une invitation. Seule exception, ouverte par TASK-007 : le dossier `tasks/` à la racine,
+  créé par la route des documents de tâche et par elle seule.
+- **Les parents d'un chemin de création sont contrôlés et confinés** : chacun doit exister,
+  être un vrai dossier, ne pas être un lien, et rester dans le repository.
+- **Les noms de fichiers créés sont validés pour rester portables** : ni caractère interdit
+  sous Windows, ni nom réservé, ni espace ou point final. Le nom saisi n'est jamais transformé
+  en silence.
+- **Les chemins finaux sont reconstruits côté serveur** à partir d'une destination validée. Le
+  navigateur n'envoie jamais un chemin complet, ni un préfixe.
 - **Aucune écriture sans contrôle de confinement.** Une écriture suit exactement le même
   chemin de validation qu'une lecture : filtrage syntaxique, puis vérification après
   `realpath`. Aucune seconde logique de validation de chemin ne doit exister.
@@ -142,6 +158,25 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   survivre — ni en production, ni après les tests.
 - **Aucun chemin absolu reçu du navigateur.** Le chemin d'un repository se relit toujours en
   base à partir de l'identifiant du projet, jamais depuis un champ de formulaire.
+- **Une tâche possède un code immuable.** `sequence` est fixé à la création et ne change
+  jamais ; le code affiché (`TASK-001`) s'en dérive et n'est pas stocké.
+- **Le code d'une tâche n'est jamais dérivé d'un comptage.** Il vient du compteur
+  `Project.nextTaskSequence`, incrémenté de façon atomique. `count() + 1` réattribuerait un
+  numéro dès qu'une tâche disparaîtrait. Un trou dans la numérotation est acceptable ; un
+  identifiant réutilisé ne l'est pas.
+- **Le document d'une tâche a un chemin stable** : `tasks/<code>.md`, sans le titre. Le titre
+  changera ; le chemin, non.
+- **Aucun fichier existant n'est écrasé pendant une synchronisation.** Un document identique
+  au Markdown attendu est adopté ; un document différent produit un conflit, jamais un
+  remplacement, et aucun bouton de forçage n'est ajouté.
+- **Une panne du runner ne supprime jamais une tâche.** L'enregistrement en base et l'écriture
+  du document sont deux étapes distinctes : la seconde peut échouer et être reprise.
+- **Toute transition de statut passe par `canTransitionTaskStatus`.** Les statuts `RUNNING`,
+  `FAILED` et `REVIEW` sont réservés aux futures exécutions et ne se posent jamais à la main.
+- **Les commandes de validation enregistrées ne sont jamais exécutées** sans une tâche
+  ultérieure qui l'autorise explicitement. Elles sont du texte, pas un ordre.
+- **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
+  documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code
   d'erreur dans `apps/web` ou `apps/runner`.
 - `packages/shared` n'importe ni Node, ni React, ni aucune dépendance runtime ;

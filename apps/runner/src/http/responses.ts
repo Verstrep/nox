@@ -65,6 +65,24 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   [RUNNER_ERROR.DOCUMENT_TEMPORARY_FILE_FAILED]: 500,
   [RUNNER_ERROR.DOCUMENT_WRITE_FAILED]: 500,
 
+  // Un fichier deja present est un conflit, au meme titre qu'une revision
+  // perimee : la demande est valide, c'est l'etat du disque qui s'y oppose.
+  [RUNNER_ERROR.DOCUMENT_ALREADY_EXISTS]: 409,
+  [RUNNER_ERROR.DOCUMENT_PARENT_NOT_FOUND]: 404,
+  [RUNNER_ERROR.DOCUMENT_PARENT_NOT_DIRECTORY]: 422,
+  [RUNNER_ERROR.DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED]: 403,
+  [RUNNER_ERROR.DOCUMENT_NAME_NOT_PORTABLE]: 400,
+  [RUNNER_ERROR.DOCUMENT_CREATION_FAILED]: 500,
+
+  // Le code d'une tache determine un nom de fichier : une forme invalide est un
+  // desaccord de contrat, pas un etat de la machine.
+  [RUNNER_ERROR.TASK_CODE_INVALID]: 400,
+  [RUNNER_ERROR.TASKS_DIRECTORY_NOT_DIRECTORY]: 422,
+  // Meme famille que les autres refus deliberes : le runner sait ou pointe la
+  // demande et refuse d'y ecrire.
+  [RUNNER_ERROR.TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED]: 403,
+  [RUNNER_ERROR.TASKS_DIRECTORY_CREATION_FAILED]: 500,
+
   [RUNNER_ERROR.INTERNAL_ERROR]: 500,
 };
 

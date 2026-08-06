@@ -20,10 +20,14 @@ import {
   NOX_VERSION,
   RUNNER_ERROR,
   RUNNER_SERVICE_NAME,
+  parseCreateProjectDocumentRequest,
+  parseCreateTaskDocumentRequest,
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseResolveRepositoryRequest,
   parseUpdateProjectDocumentRequest,
+  type CreateProjectDocumentSuccess,
+  type CreateTaskDocumentSuccess,
   type ListProjectDocumentsSuccess,
   type ReadProjectDocumentSuccess,
   type ResolveRepositorySuccess,
@@ -35,6 +39,10 @@ import type { RunnerConfig } from "./config.ts";
 import { isAuthorized } from "./http/auth.ts";
 import { MAX_DOCUMENT_BODY_BYTES, readJsonBody } from "./http/body.ts";
 import { sendJson, sendMethodNotAllowed, sendRunnerError } from "./http/responses.ts";
+import {
+  createDocument,
+  type CreateDocumentResult,
+} from "./repositories/documents/create-document.ts";
 import { listDocuments, type ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import { readDocument, type ReadDocumentResult } from "./repositories/documents/read-document.ts";
 import {
@@ -42,6 +50,10 @@ import {
   type UpdateDocumentResult,
 } from "./repositories/documents/update-document.ts";
 import { resolveRepository, type ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
+import {
+  createTaskDocument,
+  type CreateTaskDocumentResult,
+} from "./repositories/tasks/create-task-document.ts";
 
 /** Fonctions remplacables dans les tests. */
 export type RunnerDependencies = {
@@ -54,6 +66,16 @@ export type RunnerDependencies = {
     content: string,
     expectedRevision: string,
   ) => Promise<UpdateDocumentResult>;
+  createDocument?: (
+    repositoryPath: string,
+    documentPath: string,
+    content: string,
+  ) => Promise<CreateDocumentResult>;
+  createTaskDocument?: (
+    repositoryPath: string,
+    taskCode: string,
+    content: string,
+  ) => Promise<CreateTaskDocumentResult>;
   /** Journalisation ; remplacee par une fonction muette dans les tests. */
   log?: (message: string) => void;
 };
@@ -63,6 +85,8 @@ const RESOLVE_ROUTE = "/repositories/resolve";
 const DOCUMENTS_LIST_ROUTE = "/repositories/documents/list";
 const DOCUMENTS_READ_ROUTE = "/repositories/documents/read";
 const DOCUMENTS_UPDATE_ROUTE = "/repositories/documents/update";
+const DOCUMENTS_CREATE_ROUTE = "/repositories/documents/create";
+const TASKS_CREATE_DOCUMENT_ROUTE = "/repositories/tasks/create-document";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -143,6 +167,14 @@ export function createRunnerServer(
     dependencies.updateDocument ??
     ((repositoryPath: string, documentPath: string, content: string, expectedRevision: string) =>
       updateDocument(repositoryPath, documentPath, content, expectedRevision));
+  const create =
+    dependencies.createDocument ??
+    ((repositoryPath: string, documentPath: string, content: string) =>
+      createDocument(repositoryPath, documentPath, content));
+  const createTask =
+    dependencies.createTaskDocument ??
+    ((repositoryPath: string, taskCode: string, content: string) =>
+      createTaskDocument(repositoryPath, taskCode, content));
   const log = dependencies.log ?? ((message: string) => { console.log(message); });
 
   /** Journalise un refus metier : le code seul, jamais le chemin recu. */
@@ -275,6 +307,64 @@ export function createRunnerServer(
 
         const payload: UpdateProjectDocumentSuccess = { ok: true, document: result.document };
         sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === DOCUMENTS_CREATE_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DOCUMENTS_CREATE_ROUTE, log,
+          parseCreateProjectDocumentRequest, MAX_DOCUMENT_BODY_BYTES,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await create(parsed.repositoryPath, parsed.documentPath, parsed.content);
+        if (!result.ok) {
+          logRefusal(requestId, DOCUMENTS_CREATE_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        // `201` et non `200` : une ressource vient d'apparaitre. Aucun en-tete
+        // `Location` n'accompagne la reponse — aucune route du runner n'adresse
+        // un document par URL, et en inventer une laisserait croire a un `GET`
+        // qui n'existe pas. Le chemin relatif du document est dans le corps.
+        const payload: CreateProjectDocumentSuccess = { ok: true, document: result.document };
+        sendJson(response, 201, payload, requestId);
+        return;
+      }
+
+      if (pathname === TASKS_CREATE_DOCUMENT_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, TASKS_CREATE_DOCUMENT_ROUTE, log,
+          parseCreateTaskDocumentRequest, MAX_DOCUMENT_BODY_BYTES,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Le corps ne porte aucun chemin : le runner compose lui-meme
+        // `tasks/<code>.md` a partir du code, apres en avoir verifie la forme.
+        const result = await createTask(parsed.repositoryPath, parsed.taskCode, parsed.content);
+        if (!result.ok) {
+          logRefusal(requestId, TASKS_CREATE_DOCUMENT_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: CreateTaskDocumentSuccess = { ok: true, document: result.document };
+        sendJson(response, 201, payload, requestId);
         return;
       }
 

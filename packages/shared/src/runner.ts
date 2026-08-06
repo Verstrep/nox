@@ -104,6 +104,40 @@ export const RUNNER_ERROR = {
   /** Le remplacement du document a echoue : verrou, droits, erreur disque. */
   DOCUMENT_WRITE_FAILED: "DOCUMENT_WRITE_FAILED",
 
+  // --- Creation d'un document ------------------------------------------------
+  // La creation ne partage pas les risques de l'edition. Son enjeu n'est pas la
+  // concurrence sur un contenu, mais l'existence : un fichier deja present ne
+  // doit jamais disparaitre sous une creation, et aucun dossier ne doit
+  // apparaitre sans qu'on l'ait demande.
+
+  /** Un fichier occupe deja cet emplacement : la creation est refusee. */
+  DOCUMENT_ALREADY_EXISTS: "DOCUMENT_ALREADY_EXISTS",
+  /** Un dossier parent du chemin demande n'existe pas ; NOX n'en cree aucun. */
+  DOCUMENT_PARENT_NOT_FOUND: "DOCUMENT_PARENT_NOT_FOUND",
+  /** Un parent existe mais n'est pas un dossier. */
+  DOCUMENT_PARENT_NOT_DIRECTORY: "DOCUMENT_PARENT_NOT_DIRECTORY",
+  /** Un parent est un lien : NOX refuse d'ecrire a travers un lien de dossier. */
+  DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED: "DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED",
+  /** Le nom demande ne serait pas portable entre systemes de fichiers. */
+  DOCUMENT_NAME_NOT_PORTABLE: "DOCUMENT_NAME_NOT_PORTABLE",
+  /** La creation a echoue : droits, disque plein, erreur systeme. */
+  DOCUMENT_CREATION_FAILED: "DOCUMENT_CREATION_FAILED",
+
+  // --- Document d'une tache --------------------------------------------------
+  // Seule famille d'erreurs liee a une route qui a le droit de creer un dossier.
+  // Ce droit est limite a `tasks/`, a la racine du repository, et il s'accompagne
+  // de trois refus explicites : le nom peut etre pris par un fichier, par un
+  // lien, ou la creation peut simplement echouer.
+
+  /** `taskCode` ne respecte pas la forme `TASK-` suivi d'au moins trois chiffres. */
+  TASK_CODE_INVALID: "TASK_CODE_INVALID",
+  /** `tasks` existe mais designe un fichier : NOX ne le remplace pas. */
+  TASKS_DIRECTORY_NOT_DIRECTORY: "TASKS_DIRECTORY_NOT_DIRECTORY",
+  /** `tasks` est un lien ou une jonction : NOX n'ecrit pas au travers. */
+  TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED: "TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED",
+  /** La creation du dossier `tasks/` a echoue : droits, disque, erreur systeme. */
+  TASKS_DIRECTORY_CREATION_FAILED: "TASKS_DIRECTORY_CREATION_FAILED",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

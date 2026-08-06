@@ -84,11 +84,16 @@ export function describeUpdateFailure(failure: RunnerFailure): {
   };
 }
 
-/** URL d'un document, en mode lecture ou en mode edition. */
+/**
+ * URL d'un document, en mode lecture ou en mode edition.
+ *
+ * Seul endroit ou une URL de document est construite : lecture, edition,
+ * retour apres enregistrement et retour apres creation passent tous par ici.
+ */
 export function documentUrl(
   projectId: string,
   documentPath: string,
-  options: { edit?: boolean; saved?: boolean } = {},
+  options: { edit?: boolean; saved?: boolean; created?: boolean } = {},
 ): string {
   const query = new URLSearchParams({ path: documentPath });
   if (options.edit === true) {
@@ -96,6 +101,9 @@ export function documentUrl(
   }
   if (options.saved === true) {
     query.set("saved", "1");
+  }
+  if (options.created === true) {
+    query.set("created", "1");
   }
   return `/projects/${projectId}/documents?${query.toString()}`;
 }

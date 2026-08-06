@@ -742,3 +742,279 @@ conflit de révision, runner arrêté, document trop volumineux, lien symbolique
 C'est particulièrement vrai du conflit, seul cas où NOX refuse une action parfaitement légitime :
 lui faire perdre son texte par-dessus le marché rendrait la protection plus coûteuse que le
 risque dont elle protège.
+
+### D-061 — La création est une opération distincte de l'édition
+
+**Décision.** `POST /repositories/documents/create` est une route séparée, servie par un module
+séparé (`create-document.ts`), avec sa propre primitive d'écriture (`create-new-file.ts`).
+
+**Justification.** Les deux opérations écrivent, mais elles protègent de choses opposées.
+L'édition remplace un fichier existant sans jamais le laisser partiel : elle passe par un
+temporaire, puis écrase la cible. La création refuse au contraire d'écraser quoi que ce soit.
+Réutiliser le remplacement pour créer aurait littéralement inversé la garantie principale. Une
+route unique aurait par ailleurs eu deux comportements selon l'existence du fichier — exactement
+le genre de fonction qu'on n'arrive plus à raisonner six mois plus tard.
+
+### D-062 — Création par ouverture exclusive, jamais par vérification préalable
+
+**Décision.** Le fichier est créé avec `open(path, "wx")` : le système d'exploitation le crée
+**et** échoue s'il existe déjà, en une seule opération indivisible. Un contrôle d'existence
+préalable subsiste, mais uniquement pour produire un meilleur message.
+
+**Justification.** Le motif `exists()` puis `writeFile()` ne garantit rien : entre les deux
+appels, un `git pull`, un éditeur ou un autre onglet peut créer le fichier, qui serait alors
+écrasé sans que personne ne le sache. La fenêtre est étroite, la perte est totale. `wx` supprime
+la fenêtre au lieu de la réduire — et le coût est nul, puisque c'est le comportement natif de
+l'appel système.
+
+### D-063 — Aucun écrasement, aucune option pour en demander un
+
+**Décision.** Un fichier déjà présent produit `DOCUMENT_ALREADY_EXISTS`. Aucune option
+« remplacer », aucun paramètre `force`.
+
+**Justification.** Un document existant a une histoire dans Git ; l'écraser depuis un formulaire
+de création la remplacerait par un commit unique où tout a disparu d'un coup. L'utilisateur qui
+voulait vraiment changer ce fichier dispose déjà de l'éditeur, qui lui montre le contenu actuel
+avant qu'il n'écrive. L'interface propose donc d'ouvrir le document existant — c'est le chemin
+correct, pas une consolation.
+
+### D-064 — Les dossiers parents doivent exister ; NOX n'en crée aucun
+
+**Décision.** Chaque segment intermédiaire doit exister et être un vrai dossier. Un parent
+manquant produit `DOCUMENT_PARENT_NOT_FOUND` ; aucun `mkdir` n'est jamais exécuté.
+
+**Justification.** Créer les dossiers manquants transformerait une faute de frappe en
+arborescence permanente : `docs/guiides/NOTE.md` créerait `docs/guiides/`, que rien n'effacerait
+ensuite. La structure d'un repository est une décision de projet, pas un effet de bord d'un
+champ de saisie. Refuser coûte un dossier à créer à la main, une fois ; accepter coûte un
+nettoyage à chaque erreur de frappe.
+
+### D-065 — Refus des dossiers parents qui sont des liens
+
+**Décision.** Si un parent est un lien symbolique ou une jonction Windows, la création est
+refusée avec `DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED`, même si sa cible reste dans le repository.
+
+**Justification.** Même raisonnement que pour l'écriture dans un lien
+([D-055](#d-055--refus-décrire-dans-un-lien-symbolique)), appliqué un cran plus haut : écrire à
+travers un lien de dossier déposerait le fichier ailleurs que là où l'utilisateur croit le
+ranger, et le `git status` qui suit serait incompréhensible. NOX doit pouvoir répondre sans
+ambiguïté à « où ce fichier vient-il d'apparaître ? ».
+
+### D-066 — Emplacements de création limités à ceux que NOX inventorie
+
+**Décision.** La création n'est possible qu'aux emplacements déjà inspectés : `README.md`,
+`CLAUDE.md`, `AGENTS.md` à la racine, puis `docs/`, `decisions/`, `plans/`, `tasks/`. La
+validation réutilise `normalizeDocumentPath`, sans seconde logique.
+
+**Justification.** Créer un document invisible dans l'inventaire serait une impasse : NOX ne
+saurait plus ni l'afficher, ni le rouvrir. Limiter la création à ce que la lecture couvre garde
+les deux moitiés de la fonctionnalité cohérentes. La racine reste une liste fermée pour la même
+raison qu'à la lecture : elle n'est pas un dossier de documentation, et y autoriser n'importe
+quel `.md` la transformerait en fourre-tout.
+
+### D-067 — Noms validés pour rester portables, et jamais transformés
+
+**Décision.** Un segment est refusé s'il contient `< > : " | ? *` ou un caractère de contrôle,
+s'il porte un nom réservé de Windows (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`),
+ou s'il se termine par un espace ou un point. Espaces internes, tirets, underscores, accents et
+parenthèses restent acceptés. Aucun nom n'est corrigé automatiquement.
+
+**Justification.** Un document versionné avec Git finira cloné ailleurs ; un nom impossible à
+créer sur un autre système rendrait ce clone inutilisable. Windows tronque en outre
+silencieusement les espaces et points finaux, si bien que le fichier créé ne porterait pas le nom
+demandé. Ces règles s'appliquent **uniquement à la création** : refuser de *lire* un fichier
+existant sous prétexte que son nom est peu portable n'aiderait personne. Et rien n'est corrigé en
+silence, car l'utilisateur doit reconnaître le fichier qu'il vient de créer.
+
+### D-068 — Le chemin final est reconstruit côté serveur
+
+**Décision.** Le formulaire envoie une destination — une valeur parmi cinq — et un nom relatif.
+La Server Action valide la destination, en déduit le préfixe et recompose le chemin. Le préfixe
+affiché à côté du champ n'est pas un champ de formulaire.
+
+**Justification.** C'est la même règle que pour le chemin du repository, appliquée un cran plus
+bas : ce que le navigateur peut modifier, il faut supposer qu'il le modifiera. Une destination
+falsifiée ne correspond à aucune entrée connue et ne produit aucun chemin ; un préfixe falsifié
+n'est même pas lu. La prévisualisation affichée utilise la même fonction, mais le serveur la
+recalcule sans jamais consulter ce qui était à l'écran.
+
+### D-069 — Aucun modèle, aucun contenu généré
+
+**Décision.** Le contenu initial est celui que l'utilisateur saisit, éventuellement vide. NOX ne
+pré-remplit aucun squelette et ne génère rien.
+
+**Justification.** Un modèle est une opinion sur la forme d'un document, et cette opinion vit
+déjà dans les documents existants du projet, que l'utilisateur peut copier. Générer du contenu
+par IA à ce stade poserait en outre la question de la validation d'un texte que personne n'a
+écrit — un sujet à part entière, sans rapport avec la création d'un fichier.
+
+### D-070 — Limite des Server Actions alignée sur celle du runner
+
+**Décision.** `serverActions.bodySizeLimit` est porté à 4 Mo dans `next.config.ts`, valeur
+identique à la limite de corps des routes d'écriture du runner.
+
+**Justification.** La limite par défaut de Next.js est de 1 Mo, juste en dessous du 1 Mio
+qu'accepte le runner. Un document de taille légitime échouait donc avec une erreur 500 opaque au
+lieu du message « taille maximale » prévu — défaut constaté pendant le test fonctionnel de
+TASK-006, et présent depuis TASK-005. Les deux bornes disent désormais la même chose, et c'est le
+runner — seul à voir les octets réels — qui tranche.
+
+### D-071 — La tâche structurée vit en base, pas dans un fichier
+
+**Décision.** Titre, objectif, contexte, hors-périmètre, priorité, statut, critères
+d'acceptation, documents à lire et commandes de validation sont stockés dans SQLite. Le fichier
+Markdown en est un export.
+
+**Justification.** Le fichier seul ne saurait pas répondre aux questions que le backlog pose :
+combien de tâches sont prêtes, laquelle vient ensuite, laquelle est bloquée. Il faudrait relire
+et reparser tous les fichiers à chaque affichage, en espérant qu'aucun n'ait été édité dans un
+format inattendu. La base répond en une requête et garantit la forme. À l'inverse, la base seule
+ne serait lisible ni par Git, ni par un agent : d'où les deux, avec un sens de circulation
+unique.
+
+### D-072 — Un document Markdown associé à chaque tâche
+
+**Décision.** Chaque tâche possède un fichier `tasks/<code>.md`, écrit dans le repository.
+
+**Justification.** C'est le format que Claude Code lira, et le seul qui survive à la fermeture
+d'une session. Le versionner avec Git rend l'évolution d'une spécification traçable et
+réversible, exactement comme le reste de la documentation du projet. Une tâche qui n'existerait
+que dans une base locale ne serait ni relisible en revue, ni transmissible.
+
+### D-073 — La base est la source de vérité pendant TASK-007
+
+**Décision.** L'édition manuelle du fichier `tasks/<code>.md` ne met pas à jour la tâche NOX.
+L'interface l'affiche explicitement sur chaque page de tâche.
+
+**Justification.** Une synchronisation bidirectionnelle demanderait de reparser le Markdown,
+donc de figer un format d'analyse, de gérer les modifications concurrentes des deux côtés et de
+trancher qui gagne en cas de conflit — un sujet entier, qui n'a rien à voir avec la création
+d'une tâche. Le sens unique est la limite honnête à ce stade ; la cacher serait pire que
+l'avoir.
+
+### D-074 — Nom de fichier stable, sans le titre
+
+**Décision.** Le document d'une tâche est `tasks/TASK-001.md`, jamais
+`tasks/TASK-001-ajouter-la-gestion-des-projets.md`.
+
+**Justification.** Le titre évoluera — c'est une phrase, pas un identifiant. Un nom de fichier
+qui en dépendrait obligerait à renommer, donc à casser les liens existants et à salir
+l'historique Git d'un `rename` pour une correction de formulation. S'y ajoutent les caractères
+impossibles à porter d'un système à l'autre. Un code court et prévisible évite les quatre
+problèmes d'un coup.
+
+### D-075 — Allocation transactionnelle du numéro
+
+**Décision.** Le numéro vient de `Project.nextTaskSequence`, incrémenté par un ordre SQL
+atomique dans la transaction de création. `count() + 1` est explicitement écarté.
+
+**Justification.** `count() + 1` est faux de deux façons : deux créations simultanées lisent le
+même total et reçoivent le même numéro, et un numéro déjà utilisé est réattribué dès qu'une
+tâche disparaît. La contrainte d'unicité `projectId + sequence` reste le dernier filet, mais un
+filet n'est pas une garantie — le compteur en est une. Vérifié par un test de quinze créations
+concurrentes.
+
+### D-076 — Les trous de numérotation sont acceptés
+
+**Décision.** Un échec après réservation laisse un numéro inutilisé. NOX ne cherche pas à le
+récupérer.
+
+**Justification.** Un code de tâche circule : dans un message de commit, dans un log,
+dans une conversation. Le réattribuer ferait désigner deux travaux différents par la même
+référence, et cette confusion n'apparaîtrait que des semaines plus tard, au moment de relire
+l'historique. Un trou, lui, se remarque immédiatement et ne gêne personne.
+
+### D-077 — Listes enfant normalisées, ordonnées par position
+
+**Décision.** Critères, documents et commandes sont trois tables reliées à `Task`, chacune avec
+une `position` entière et une contrainte d'unicité `(taskId, position)`.
+
+**Justification.** Les stocker en JSON dans une colonne rendrait impossible toute requête
+ultérieure — compter les tâches sans critère, retrouver celles qui référencent un document
+donné — et laisserait la validation de forme entièrement à la couche applicative. La `position`
+est explicite parce que l'ordre fait partie de la spécification : un agent traitera les critères
+dans l'ordre où ils apparaissent, et le laisser au hasard de SQLite changerait la tâche d'une
+lecture à l'autre.
+
+### D-078 — Transitions manuelles limitées et centralisées
+
+**Décision.** Huit transitions sont autorisées, déclarées dans une table unique de
+`@nox/shared`. `RUNNING`, `FAILED` et `REVIEW` ne sont ni atteignables, ni quittables à la main.
+
+**Justification.** Ces trois statuts décrivent le résultat d'une exécution de Claude Code, que
+NOX ne sait pas encore déclencher. Les rendre sélectionnables permettrait d'annoncer un état que
+rien n'a produit, et de mettre le backlog en désaccord avec la réalité. La table est unique
+parce que le formulaire s'en sert pour construire ses boutons et la couche données pour vérifier
+ce qu'elle reçoit : ce que l'interface propose est exactement ce que le serveur accepte, et une
+requête falsifiée repasse par la même fonction.
+
+### D-079 — Quatre états de synchronisation explicites
+
+**Décision.** `PENDING`, `SYNCED`, `ERROR` et `CONFLICT` décrivent l'état du document d'une
+tâche, affichés dans le backlog et sur la page de détail.
+
+**Justification.** La tâche et son fichier peuvent diverger, et NOX doit pouvoir le dire. Un
+simple booléen « synchronisé » confondrait trois situations aux réponses opposées : le document
+n'a pas encore été créé, sa création a échoué et il faut réessayer, ou un fichier différent
+occupe la place et c'est à l'utilisateur de trancher. Nommer chacune permet d'afficher l'action
+qui convient plutôt qu'un message générique.
+
+### D-080 — Reprise idempotente, sans écrasement
+
+**Décision.** La reprise tente toujours la création exclusive. Un fichier existant dont le
+contenu correspond exactement au Markdown attendu est **adopté** ; un contenu différent produit
+`CONFLICT`, sans modification du fichier et sans option de forçage.
+
+**Justification.** Le cas de l'adoption n'a rien d'exotique : il se produit dès qu'une création
+aboutit sur le disque mais que l'enregistrement de son succès échoue — navigateur fermé,
+processus arrêté. Refuser d'adopter ce fichier obligerait à le supprimer à la main pour sortir
+d'une situation où tout est pourtant correct. À l'inverse, écraser un fichier différent
+détruirait le travail de quelqu'un d'autre sans que personne ne l'ait vu. La comparaison est
+possible parce que le générateur est déterministe : c'est ce qui rend la distinction fiable
+plutôt qu'approximative. Enfin, il n'existe pas de chemin « première fois » et de chemin
+« reprise » : les deux appellent la même fonction, donc le second est aussi testé que le premier.
+
+### D-081 — Le dossier `tasks/` est la seule création de dossier autorisée
+
+**Décision.** La route des documents de tâche crée `tasks/` à la racine du repository s'il
+manque, sans `recursive`, et refuse ce nom s'il est occupé par un fichier ou par un lien.
+Aucune autre route ne crée de dossier.
+
+**Justification.** L'interdiction posée par TASK-006 protège d'une faute de frappe transformée
+en arborescence permanente. Ce risque n'existe pas ici : l'emplacement d'un document de tâche
+n'est pas au choix de l'utilisateur, il vaut toujours `tasks/<code>.md`, et le nom du dossier
+est une constante du code. Exiger que `tasks/` soit créé à la main avant la première tâche
+serait un obstacle sans contrepartie. Les trois refus restent entiers, pour la même raison
+qu'ailleurs : NOX ne renomme rien, ne supprime rien, et n'écrit pas au travers d'un lien.
+
+### D-082 — Le web n'envoie aucun chemin pour un document de tâche
+
+**Décision.** La requête transporte un `taskCode`, pas un `documentPath`. Le runner valide sa
+forme (`TASK-` suivi d'au moins trois chiffres) et compose lui-même `tasks/<code>.md`.
+
+**Justification.** C'est la même règle que pour la création d'un document ordinaire, poussée un
+cran plus loin : là-bas le web recomposait un chemin à partir d'une destination validée, ici il
+n'y a plus de chemin du tout. Un code au format strict ne peut contenir ni séparateur, ni
+remontée, ni caractère non portable — la validation du chemin se réduit donc à la validation du
+code, et il n'existe aucune surface pour un chemin falsifié.
+
+### D-083 — Le statut et la priorité ne figurent pas dans le Markdown
+
+**Décision.** Le document généré ne contient ni statut, ni priorité, ni date, ni identifiant
+technique. Un changement de statut ne réécrit pas le fichier.
+
+**Justification.** Ces valeurs changent sans que la spécification change. Les inscrire
+obligerait à réécrire le fichier à chaque clic et remplirait l'historique Git de modifications
+qui n'apprennent rien — au point de rendre inutilisable le seul historique qui compte, celui de
+la spécification. C'est aussi ce qui rend la comparaison de l'adoption fiable : un document
+figé peut être comparé, un document qui bouge avec l'état de la base ne le peut pas.
+
+### D-084 — Les commandes de validation sont stockées, jamais exécutées
+
+**Décision.** Les commandes sont du texte enregistré avec la tâche. NOX ne les interprète pas,
+ne les découpe pas et ne les lance pas.
+
+**Justification.** Exécuter une chaîne saisie dans un formulaire est exactement ce que le
+runner existe pour empêcher tant qu'aucune tâche ne l'autorise. Les stocker maintenant permet à
+la spécification d'être complète — l'agent saura quoi lancer — sans ouvrir le droit de le faire.
+Ce droit relèvera d'une tâche dédiée, avec ses propres garanties.

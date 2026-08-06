@@ -91,6 +91,31 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
   [RUNNER_ERROR.DOCUMENT_REVISION_REQUIRED]: REVISION_MISSING_MESSAGE,
   [RUNNER_ERROR.DOCUMENT_REVISION_INVALID]: REVISION_MISSING_MESSAGE,
 
+  // --- Creation -------------------------------------------------------------
+  [RUNNER_ERROR.DOCUMENT_ALREADY_EXISTS]:
+    "Un document existe deja a cet emplacement. NOX ne le remplace jamais : choisissez un autre nom, ou ouvrez le document existant pour le modifier.",
+  [RUNNER_ERROR.DOCUMENT_PARENT_NOT_FOUND]:
+    "Le dossier indique n'existe pas dans le repository. NOX ne cree aucun dossier : creez-le d'abord, puis reessayez.",
+  [RUNNER_ERROR.DOCUMENT_PARENT_NOT_DIRECTORY]:
+    "Un element du chemin est un fichier, pas un dossier. Choisissez un autre emplacement.",
+  [RUNNER_ERROR.DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED]:
+    "Ce dossier ne peut pas etre utilise pour creer un document : c'est un lien. NOX n'ecrit qu'a travers des dossiers reels.",
+  [RUNNER_ERROR.DOCUMENT_NAME_NOT_PORTABLE]:
+    "Ce nom de fichier ne serait pas utilisable sur tous les systemes. Evitez les caracteres < > : \" | ? *, les noms reserves de Windows (CON, PRN, AUX, NUL, COM1 a COM9, LPT1 a LPT9), ainsi qu'un espace ou un point en fin de nom.",
+  [RUNNER_ERROR.DOCUMENT_CREATION_FAILED]:
+    "La creation du document a echoue. Verifiez l'espace disque et les droits du dossier ; aucun fichier existant n'a ete modifie.",
+
+  // --- Document d'une tache -------------------------------------------------
+  [RUNNER_ERROR.TASKS_DIRECTORY_NOT_DIRECTORY]:
+    "Un fichier nomme « tasks » occupe la racine du repository. NOX ne le remplace pas : renommez-le, puis reessayez.",
+  [RUNNER_ERROR.TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED]:
+    "Le dossier « tasks » est un lien. NOX n'ecrit qu'a travers des dossiers reels, pour que l'emplacement du fichier ne soit jamais une surprise.",
+  [RUNNER_ERROR.TASKS_DIRECTORY_CREATION_FAILED]:
+    "NOX n'a pas pu creer le dossier « tasks » a la racine du repository. Verifiez l'espace disque et les droits du dossier.",
+  // Le code d'une tache est calcule par NOX : ce refus signale une requete
+  // falsifiee ou une base incoherente, jamais une faute de saisie.
+  [RUNNER_ERROR.TASK_CODE_INVALID]: GENERIC_RUNNER_ERROR_MESSAGE,
+
   // Ces codes traduisent un desaccord de contrat entre le web et le runner :
   // l'utilisateur ne peut rien y faire, seul le message generique a du sens.
   [RUNNER_ERROR.UNAUTHORIZED]:
@@ -143,6 +168,17 @@ export function describeRunnerFailure(failure: RunnerFailure): string {
  */
 export function isDocumentConflict(failure: RunnerFailure): boolean {
   return failure.kind === "runner_error" && failure.code === RUNNER_ERROR.DOCUMENT_CONFLICT;
+}
+
+/**
+ * Distingue le refus d'ecraser un document existant.
+ *
+ * C'est le pendant du conflit de revision pour la creation : la demande est
+ * correcte, mais le disque contient deja quelque chose. L'interface doit alors
+ * proposer d'ouvrir le document existant plutot que d'inviter a reessayer.
+ */
+export function isDocumentAlreadyExists(failure: RunnerFailure): boolean {
+  return failure.kind === "runner_error" && failure.code === RUNNER_ERROR.DOCUMENT_ALREADY_EXISTS;
 }
 
 /**

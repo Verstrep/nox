@@ -113,6 +113,29 @@ export type UpdateProjectDocumentSuccess = {
   document: ProjectDocumentContent;
 };
 
+/**
+ * Demande de creation d'un **nouveau** document.
+ *
+ * Aucune revision n'est transmise, et c'est deliberé : il n'y a rien a comparer.
+ * La garantie de la creation n'est pas le controle de concurrence mais le refus
+ * absolu d'ecraser un fichier deja present — le runner s'en charge par une
+ * ouverture exclusive, pas par une promesse du contrat.
+ *
+ * `documentPath` est reconstruit cote serveur a partir d'une destination validee
+ * et d'un nom relatif : le navigateur ne choisit jamais un chemin complet.
+ */
+export type CreateProjectDocumentRequest = {
+  repositoryPath: string;
+  documentPath: string;
+  content: string;
+};
+
+/** Meme forme qu'une lecture : le document cree est immediatement exploitable. */
+export type CreateProjectDocumentSuccess = {
+  ok: true;
+  document: ProjectDocumentContent;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -172,6 +195,31 @@ export function parseUpdateProjectDocumentRequest(
   };
 }
 
+/**
+ * Valide le corps recu par `POST /repositories/documents/create`.
+ *
+ * Meme exigence que la mise a jour : trois chaines, sans exception. Une chaine
+ * vide reste un contenu initial parfaitement valide — creer un document vide
+ * puis le remplir est un usage normal.
+ */
+export function parseCreateProjectDocumentRequest(
+  value: unknown,
+): CreateProjectDocumentRequest | null {
+  if (
+    !isRecord(value) ||
+    typeof value["repositoryPath"] !== "string" ||
+    typeof value["documentPath"] !== "string" ||
+    typeof value["content"] !== "string"
+  ) {
+    return null;
+  }
+  return {
+    repositoryPath: value["repositoryPath"],
+    documentPath: value["documentPath"],
+    content: value["content"],
+  };
+}
+
 function isProjectDocumentSummary(value: unknown): value is ProjectDocumentSummary {
   return (
     isRecord(value) &&
@@ -194,7 +242,14 @@ export function isListProjectDocumentsSuccess(
   return Array.isArray(documents) && documents.every(isProjectDocumentSummary);
 }
 
-function isProjectDocumentContent(value: unknown): value is ProjectDocumentContent {
+/**
+ * Verifie la forme d'un document complet.
+ *
+ * Exporte parce que plusieurs routes renvoient exactement cette forme : la
+ * lecture, l'ecriture, la creation d'un document et celle d'un document de
+ * tache. Elles partagent donc une seule verification, jamais quatre copies.
+ */
+export function isProjectDocumentContent(value: unknown): value is ProjectDocumentContent {
   return (
     isProjectDocumentSummary(value) &&
     typeof (value as ProjectDocumentContent).content === "string" &&
@@ -221,6 +276,21 @@ export function isReadProjectDocumentSuccess(
 export function isUpdateProjectDocumentSuccess(
   value: unknown,
 ): value is UpdateProjectDocumentSuccess {
+  if (!isRecord(value) || value["ok"] !== true) {
+    return false;
+  }
+  return isProjectDocumentContent(value["document"]);
+}
+
+/**
+ * Verifie qu'une reponse JSON est une creation reussie.
+ *
+ * Le document renvoye vient d'une relecture du disque : il est directement
+ * affichable et modifiable, sans second aller-retour.
+ */
+export function isCreateProjectDocumentSuccess(
+  value: unknown,
+): value is CreateProjectDocumentSuccess {
   if (!isRecord(value) || value["ok"] !== true) {
     return false;
   }

@@ -19,6 +19,19 @@ export {
 } from "./projects.js";
 
 export {
+  InvalidTaskRecordError,
+  createTask,
+  getTaskById,
+  listTasksByProject,
+  markTaskDocumentConflict,
+  markTaskDocumentError,
+  markTaskDocumentSynced,
+  updateTaskStatus,
+  type CreateTaskInput,
+  type UpdateTaskStatusResult,
+} from "./tasks.js";
+
+export {
   DATABASE_URL_ENV_VAR,
   databaseFileExists,
   findRepositoryRoot,

@@ -11,12 +11,16 @@
  */
 
 import {
+  isCreateProjectDocumentSuccess,
+  isCreateTaskDocumentSuccess,
   isListProjectDocumentsSuccess,
   isReadProjectDocumentSuccess,
   isResolveRepositorySuccess,
   isRunnerErrorResponse,
   isRunnerHealthResponse,
   isUpdateProjectDocumentSuccess,
+  type CreateProjectDocumentRequest,
+  type CreateTaskDocumentRequest,
   type ListProjectDocumentsRequest,
   type ProjectDocumentContent,
   type ProjectDocumentSummary,
@@ -151,6 +155,7 @@ async function postAuthenticated<TBody, TValue>(
   isSuccess: (value: unknown) => boolean,
   extract: (value: unknown) => TValue,
   options: RunnerClientOptions,
+  successStatus = 200,
 ): Promise<RunnerResult<TValue>> {
   const configuration = loadRunnerClientConfig(options.environment ?? process.env);
   if (!configuration.ok) {
@@ -177,7 +182,7 @@ async function postAuthenticated<TBody, TValue>(
     return failure(result.failure);
   }
 
-  if (result.response.status === 200 && isSuccess(result.response.body)) {
+  if (result.response.status === successStatus && isSuccess(result.response.body)) {
     return { ok: true, value: extract(result.response.body) };
   }
 
@@ -281,5 +286,63 @@ export function updateProjectDocument(
     isUpdateProjectDocumentSuccess,
     (value) => (value as { document: ProjectDocumentContent }).document,
     options,
+  );
+}
+
+/**
+ * Cree un nouveau document dans le repository.
+ *
+ * `documentPath` a ete reconstruit cote serveur a partir d'une destination
+ * validee : le navigateur n'a jamais fourni de chemin complet.
+ *
+ * Le runner repond `201` — une ressource est apparue — et renvoie le document
+ * relu, directement exploitable par l'affichage et par l'edition.
+ */
+export function createProjectDocument(
+  repositoryPath: string,
+  documentPath: string,
+  content: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ProjectDocumentContent>> {
+  const payload: CreateProjectDocumentRequest = { repositoryPath, documentPath, content };
+
+  return postAuthenticated(
+    "/repositories/documents/create",
+    "documents/create",
+    payload,
+    isCreateProjectDocumentSuccess,
+    (value) => (value as { document: ProjectDocumentContent }).document,
+    options,
+    201,
+  );
+}
+
+/**
+ * Cree le document Markdown d'une tache.
+ *
+ * Le web n'envoie **aucun chemin** : il envoie le code de la tache, et c'est le
+ * runner qui compose `tasks/<code>.md`. Le dossier `tasks/` est cree par le
+ * runner s'il manque — seule creation de dossier de tout NOX.
+ *
+ * Comme pour un document ordinaire, la reponse est un `201` accompagne du
+ * document relu, revision comprise : l'appelant n'a pas de second aller-retour
+ * a faire pour connaitre l'etat reel du fichier.
+ */
+export function createTaskDocument(
+  repositoryPath: string,
+  taskCode: string,
+  content: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ProjectDocumentContent>> {
+  const payload: CreateTaskDocumentRequest = { repositoryPath, taskCode, content };
+
+  return postAuthenticated(
+    "/repositories/tasks/create-document",
+    "tasks/create-document",
+    payload,
+    isCreateTaskDocumentSuccess,
+    (value) => (value as { document: ProjectDocumentContent }).document,
+    options,
+    201,
   );
 }

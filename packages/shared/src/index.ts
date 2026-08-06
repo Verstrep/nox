@@ -42,19 +42,61 @@ export type {
 } from "./runner.js";
 
 export {
+  RESERVED_TASK_STATUSES,
+  TASK_CODE_PREFIX,
+  TASK_DOCUMENT_SYNC_STATUS,
+  TASK_DOCUMENT_SYNC_STATUSES,
+  TASK_PRIORITIES,
+  TASK_PRIORITY,
+  allowedTaskStatusTransitions,
+  canTransitionTaskStatus,
+  formatTaskCode,
+  isReservedTaskStatus,
+  isTaskCode,
+  isTaskDocumentSyncStatus,
+  isTaskPriority,
+  taskDocumentPath,
+  taskPriorityRank,
+} from "./tasks.js";
+
+export type {
+  DevelopmentTaskDetail,
+  DevelopmentTaskSummary,
+  TaskDocumentSyncStatus,
+  TaskPriority,
+  TaskSpecification,
+} from "./tasks.js";
+
+export { renderTaskMarkdown } from "./task-markdown.js";
+
+export {
+  isCreateTaskDocumentSuccess,
+  parseCreateTaskDocumentRequest,
+} from "./task-documents.js";
+
+export type {
+  CreateTaskDocumentRequest,
+  CreateTaskDocumentSuccess,
+} from "./task-documents.js";
+
+export {
   PROJECT_DOCUMENT_CATEGORIES,
   PROJECT_DOCUMENT_CATEGORY,
+  isCreateProjectDocumentSuccess,
   isListProjectDocumentsSuccess,
   isProjectDocumentCategory,
   isProjectDocumentRevision,
   isReadProjectDocumentSuccess,
   isUpdateProjectDocumentSuccess,
+  parseCreateProjectDocumentRequest,
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseUpdateProjectDocumentRequest,
 } from "./documents.js";
 
 export type {
+  CreateProjectDocumentRequest,
+  CreateProjectDocumentSuccess,
   ListProjectDocumentsRequest,
   ListProjectDocumentsSuccess,
   ProjectDocumentCategory,

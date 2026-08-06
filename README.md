@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-005 — édition sécurisée d'un document Markdown existant**.
+Dernière étape terminée : **TASK-007 — gestion structurée des tâches de développement**.
 
 | Élément | État |
 | --- | --- |
@@ -23,9 +23,14 @@ Dernière étape terminée : **TASK-005 — édition sécurisée d'un document M
 | Validation d'un repository Git par le runner | ✅ fonctionnelle |
 | Inventaire et lecture des documents Markdown | ✅ fonctionnels |
 | Modification d'un document Markdown existant | ✅ fonctionnelle |
-| Création, suppression, renommage d'un document | ⬜ non commencées |
+| Création d'un document Markdown | ✅ fonctionnelle |
+| Backlog, création et suivi des tâches | ✅ fonctionnels |
+| Document Markdown d'une tâche (`tasks/TASK-xxx.md`) | ✅ fonctionnel |
+| Exécution des commandes de validation | ⬜ non commencée |
+| Lancement de Claude Code, logs, exécutions | ⬜ non commencés |
+| Suppression, renommage, déplacement d'un document | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
-| Tâches, exécutions, intégration IA | ⬜ non commencées |
+| Intégration OpenAI (orchestrateur) | ⬜ non commencée |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
@@ -358,6 +363,186 @@ temporaire ne subsiste.
 Dans tous ces cas, **le fichier sur le disque n'a pas été modifié** et le texte saisi reste
 dans le formulaire.
 
+## Créer un document
+
+Depuis la page Documents d'un projet, cliquez sur **Nouveau document**. Choisissez une
+destination, saisissez un nom de fichier, éventuellement un contenu initial, puis **Créer le
+document**.
+
+### Les cinq destinations
+
+| Destination | Emplacement | Exemple |
+| --- | --- | --- |
+| Document principal | racine, liste fermée | `README.md`, `CLAUDE.md`, `AGENTS.md` |
+| Documentation | `docs/` | `docs/PRODUCT_VISION.md` |
+| Décision | `decisions/` | `decisions/ADR-004-database.md` |
+| Plan | `plans/` | `plans/CURRENT_PLAN.md` |
+| Tâche | `tasks/` | `tasks/TASK-007.md` |
+
+Le préfixe est affiché à côté du champ mais ne se saisit pas : c'est le serveur qui recompose le
+chemin final à partir de la destination choisie. À la racine, seuls les trois documents reconnus
+par NOX sont proposés, et uniquement ceux qui n'existent pas déjà.
+
+### Les dossiers parents doivent exister
+
+NOX **ne crée aucun dossier**. `docs/guides/INSTALLATION.md` n'est acceptée que si `docs/guides/`
+existe déjà. Sinon, créez le dossier dans votre explorateur ou votre éditeur, puis réessayez.
+
+Cette limite est volontaire : sans elle, une faute de frappe (`docs/guiides/`) créerait une
+arborescence permanente que rien n'effacerait ensuite.
+
+### Un fichier existant n'est jamais remplacé
+
+Si un document occupe déjà l'emplacement demandé, la création est refusée et le message propose
+d'**ouvrir le document existant**. C'est le chemin correct : l'éditeur vous montre le contenu
+actuel avant que vous n'écriviez par-dessus.
+
+La protection tient même si le fichier apparaît pendant la création — un `git pull` en
+parallèle, par exemple. NOX utilise une création exclusive : le système crée le fichier ou
+échoue, sans étape intermédiaire.
+
+### Règles de nommage
+
+Le nom doit se terminer par `.md`. Il n'est **jamais corrigé automatiquement** : un nom sans
+extension est refusé avec un message, pas complété en silence.
+
+Sont refusés, pour que le repository reste clonable partout :
+
+- les caractères `< > : " | ? *` ;
+- les noms réservés de Windows : `CON`, `PRN`, `AUX`, `NUL`, `COM1` à `COM9`, `LPT1` à `LPT9`,
+  avec ou sans extension ;
+- un espace ou un point en fin de nom — Windows les tronque en silence.
+
+Les espaces, tirets, underscores, accents et parenthèses sont acceptés : `docs/étude
+détaillée.md` est un nom parfaitement valide.
+
+### Limites de la création
+
+- **Taille maximale : 1 Mio**, comme à l'édition, mesurée sur les octets UTF-8 écrits.
+- **Contenu initial facultatif** : un document vide est accepté, vous le remplirez ensuite.
+- **Modifiable immédiatement** : le document créé apparaît aussitôt dans la liste et s'ouvre
+  dans l'éditeur sans rechargement manuel.
+- **Aucun modèle, aucun contenu généré.** Ce que vous saisissez est ce qui est écrit.
+- **Annuler n'écrit rien** et demande confirmation si le formulaire a été rempli.
+
+### Erreurs de création
+
+| Message | Cause | Correction |
+| --- | --- | --- |
+| « Un document existe déjà à cet emplacement » | Le fichier est déjà là | Ouvrir l'existant, ou choisir un autre nom |
+| « Le dossier indiqué n'existe pas » | Dossier parent manquant | Le créer d'abord — NOX n'en crée aucun |
+| « Ce dossier ne peut pas être utilisé […] : c'est un lien » | Un parent est un lien symbolique | Viser le dossier réel |
+| « Ce nom de fichier ne serait pas utilisable sur tous les systèmes » | Caractère interdit ou nom réservé | Renommer |
+| « Le nom doit se terminer par .md » | Extension absente | Ajouter `.md` |
+| « Inutile de répéter `docs/` » | Le préfixe a été saisi deux fois | Ne saisir que la partie sous le dossier |
+
+Dans tous ces cas, **aucun fichier n'est créé** et le formulaire conserve destination, nom et
+contenu.
+
+## Créer et suivre des tâches
+
+Depuis la page d'un projet, **Voir les tâches** ouvre le backlog
+(`/projects/[id]/tasks`) ; **Nouvelle tâche** ouvre le formulaire.
+
+Une tâche NOX n'est pas un titre dans une liste : elle doit contenir assez d'informations pour
+qu'un agent de développement puisse travailler sans avoir vu la conversation qui l'a produite.
+
+### Les champs d'une tâche
+
+| Champ | Obligatoire | Limite | Rôle |
+| --- | --- | --- | --- |
+| Titre | oui | 160 caractères | Une phrase, pas un identifiant |
+| Priorité | oui | — | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
+| Objectif | oui | 5 000 caractères | Ce que la tâche doit rendre possible |
+| Contexte | non | 10 000 caractères | Ce qu'un agent doit savoir de l'état actuel |
+| Hors périmètre | non | 5 000 caractères | Ce qui ne doit surtout pas être fait |
+| Documents à lire | non | 100 × 500 caractères | Chemins relatifs, un par ligne |
+| Critères d'acceptation | **au moins un** | 100 × 1 000 caractères | Un par ligne |
+| Commandes de validation | non | 50 × 1 000 caractères | Une par ligne, **jamais exécutées** |
+
+Les trois listes se saisissent une entrée par ligne : les lignes vides sont ignorées, l'ordre de
+saisie est conservé, et les documents en double sont retirés en gardant la première occurrence.
+
+Les chemins de documents ne sont **pas vérifiés comme existants** : une tâche peut légitimement
+référencer un fichier qui sera créé avant son exécution. Seule leur forme est contrôlée — pas de
+chemin absolu, pas de `..`.
+
+### Le code d'une tâche
+
+Chaque tâche reçoit un code de la forme `TASK-001`, attribué automatiquement et **immuable**. Le
+compteur appartient au projet : deux projets numérotent indépendamment, à partir de 1.
+
+Un numéro n'est **jamais réutilisé**. Si une création échoue après réservation, le numéro reste
+inutilisé et le suivant est attribué. Un trou dans la numérotation est normal — il vaut mieux
+qu'un identifiant qui aurait déjà circulé dans un commit ou dans un log.
+
+### Statuts et transitions
+
+| Statut | Sens | Transitions manuelles possibles |
+| --- | --- | --- |
+| `DRAFT` | Brouillon, statut initial | → `READY`, `BLOCKED` |
+| `READY` | Prête à être implémentée | → `DRAFT`, `BLOCKED`, `COMPLETED` |
+| `BLOCKED` | Bloquée par autre chose | → `DRAFT`, `READY` |
+| `COMPLETED` | Terminée | → `READY` |
+| `RUNNING`, `FAILED`, `REVIEW` | Réservés aux exécutions de Claude Code | aucune |
+
+Les trois derniers ne sont pas sélectionnables : ils décrivent le résultat d'une exécution que
+NOX ne sait pas encore déclencher. Les afficher comme choisissables laisserait annoncer un état
+que rien n'a produit.
+
+### Le document Markdown associé
+
+Chaque tâche possède un fichier `tasks/<code>.md` dans le repository — par exemple
+`tasks/TASK-001.md`. Le titre n'entre **pas** dans le nom du fichier : il évoluera, le chemin
+non.
+
+Le document contient l'objectif, le contexte, les documents à lire, les critères d'acceptation,
+les commandes de validation, le hors-périmètre et un rappel des règles d'exécution. Il ne
+contient **ni statut, ni priorité, ni date** : ces valeurs changent sans que la spécification
+change, et les y inscrire remplirait l'historique Git de modifications qui n'apprennent rien.
+
+Le dossier `tasks/` est créé automatiquement s'il manque — c'est le seul dossier que NOX crée.
+S'il est occupé par un fichier ou par un lien, la création est refusée : NOX ne renomme rien.
+
+> **Limite actuelle** : la base est la source de vérité. Modifier `tasks/TASK-001.md` à la main
+> ne met pas à jour la tâche dans NOX. La page de détail le rappelle.
+
+### État de synchronisation
+
+| État | Sens | Que faire |
+| --- | --- | --- |
+| Document à créer | La tâche existe, son fichier pas encore | Réessayer |
+| Document synchronisé | Le fichier correspond à la spécification | Rien |
+| Document non créé | La création a échoué (runner arrêté, droits, disque) | Réessayer |
+| Emplacement occupé | Un fichier **différent** occupe déjà ce chemin | L'ouvrir, puis trancher |
+
+### Si le runner est arrêté
+
+La tâche est **quand même enregistrée**. NOX crée d'abord la tâche en base, puis tente
+d'écrire son document : la seconde étape peut échouer sans remettre la première en cause.
+
+La page de détail affiche alors « Document non créé » et un bouton **Réessayer la création du
+document**. Démarrez le runner, cliquez, c'est réglé — rien n'a été ressaisi.
+
+La reprise est sûre à répéter :
+
+- si le fichier n'existe pas, il est créé ;
+- s'il existe et que son contenu correspond **exactement** au document attendu, il est adopté
+  tel quel, sans réécriture ;
+- s'il existe et diffère, la tâche passe en conflit et le fichier n'est **pas** touché.
+
+Il n'existe aucun bouton pour forcer un écrasement. Un fichier différent à cet emplacement est
+le travail de quelqu'un — ou de quelque chose — d'autre, et c'est à vous de décider.
+
+### Ce que NOX ne fait pas encore
+
+- **Aucune exécution.** Les commandes de validation sont du texte enregistré avec la tâche. NOX
+  ne les interprète pas et ne les lance pas.
+- **Claude Code n'est jamais lancé**, et aucun appel à un fournisseur de modèle n'existe.
+- **Une spécification ne se modifie pas après création** : ni le titre, ni l'objectif, ni les
+  listes. Seul le statut change.
+- Ni suppression, ni renumérotation, ni duplication, ni dépendances entre tâches.
+
 ## Lancer le runner
 
 Dans un second terminal :
@@ -396,6 +581,8 @@ lancés ensemble : le runner peut être redémarré sans toucher au web, et inve
 | `/repositories/documents/list` | `POST` | `Bearer` obligatoire | Inventaire des Markdown reconnus |
 | `/repositories/documents/read` | `POST` | `Bearer` obligatoire | Contenu et révision d'un document autorisé |
 | `/repositories/documents/update` | `POST` | `Bearer` obligatoire | Remplace un document existant, après contrôle de révision |
+| `/repositories/documents/create` | `POST` | `Bearer` obligatoire | Crée un document (`201`), sans jamais écraser ni créer de dossier |
+| `/repositories/tasks/create-document` | `POST` | `Bearer` obligatoire | Crée `tasks/<code>.md` (`201`), en créant `tasks/` s'il manque |
 
 ### Tester `/health`
 
@@ -486,12 +673,21 @@ NOX/
 │   │   │   └── projects/
 │   │   │       ├── new/        Formulaire + Server Action de création
 │   │   │       └── [id]/       Page de détail d'un projet
-│   │   │           └── documents/  Liste, lecteur, éditeur + Server Action
+│   │   │           ├── documents/  Liste, lecteur, éditeur + Server Action
+│   │   │           │   └── new/    Formulaire de création + Server Action
+│   │   │           └── tasks/      Backlog filtrable
+│   │   │               ├── new/        Formulaire de tâche + Server Action
+│   │   │               └── [taskId]/   Détail, transitions, reprise
 │   │   ├── components/         Composants d'interface réutilisables
 │   │   ├── lib/
 │   │   │   ├── runner/         Client HTTP du runner (serveur uniquement)
 │   │   │   ├── documents.ts    Chargement des documents pour les pages
-│   │   │   ├── document-edit.ts  Logique du formulaire d'édition
+│   │   │   ├── document-edit.ts    Logique du formulaire d'édition
+│   │   │   ├── document-create.ts  Destinations et construction du chemin
+│   │   │   ├── task-input.ts       Validation du formulaire de tâche
+│   │   │   ├── task-sync.ts        Synchronisation idempotente du document
+│   │   │   ├── task-display.ts     Libellés, compteurs, filtres
+│   │   │   ├── tasks.ts            Chargement des tâches pour les pages
 │   │   │   └── ...             Validation métier et lecture des données
 │   │   └── public/             Fichiers statiques
 │   │
@@ -503,17 +699,21 @@ NOX/
 │           ├── http/           Authentification, corps JSON, réponses
 │           └── repositories/
 │               ├── resolve-repository.ts   Résolution Git (execFile, sans shell)
-│               └── documents/              Inventaire, lecture, écriture, confinement
+│               ├── documents/              Inventaire, lecture, écriture, création, confinement
+│               └── tasks/                  Document de tâche et dossier `tasks/`
 │
 ├── packages/
 │   ├── shared/                 Types et constantes partagés (@nox/shared)
 │   │   ├── src/statuses.ts     ProjectStatus, TaskStatus, RunStatus
 │   │   ├── src/runner.ts       Contrat HTTP web ↔ runner
-│   │   └── src/documents.ts    Contrat des documents Markdown
+│   │   ├── src/documents.ts    Contrat des documents Markdown
+│   │   ├── src/tasks.ts        Priorités, transitions, codes, types métier
+│   │   ├── src/task-markdown.ts    Générateur pur et déterministe
+│   │   └── src/task-documents.ts   Contrat de la route des documents de tâche
 │   │
 │   └── database/               Accès aux données (@nox/database)
 │       ├── prisma/             Schéma et migrations versionnées
-│       ├── src/                Client, chemins, requêtes sur Project
+│       ├── src/                Client, chemins, requêtes sur Project et Task
 │       └── prisma.config.ts    Configuration du CLI Prisma
 │
 ├── data/                       Base SQLite locale (contenu non versionné)

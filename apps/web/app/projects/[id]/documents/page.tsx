@@ -53,6 +53,7 @@ export default async function ProjectDocumentsPage({
   const selectedPath = typeof rawPath === "string" && rawPath !== "" ? rawPath : null;
   const wantsEditing = isFlagSet(query["edit"]);
   const justSaved = isFlagSet(query["saved"]);
+  const justCreated = isFlagSet(query["created"]);
 
   const inventory = await loadProjectDocuments(project.repositoryPath);
 
@@ -94,9 +95,17 @@ export default async function ProjectDocumentsPage({
 
       <main className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
         <section className="flex flex-col gap-3">
-          <h2 className="text-xs uppercase tracking-wider text-zinc-600">
-            {inventory.ok ? `${String(inventory.documents.length)} document(s)` : "Inventaire"}
-          </h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-xs uppercase tracking-wider text-zinc-600">
+              {inventory.ok ? `${String(inventory.documents.length)} document(s)` : "Inventaire"}
+            </h2>
+            <Link
+              href={`/projects/${project.id}/documents/new`}
+              className="rounded-md border border-zinc-700 bg-zinc-800/70 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Nouveau document
+            </Link>
+          </div>
 
           {inventory.ok ? (
             inventory.documents.length === 0 ? (
@@ -117,12 +126,14 @@ export default async function ProjectDocumentsPage({
         </section>
 
         <section className="flex min-w-0 flex-col gap-4">
-          {justSaved && !isEditing ? (
+          {(justSaved || justCreated) && !isEditing ? (
             <p
               role="status"
               className="rounded-lg border border-teal-400/30 bg-teal-400/10 px-4 py-2 text-xs text-teal-200"
             >
-              Document enregistre dans le repository.
+              {justCreated
+                ? "Document cree dans le repository."
+                : "Document enregistre dans le repository."}
             </p>
           ) : null}
 

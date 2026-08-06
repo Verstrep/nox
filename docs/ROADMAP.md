@@ -121,33 +121,71 @@ sauvegarde automatique, aperçu Markdown, diff
 
 ---
 
-## 🟢 6. Création de documents Markdown
-
-**Étape active.**
+## ✅ 6. Création de documents Markdown — `TASK-006`
 
 **Objectif** : créer un nouveau document depuis NOX, sans jamais écraser un fichier existant.
 
-- Validation d'un chemin qui n'existe pas encore, dans un emplacement autorisé.
-- Refus d'écrasement d'un fichier déjà présent.
-- Réutilisation du confinement et de l'écriture sûre de l'étape 5.
+- Route authentifiée `POST /repositories/documents/create`, réponse `201`.
+- Création par ouverture exclusive, seule garantie de non-écrasement
+  ([D-062](DECISIONS.md#d-062--création-par-ouverture-exclusive-jamais-par-vérification-préalable),
+  [D-063](DECISIONS.md#d-063--aucun-écrasement-aucune-option-pour-en-demander-un)).
+- Dossiers parents obligatoirement existants, réels et non liés
+  ([D-064](DECISIONS.md#d-064--les-dossiers-parents-doivent-exister--nox-nen-crée-aucun),
+  [D-065](DECISIONS.md#d-065--refus-des-dossiers-parents-qui-sont-des-liens)).
+- Noms validés pour rester portables, jamais transformés
+  ([D-067](DECISIONS.md#d-067--noms-validés-pour-rester-portables-et-jamais-transformés)).
+- Chemin final recomposé côté serveur à partir d'une destination validée
+  ([D-068](DECISIONS.md#d-068--le-chemin-final-est-reconstruit-côté-serveur)).
+- Page `/projects/[id]/documents/new` : cinq destinations, prévisualisation du chemin,
+  contenu initial facultatif.
 
-**Fin d'étape** : un document de référence manquant peut être créé depuis NOX.
+**Fin d'étape atteinte** : un document de référence manquant est créé depuis NOX, apparaît
+aussitôt dans l'inventaire et devient immédiatement modifiable — vérifié par un test fonctionnel
+réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
+
+Hors périmètre volontaire : suppression, renommage, déplacement, création de dossiers, modèles
+et génération de contenu
+([D-069](DECISIONS.md#d-069--aucun-modèle-aucun-contenu-généré)).
 
 ---
 
-## ⬜ 7. Gestion des tâches
+## ✅ 7. Gestion structurée des tâches — `TASK-007`
 
-**Objectif** : structurer le travail en tâches vérifiables.
+**Objectif** : structurer le travail en tâches vérifiables, et produire l'artefact que liront
+les agents.
 
-- Modèle de tâche : objectif, périmètre, hors-périmètre, critères d'acceptation, validations.
-- Backlog ordonné, transitions de `TaskStatus`.
-- Génération et prévisualisation du prompt d'une tâche.
+- Modèles `Task`, `TaskAcceptanceCriterion`, `TaskDocumentReference`, `TaskValidationCommand`.
+- Numéro attribué par un compteur transactionnel par projet, jamais réutilisé
+  ([D-075](DECISIONS.md#d-075--allocation-transactionnelle-du-numéro),
+  [D-076](DECISIONS.md#d-076--les-trous-de-numérotation-sont-acceptés)).
+- Backlog filtrable et transitions manuelles centralisées dans une fonction pure
+  ([D-078](DECISIONS.md#d-078--transitions-manuelles-limitées-et-centralisées)).
+- Générateur Markdown pur et déterministe, sans valeur mutable
+  ([D-083](DECISIONS.md#d-083--le-statut-et-la-priorité-ne-figurent-pas-dans-le-markdown)).
+- Route authentifiée `POST /repositories/tasks/create-document`, seule autorisée à créer le
+  dossier `tasks/` ([D-081](DECISIONS.md#d-081--le-dossier-tasks-est-la-seule-création-de-dossier-autorisée)).
+- Synchronisation à quatre états et reprise idempotente, sans écrasement
+  ([D-079](DECISIONS.md#d-079--quatre-états-de-synchronisation-explicites),
+  [D-080](DECISIONS.md#d-080--reprise-idempotente-sans-écrasement)).
+- Pages `/projects/[id]/tasks`, `/tasks/new` et `/tasks/[taskId]`.
 
-**Fin d'étape** : une tâche complète est rédigeable dans NOX et son prompt est prévisualisable.
+**Fin d'étape atteinte** : une tâche complète est rédigeable dans NOX, son document Markdown
+apparaît dans le repository, et une panne du runner ne la fait pas perdre — vérifié par un test
+fonctionnel réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
+
+Hors périmètre volontaire : exécution des commandes, lancement de Claude Code, modification
+complète d'une spécification après création, suppression, renumérotation, duplication,
+dépendances entre tâches
+([D-084](DECISIONS.md#d-084--les-commandes-de-validation-sont-stockées-jamais-exécutées)).
+
+La prévisualisation du prompt, initialement prévue ici, appartient à l'étape 8 : elle est
+indissociable du lancement qu'elle précède.
 
 ---
 
-## ⬜ 8. Runner contrôlé
+## 🟢 8. Runner contrôlé
+
+**Étape active.**
 
 **Objectif** : piloter le runner local depuis l'interface.
 

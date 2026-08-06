@@ -8,6 +8,8 @@ import { MAX_BODY_BYTES, MAX_DOCUMENT_BODY_BYTES } from "./http/body.ts";
 import { createRunnerServer } from "./server.ts";
 import type { ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
+import type { CreateDocumentResult } from "./repositories/documents/create-document.ts";
+import type { CreateTaskDocumentResult } from "./repositories/tasks/create-task-document.ts";
 import type { UpdateDocumentResult } from "./repositories/documents/update-document.ts";
 import type { ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
 
@@ -120,6 +122,88 @@ function fakeUpdate(
   });
 }
 
+/** Arguments transmis a la couche de creation. */
+const receivedCreateCalls: { repositoryPath: string; documentPath: string; content: string }[] = [];
+
+/**
+ * Creation simulee : le serveur ne doit creer aucun fichier pendant ses propres
+ * tests. La creation reelle est couverte par `create-document.test.ts`.
+ */
+function fakeCreate(
+  repositoryPath: string,
+  documentPath: string,
+  content: string,
+): Promise<CreateDocumentResult> {
+  receivedCreateCalls.push({ repositoryPath, documentPath, content });
+
+  if (documentPath === "docs/OCCUPE.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_ALREADY_EXISTS" });
+  }
+  if (documentPath === "docs/missing/NOTE.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_PARENT_NOT_FOUND" });
+  }
+  if (documentPath === "docs/lien/NOTE.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED" });
+  }
+  if (documentPath === "docs/CON.md") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_NAME_NOT_PORTABLE" });
+  }
+
+  return Promise.resolve({
+    ok: true,
+    document: {
+      ...SAMPLE_DOCUMENT,
+      path: documentPath,
+      name: documentPath.split("/").at(-1) ?? documentPath,
+      size: Buffer.byteLength(content),
+      content,
+      revision: NEXT_REVISION,
+    },
+  });
+}
+
+/** Arguments transmis a la creation du document d'une tache. */
+const receivedTaskCalls: { repositoryPath: string; taskCode: string; content: string }[] = [];
+
+/**
+ * Creation simulee du document d'une tache : aucun fichier ni dossier n'est cree
+ * pendant les tests du serveur. Le comportement reel — dont la creation de
+ * `tasks/` — est couvert par `create-task-document.test.ts`.
+ */
+function fakeCreateTaskDocument(
+  repositoryPath: string,
+  taskCode: string,
+  content: string,
+): Promise<CreateTaskDocumentResult> {
+  receivedTaskCalls.push({ repositoryPath, taskCode, content });
+
+  if (taskCode === "TASK-999") {
+    return Promise.resolve({ ok: false, code: "DOCUMENT_ALREADY_EXISTS" });
+  }
+  if (taskCode === "TASK-998") {
+    return Promise.resolve({ ok: false, code: "TASKS_DIRECTORY_NOT_DIRECTORY" });
+  }
+  if (taskCode === "TASK-997") {
+    return Promise.resolve({ ok: false, code: "TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED" });
+  }
+  if (!/^TASK-\d{3,}$/.test(taskCode)) {
+    return Promise.resolve({ ok: false, code: "TASK_CODE_INVALID" });
+  }
+
+  return Promise.resolve({
+    ok: true,
+    document: {
+      ...SAMPLE_DOCUMENT,
+      path: `tasks/${taskCode}.md`,
+      name: `${taskCode}.md`,
+      category: "TASK",
+      size: Buffer.byteLength(content),
+      content,
+      revision: NEXT_REVISION,
+    },
+  });
+}
+
 let server: Server;
 let baseUrl: string;
 
@@ -130,6 +214,8 @@ before(async () => {
     listDocuments: fakeList,
     readDocument: fakeRead,
     updateDocument: fakeUpdate,
+    createDocument: fakeCreate,
+    createTaskDocument: fakeCreateTaskDocument,
     log: () => undefined,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -722,5 +808,327 @@ describe("POST /repositories/documents/update", () => {
     });
 
     assert.equal(response.text.includes(TOKEN), false);
+  });
+});
+
+describe("POST /repositories/documents/create", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const REPOSITORY = "D:\\Projets\\depot";
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      repositoryPath: REPOSITORY,
+      documentPath: "docs/PRODUCT_VISION.md",
+      content: "# Vision\n",
+      ...overrides,
+    });
+  }
+
+  it("repond 201 et retourne le document cree", async () => {
+    const response = await call("/repositories/documents/create", { ...authorized, body: body() });
+
+    assert.equal(response.status, 201);
+    assert.deepEqual(response.json, {
+      ok: true,
+      document: {
+        ...SAMPLE_DOCUMENT,
+        path: "docs/PRODUCT_VISION.md",
+        name: "PRODUCT_VISION.md",
+        size: Buffer.byteLength("# Vision\n"),
+        content: "# Vision\n",
+        revision: NEXT_REVISION,
+      },
+    });
+  });
+
+  it("transmet les trois champs a la couche metier", async () => {
+    await call("/repositories/documents/create", { ...authorized, body: body() });
+
+    assert.deepEqual(receivedCreateCalls.at(-1), {
+      repositoryPath: REPOSITORY,
+      documentPath: "docs/PRODUCT_VISION.md",
+      content: "# Vision\n",
+    });
+  });
+
+  it("accepte un contenu initial vide", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ content: "" }),
+    });
+
+    assert.equal(response.status, 201);
+    assert.equal(receivedCreateCalls.at(-1)?.content, "");
+  });
+
+  it("refuse une requete sans jeton, sans appeler la couche metier", async () => {
+    const before = receivedCreateCalls.length;
+    const response = await call("/repositories/documents/create", {
+      method: "POST",
+      token: null,
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+    assert.equal(receivedCreateCalls.length, before);
+  });
+
+  it("refuse un jeton incorrect", async () => {
+    const response = await call("/repositories/documents/create", {
+      method: "POST",
+      token: "Bearer un-autre-jeton",
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("refuse une methode incorrecte", async () => {
+    const response = await call("/repositories/documents/create", {
+      method: "GET",
+      token: `Bearer ${TOKEN}`,
+    });
+
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "POST");
+  });
+
+  it("traduit un document deja present en 409", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ documentPath: "docs/OCCUPE.md" }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "DOCUMENT_ALREADY_EXISTS");
+  });
+
+  it("traduit un dossier parent absent en 404", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ documentPath: "docs/missing/NOTE.md" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "DOCUMENT_PARENT_NOT_FOUND");
+  });
+
+  it("traduit un parent lien symbolique en 403", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ documentPath: "docs/lien/NOTE.md" }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(errorCode(response.json), "DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED");
+  });
+
+  it("traduit un nom non portable en 400", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ documentPath: "docs/CON.md" }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(errorCode(response.json), "DOCUMENT_NAME_NOT_PORTABLE");
+  });
+
+  it("exige les trois champs, tous de type chaine", async () => {
+    for (const raw of [
+      JSON.stringify({ documentPath: "docs/a.md", content: "" }),
+      JSON.stringify({ repositoryPath: REPOSITORY, content: "" }),
+      JSON.stringify({ repositoryPath: REPOSITORY, documentPath: "docs/a.md" }),
+      JSON.stringify({ repositoryPath: REPOSITORY, documentPath: "docs/a.md", content: 42 }),
+    ]) {
+      const response = await call("/repositories/documents/create", { ...authorized, body: raw });
+      assert.equal(response.status, 400, raw);
+      assert.equal(errorCode(response.json), "INVALID_REQUEST", raw);
+    }
+  });
+
+  it("accepte un corps plus volumineux que la limite des autres routes", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ content: "x".repeat(MAX_BODY_BYTES * 2) }),
+    });
+
+    assert.equal(response.status, 201);
+  });
+
+  it("refuse un corps depassant la limite d'ecriture", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ content: "x".repeat(MAX_DOCUMENT_BODY_BYTES + 1024) }),
+    });
+
+    assert.equal(response.status, 413);
+    assert.equal(errorCode(response.json), "PAYLOAD_TOO_LARGE");
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu dans une reponse d'erreur", async () => {
+    const response = await call("/repositories/documents/create", {
+      ...authorized,
+      body: body({ documentPath: "docs/OCCUPE.md" }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+  });
+});
+
+describe("POST /repositories/tasks/create-document", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const REPOSITORY = "D:\\Projets\\depot";
+  const CONTENT = "# TASK-001 — Une tache\n";
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      repositoryPath: REPOSITORY,
+      taskCode: "TASK-001",
+      content: CONTENT,
+      ...overrides,
+    });
+  }
+
+  it("repond 201 et retourne le document cree", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      ...authorized,
+      body: body(),
+    });
+
+    assert.equal(response.status, 201);
+    assert.deepEqual(response.json, {
+      ok: true,
+      document: {
+        ...SAMPLE_DOCUMENT,
+        path: "tasks/TASK-001.md",
+        name: "TASK-001.md",
+        category: "TASK",
+        size: Buffer.byteLength(CONTENT),
+        content: CONTENT,
+        revision: NEXT_REVISION,
+      },
+    });
+  });
+
+  it("transmet le code plutot qu'un chemin a la couche metier", async () => {
+    receivedTaskCalls.length = 0;
+    await call("/repositories/tasks/create-document", { ...authorized, body: body() });
+
+    assert.deepEqual(receivedTaskCalls, [
+      { repositoryPath: REPOSITORY, taskCode: "TASK-001", content: CONTENT },
+    ]);
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      method: "POST",
+      token: null,
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+  });
+
+  it("refuse un jeton errone", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      method: "POST",
+      token: "Bearer mauvais-jeton",
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(errorCode(response.json), "UNAUTHORIZED");
+  });
+
+  it("refuse une methode autre que POST", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      method: "GET",
+      token: `Bearer ${TOKEN}`,
+    });
+
+    assert.equal(response.status, 405);
+    assert.equal(errorCode(response.json), "METHOD_NOT_ALLOWED");
+  });
+
+  it("refuse un code de tache mal forme", async () => {
+    for (const taskCode of ["TASK-1", "task-001", "TASK-001.md", "../TASK-001", ""]) {
+      const response = await call("/repositories/tasks/create-document", {
+        ...authorized,
+        body: body({ taskCode }),
+      });
+
+      assert.equal(response.status, 400, `code « ${taskCode} »`);
+      assert.equal(errorCode(response.json), "TASK_CODE_INVALID");
+    }
+  });
+
+  it("refuse un corps auquel il manque un champ", async () => {
+    for (const raw of [
+      JSON.stringify({ repositoryPath: REPOSITORY, taskCode: "TASK-001" }),
+      JSON.stringify({ repositoryPath: REPOSITORY, content: CONTENT }),
+      JSON.stringify({ taskCode: "TASK-001", content: CONTENT }),
+      JSON.stringify({ repositoryPath: REPOSITORY, taskCode: 1, content: CONTENT }),
+    ]) {
+      const response = await call("/repositories/tasks/create-document", {
+        ...authorized,
+        body: raw,
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(errorCode(response.json), "INVALID_REQUEST");
+    }
+  });
+
+  it("traduit un emplacement deja occupe en 409", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      ...authorized,
+      body: body({ taskCode: "TASK-999" }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "DOCUMENT_ALREADY_EXISTS");
+  });
+
+  it("traduit un dossier tasks occupe par un fichier en 422", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      ...authorized,
+      body: body({ taskCode: "TASK-998" }),
+    });
+
+    assert.equal(response.status, 422);
+    assert.equal(errorCode(response.json), "TASKS_DIRECTORY_NOT_DIRECTORY");
+  });
+
+  it("traduit un dossier tasks lie en 403", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      ...authorized,
+      body: body({ taskCode: "TASK-997" }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(errorCode(response.json), "TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED");
+  });
+
+  it("refuse un corps depassant la limite d'ecriture", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      ...authorized,
+      body: body({ content: "x".repeat(MAX_DOCUMENT_BODY_BYTES + 1024) }),
+    });
+
+    assert.equal(response.status, 413);
+    assert.equal(errorCode(response.json), "PAYLOAD_TOO_LARGE");
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu dans une reponse d'erreur", async () => {
+    const response = await call("/repositories/tasks/create-document", {
+      ...authorized,
+      body: body({ taskCode: "TASK-999" }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(/[A-Za-z]:\\/.test(response.text), false);
   });
 });

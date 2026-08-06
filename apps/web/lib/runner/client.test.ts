@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import {
   checkRunnerHealth,
+  createProjectDocument,
+  createTaskDocument,
   listProjectDocuments,
   readProjectDocument,
   resolveRepositoryPath,
@@ -10,6 +12,7 @@ import {
 } from "./client.ts";
 import {
   describeRunnerFailure,
+  isDocumentAlreadyExists,
   isDocumentConflict,
   isRunnerUnavailable,
   type RunnerFailure,
@@ -562,6 +565,170 @@ describe("updateProjectDocument", () => {
   });
 });
 
+describe("createProjectDocument", () => {
+  const created = {
+    path: "docs/PRODUCT_VISION.md",
+    name: "PRODUCT_VISION.md",
+    category: "CORE",
+    size: 9,
+    updatedAt: "2026-08-05T09:00:00.000Z",
+    content: "# Vision\n",
+    revision: REVISION,
+  };
+
+  it("accepte un statut 201 et retourne le document cree", async () => {
+    const result = await createProjectDocument(
+      "D:\\Projets\\depot",
+      "docs/PRODUCT_VISION.md",
+      "# Vision\n",
+      { environment: ENVIRONMENT, fetch: stubFetch(201, { ok: true, document: created }) },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.path, "docs/PRODUCT_VISION.md");
+    assert.equal(result.ok && result.value.revision, REVISION);
+  });
+
+  it("refuse un 200 : la creation doit annoncer une ressource nouvelle", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, document: created }),
+    });
+
+    assert.equal(failureOf(result).kind, "invalid_response");
+  });
+
+  it("envoie les trois champs, et le jeton dans le seul en-tete", async () => {
+    const capture: { request?: Request } = {};
+    await createProjectDocument("D:\\Projets\\depot", "docs/PRODUCT_VISION.md", "# Vision\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(201, { ok: true, document: created }, capture),
+    });
+
+    assert.equal(capture.request?.method, "POST");
+    assert.equal(capture.request?.url.endsWith("/repositories/documents/create"), true);
+    assert.equal(capture.request?.headers.get("authorization"), `Bearer ${TOKEN}`);
+
+    const body = await capture.request?.text();
+    assert.equal(
+      body,
+      JSON.stringify({
+        repositoryPath: "D:\\Projets\\depot",
+        documentPath: "docs/PRODUCT_VISION.md",
+        content: "# Vision\n",
+      }),
+    );
+    assert.equal(body?.includes(TOKEN), false);
+  });
+
+  it("transmet un contenu initial vide sans le transformer", async () => {
+    const capture: { request?: Request } = {};
+    await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(201, { ok: true, document: { ...created, content: "", size: 0 } }, capture),
+    });
+
+    assert.equal(JSON.parse((await capture.request?.text()) ?? "{}").content, "");
+  });
+
+  it("traduit un document deja present comme conflit distinct", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "DOCUMENT_ALREADY_EXISTS" } }),
+    });
+
+    const runnerFailure = failureOf(result);
+    assert.equal(isDocumentAlreadyExists(runnerFailure), true);
+    // Il ne doit pas etre confondu avec le conflit de revision de l'edition.
+    assert.equal(isDocumentConflict(runnerFailure), false);
+    assert.match(describeRunnerFailure(runnerFailure), /ne le remplace jamais/);
+  });
+
+  it("traduit un dossier parent absent", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/x/a.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(404, { ok: false, error: { code: "DOCUMENT_PARENT_NOT_FOUND" } }),
+    });
+
+    assert.match(describeRunnerFailure(failureOf(result)), /ne cree aucun dossier/);
+  });
+
+  it("traduit un parent lien symbolique", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/lien/a.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(403, { ok: false, error: { code: "DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED" } }),
+    });
+
+    assert.match(describeRunnerFailure(failureOf(result)), /c'est un lien/);
+  });
+
+  it("traduit un nom non portable", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/CON.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(400, { ok: false, error: { code: "DOCUMENT_NAME_NOT_PORTABLE" } }),
+    });
+
+    assert.match(describeRunnerFailure(failureOf(result)), /noms reserves/);
+  });
+
+  it("traduit un contenu trop volumineux", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(413, { ok: false, error: { code: "DOCUMENT_TOO_LARGE" } }),
+    });
+
+    assert.match(describeRunnerFailure(failureOf(result)), /taille maximale/);
+  });
+
+  it("traduit une authentification refusee", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(401, { ok: false, error: { code: "UNAUTHORIZED" } }),
+    });
+
+    assert.equal(failureOf(result).kind, "unauthorized");
+  });
+
+  it("signale un runner arrete", async () => {
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new TypeError("fetch failed")),
+    });
+
+    assert.equal(failureOf(result).kind, "unreachable");
+  });
+
+  it("refuse une reponse hors contrat", async () => {
+    for (const body of [
+      { ok: true, document: { ...created, revision: "trop-court" } },
+      { ok: true, document: { ...created, content: undefined } },
+      { ok: true },
+      { ok: true, document: null },
+    ]) {
+      const result = await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", {
+        environment: ENVIRONMENT,
+        fetch: stubFetch(201, body),
+      });
+
+      assert.equal(failureOf(result).kind, "invalid_response", JSON.stringify(body));
+    }
+  });
+
+  it("signale une configuration absente sans appeler le runner", async () => {
+    let called = false;
+    const result = await createProjectDocument("D:\\Projets\\depot", "docs/a.md", "# X\n", {
+      environment: { NOX_RUNNER_URL: "http://127.0.0.1:9999" },
+      fetch: () => {
+        called = true;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+
+    assert.equal(failureOf(result).kind, "not_configured");
+    assert.equal(called, false);
+  });
+});
+
 describe("messages presentes a l'utilisateur", () => {
   const failures: RunnerFailure[] = [
     { kind: "not_configured" },
@@ -585,6 +752,16 @@ describe("messages presentes a l'utilisateur", () => {
     { kind: "runner_error", code: "DOCUMENT_TEMPORARY_FILE_FAILED" },
     { kind: "runner_error", code: "DOCUMENT_REVISION_REQUIRED" },
     { kind: "runner_error", code: "DOCUMENT_REVISION_INVALID" },
+    { kind: "runner_error", code: "DOCUMENT_ALREADY_EXISTS" },
+    { kind: "runner_error", code: "DOCUMENT_PARENT_NOT_FOUND" },
+    { kind: "runner_error", code: "DOCUMENT_PARENT_NOT_DIRECTORY" },
+    { kind: "runner_error", code: "DOCUMENT_PARENT_SYMLINK_NOT_ALLOWED" },
+    { kind: "runner_error", code: "DOCUMENT_NAME_NOT_PORTABLE" },
+    { kind: "runner_error", code: "DOCUMENT_CREATION_FAILED" },
+    { kind: "runner_error", code: "TASKS_DIRECTORY_NOT_DIRECTORY" },
+    { kind: "runner_error", code: "TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED" },
+    { kind: "runner_error", code: "TASKS_DIRECTORY_CREATION_FAILED" },
+    { kind: "runner_error", code: "TASK_CODE_INVALID" },
   ];
 
   it("produit un message non vide pour chaque echec", () => {
@@ -606,5 +783,114 @@ describe("messages presentes a l'utilisateur", () => {
     assert.equal(isRunnerUnavailable({ kind: "unreachable" }), true);
     assert.equal(isRunnerUnavailable({ kind: "not_configured" }), true);
     assert.equal(isRunnerUnavailable({ kind: "runner_error", code: "PATH_NOT_FOUND" }), false);
+  });
+});
+
+describe("createTaskDocument", () => {
+  const REPOSITORY = "D:\\Projets\\depot";
+  const CONTENT = "# TASK-001 — Une tache\n";
+  const created = {
+    path: "tasks/TASK-001.md",
+    name: "TASK-001.md",
+    category: "TASK",
+    size: Buffer.byteLength(CONTENT),
+    updatedAt: "2026-08-06T09:00:00.000Z",
+    content: CONTENT,
+    revision: REVISION,
+  };
+
+  it("accepte un statut 201 et retourne le document cree", async () => {
+    const result = await createTaskDocument(REPOSITORY, "TASK-001", CONTENT, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(201, { ok: true, document: created }),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.path, "tasks/TASK-001.md");
+    assert.equal(result.ok && result.value.revision, REVISION);
+  });
+
+  it("refuse un 200 : la creation doit annoncer une ressource nouvelle", async () => {
+    const result = await createTaskDocument(REPOSITORY, "TASK-001", CONTENT, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, { ok: true, document: created }),
+    });
+
+    assert.equal(failureOf(result).kind, "invalid_response");
+  });
+
+  it("envoie un code de tache, jamais un chemin", async () => {
+    const capture: { request?: Request } = {};
+
+    await createTaskDocument(REPOSITORY, "TASK-001", CONTENT, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(201, { ok: true, document: created }, capture),
+    });
+
+    const request = capture.request;
+    assert.ok(request !== undefined);
+    assert.equal(new URL(request.url).pathname, "/repositories/tasks/create-document");
+
+    const body: unknown = await request.json();
+    assert.deepEqual(body, {
+      repositoryPath: REPOSITORY,
+      taskCode: "TASK-001",
+      content: CONTENT,
+    });
+    // Aucun champ de chemin : le runner le compose lui-meme.
+    assert.equal(Object.keys(body as object).includes("documentPath"), false);
+
+    assert.equal(request.headers.get("authorization"), `Bearer ${TOKEN}`);
+  });
+
+  it("traduit un emplacement occupe en echec reconnaissable", async () => {
+    const result = await createTaskDocument(REPOSITORY, "TASK-001", CONTENT, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "DOCUMENT_ALREADY_EXISTS" } }),
+    });
+
+    assert.equal(isDocumentAlreadyExists(failureOf(result)), true);
+  });
+
+  it("traduit un dossier tasks inutilisable", async () => {
+    for (const [status, code] of [
+      [422, "TASKS_DIRECTORY_NOT_DIRECTORY"],
+      [403, "TASKS_DIRECTORY_SYMLINK_NOT_ALLOWED"],
+      [500, "TASKS_DIRECTORY_CREATION_FAILED"],
+    ] as const) {
+      const result = await createTaskDocument(REPOSITORY, "TASK-001", CONTENT, {
+        environment: ENVIRONMENT,
+        fetch: stubFetch(status, { ok: false, error: { code } }),
+      });
+
+      const failure = failureOf(result);
+      assert.equal(failure.kind, "runner_error");
+      assert.equal(failure.kind === "runner_error" ? failure.code : null, code);
+      assert.equal(isDocumentAlreadyExists(failure), false);
+    }
+  });
+
+  it("signale un runner injoignable", async () => {
+    const result = await createTaskDocument(REPOSITORY, "TASK-001", CONTENT, {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new Error("connexion refusee")),
+    });
+
+    assert.equal(failureOf(result).kind, "unreachable");
+  });
+
+  it("n'appelle pas le runner sans configuration", async () => {
+    let called = false;
+
+    const result = await createTaskDocument(REPOSITORY, "TASK-001", CONTENT, {
+      environment: {},
+      fetch: () => {
+        called = true;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+
+    assert.equal(failureOf(result).kind, "not_configured");
+    assert.equal(called, false);
   });
 });

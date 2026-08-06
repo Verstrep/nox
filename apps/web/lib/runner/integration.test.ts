@@ -22,6 +22,7 @@ import { createRunnerServer } from "../../../runner/src/server.ts";
 
 import {
   checkRunnerHealth,
+  createProjectDocument,
   listProjectDocuments,
   readProjectDocument,
   resolveRepositoryPath,
@@ -282,6 +283,102 @@ describe("integration web -> runner : ecriture d'un document", () => {
 
     assert.equal(failureOf(refused).kind, "unauthorized");
     assert.equal(await readFile(path.join(documentsRepository, "README.md"), "utf8"), "# Lisez-moi\n");
+  });
+
+  it("cree un document, le rend inventorie, lisible et modifiable", async () => {
+    const created = await createProjectDocument(
+      documentsRepository,
+      "docs/PRODUCT_VISION.md",
+      "# Vision\n",
+      { environment },
+    );
+
+    assert.equal(created.ok, true);
+    if (!created.ok) return;
+
+    assert.equal(created.value.path, "docs/PRODUCT_VISION.md");
+    assert.equal(
+      await readFile(path.join(documentsRepository, "docs", "PRODUCT_VISION.md"), "utf8"),
+      "# Vision\n",
+    );
+
+    const inventory = await listProjectDocuments(documentsRepository, { environment });
+    assert.equal(
+      inventory.ok && inventory.value.some((doc) => doc.path === "docs/PRODUCT_VISION.md"),
+      true,
+    );
+
+    // La revision retournee suffit a enchainer une modification.
+    const updated = await updateProjectDocument(
+      documentsRepository,
+      "docs/PRODUCT_VISION.md",
+      "# Vision revue\n",
+      created.value.revision,
+      { environment },
+    );
+    assert.equal(updated.ok, true);
+  });
+
+  it("refuse d'ecraser un document existant de bout en bout", async () => {
+    const refused = await createProjectDocument(
+      documentsRepository,
+      "README.md",
+      "# Ecrasement\n",
+      { environment },
+    );
+
+    const runnerFailure = failureOf(refused);
+    assert.equal(
+      runnerFailure.kind === "runner_error" && runnerFailure.code,
+      "DOCUMENT_ALREADY_EXISTS",
+    );
+    assert.equal(
+      await readFile(path.join(documentsRepository, "README.md"), "utf8"),
+      "# Lisez-moi\n",
+    );
+  });
+
+  it("refuse un dossier parent absent sans le creer", async () => {
+    const refused = await createProjectDocument(
+      documentsRepository,
+      "docs/absent/NOTE.md",
+      "# Note\n",
+      { environment },
+    );
+
+    const runnerFailure = failureOf(refused);
+    assert.equal(
+      runnerFailure.kind === "runner_error" && runnerFailure.code,
+      "DOCUMENT_PARENT_NOT_FOUND",
+    );
+    assert.equal((await readdir(path.join(documentsRepository, "docs"))).includes("absent"), false);
+  });
+
+  it("refuse une traversee de chemin a la creation", async () => {
+    const refused = await createProjectDocument(
+      documentsRepository,
+      "../../INJECTE.md",
+      "# Injecte\n",
+      { environment },
+    );
+
+    const runnerFailure = failureOf(refused);
+    assert.equal(
+      runnerFailure.kind === "runner_error" && runnerFailure.code,
+      "DOCUMENT_PATH_INVALID",
+    );
+  });
+
+  it("exige le bon jeton pour creer", async () => {
+    const refused = await createProjectDocument(documentsRepository, "docs/PIRATE.md", "# X\n", {
+      environment: { ...environment, NOX_RUNNER_TOKEN: "un-autre-jeton" },
+    });
+
+    assert.equal(failureOf(refused).kind, "unauthorized");
+    assert.equal(
+      (await readdir(path.join(documentsRepository, "docs"))).includes("PIRATE.md"),
+      false,
+    );
   });
 
   it("ne laisse aucun fichier temporaire derriere lui", async () => {

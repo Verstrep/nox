@@ -1,3 +1,4 @@
+import { TASK_STATUS } from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -6,11 +7,13 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { loadProjectDocuments } from "@/lib/documents";
 import { formatDateTime } from "@/lib/format";
 import { loadProject } from "@/lib/projects";
+import { countTasksByStatus } from "@/lib/task-display";
+import { loadProjectTasks } from "@/lib/tasks";
 
 /**
  * Sections encore vides. Elles annoncent ce qui viendra sans simuler de donnees :
- * afficher de fausses taches ou de faux messages rendrait le tableau de bord
- * illisible et ferait croire a des fonctionnalites inexistantes.
+ * afficher de faux messages rendrait le tableau de bord illisible et ferait
+ * croire a des fonctionnalites inexistantes.
  */
 const PLANNED_SECTIONS = [
   {
@@ -19,16 +22,20 @@ const PLANNED_SECTIONS = [
     description: "Echanger avec l'orchestrateur pour clarifier le besoin de ce projet.",
   },
   {
-    id: "tasks",
-    title: "Taches",
-    description: "Decouper le projet en taches structurees et suivre leur statut.",
-  },
-  {
     id: "runs",
     title: "Executions",
     description: "Suivre les executions de Claude Code, leurs logs et leurs resultats.",
   },
 ] as const;
+
+function TaskCount({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-wider text-zinc-600">{label}</dt>
+      <dd className="mt-1 text-2xl font-semibold text-zinc-200">{value}</dd>
+    </div>
+  );
+}
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -41,6 +48,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // L'inventaire est indicatif : son echec n'empeche jamais l'affichage des
   // donnees SQLite du projet, qui ne dependent pas du runner.
   const documents = await loadProjectDocuments(project.repositoryPath);
+
+  // Les taches, elles, viennent de SQLite : leurs compteurs restent affiches
+  // meme runner arrete.
+  const tasks = await loadProjectTasks(project.id);
+  const taskCounts = countTasksByStatus(tasks);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -114,6 +126,33 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           ) : (
             <p className="text-sm text-amber-200/90">{documents.message}</p>
           )}
+        </SectionCard>
+
+        <SectionCard
+          title="Taches"
+          description="Unites de travail structurees, enregistrees dans la base locale de NOX."
+          action={
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={`/projects/${project.id}/tasks`}
+                className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+              >
+                Voir les taches
+              </Link>
+              <Link
+                href={`/projects/${project.id}/tasks/new`}
+                className="inline-block rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
+              >
+                Nouvelle tache
+              </Link>
+            </div>
+          }
+        >
+          <dl className="grid grid-cols-3 gap-4">
+            <TaskCount label="Total" value={tasks.length} />
+            <TaskCount label="Pretes" value={taskCounts[TASK_STATUS.READY]} />
+            <TaskCount label="Bloquees" value={taskCounts[TASK_STATUS.BLOCKED]} />
+          </dl>
         </SectionCard>
 
         <div className="grid gap-4 sm:grid-cols-2">

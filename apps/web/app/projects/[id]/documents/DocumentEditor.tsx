@@ -1,18 +1,15 @@
 "use client";
 
 import type { ProjectDocumentContent } from "@nox/shared";
-import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 
 import { StatusBadge } from "@/components/StatusBadge";
+import { useUnsavedChanges } from "@/components/useUnsavedChanges";
 import { documentUrl } from "@/lib/document-edit";
 import { describeCategory } from "@/lib/documents";
 
 import { updateDocumentAction } from "./actions";
 import { initialEditDocumentState } from "./form-state";
-
-const DISCARD_CONFIRMATION =
-  "Vos modifications ne sont pas enregistrees. Quitter l'edition les perdra definitivement.";
 
 type DocumentEditorProps = {
   projectId: string;
@@ -34,7 +31,6 @@ type DocumentEditorProps = {
  * projet : il n'a aucun usage ailleurs.
  */
 export function DocumentEditor({ projectId, document }: DocumentEditorProps) {
-  const router = useRouter();
   const [state, formAction, pending] = useActionState(
     updateDocumentAction,
     initialEditDocumentState(document.path, document.content, document.revision),
@@ -42,33 +38,9 @@ export function DocumentEditor({ projectId, document }: DocumentEditorProps) {
 
   const [content, setContent] = useState(document.content);
   const isDirty = content !== document.content;
+  const leaveEditing = useUnsavedChanges(isDirty);
 
   const readUrl = documentUrl(projectId, document.path);
-
-  /**
-   * Filet de securite du navigateur : fermeture d'onglet, rechargement, retour
-   * en arriere. Il ne couvre pas la navigation interne de Next.js, d'ou la
-   * confirmation explicite portee par les boutons ci-dessous.
-   */
-  useEffect(() => {
-    if (!isDirty) {
-      return;
-    }
-
-    const warn = (event: BeforeUnloadEvent): void => {
-      event.preventDefault();
-    };
-
-    window.addEventListener("beforeunload", warn);
-    return () => { window.removeEventListener("beforeunload", warn); };
-  }, [isDirty]);
-
-  const leaveEditing = (destination: string): void => {
-    if (isDirty && !window.confirm(DISCARD_CONFIRMATION)) {
-      return;
-    }
-    router.push(destination);
-  };
 
   return (
     <article className="flex min-h-0 flex-col rounded-xl border border-teal-400/30 bg-nox-surface/80">

@@ -88,6 +88,11 @@ modules dédiés décident.
   révision.
 - `POST /repositories/documents/update` — authentifiée, remplace le contenu d'un document
   existant après contrôle de révision.
+- `POST /repositories/documents/create` — authentifiée, crée un document par ouverture
+  exclusive, sans jamais écraser ni créer de dossier.
+- `POST /repositories/tasks/create-document` — authentifiée, crée `tasks/<code>.md` à partir
+  d'un code de tâche, en créant le dossier `tasks/` s'il manque. Seule route de NOX autorisée
+  à créer un dossier, et seulement celui-là.
 - Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
 - Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
 - Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
@@ -134,16 +139,19 @@ code spécifique à React ou à Node. Ce package doit rester importable des deux
 **Aujourd'hui** :
 
 - Schéma Prisma et migrations versionnées (`prisma/`).
-- Modèle `Project` uniquement.
+- Modèles `Project`, `Task`, `TaskAcceptanceCriterion`, `TaskDocumentReference` et
+  `TaskValidationCommand`.
 - Fabrique du client Prisma (`src/client.ts`), avec cache sur `globalThis` pour survivre au
   rechargement de modules de Next.js en développement.
-- Fonctions d'accès concrètes (`src/projects.ts`) : `listProjects`, `getProjectById`,
-  `findProjectByRepositoryPath`, `createProject`. Elles reçoivent le client en paramètre, ce qui
-  permet aux tests de viser une base temporaire.
+- Fonctions d'accès concrètes (`src/projects.ts`, `src/tasks.ts`). Elles reçoivent le client en
+  paramètre, ce qui permet aux tests de viser une base temporaire.
+- Les chaînes lues en base (`status`, `priority`, `documentSyncStatus`) sont revalidées à
+  chaque relecture avec les gardes de `@nox/shared` : une base modifiée à la main ne propage
+  pas une valeur inconnue jusqu'à l'interface.
 - Résolution du chemin de la base (`src/paths.ts`), ancrée sur la racine du monorepo et non sur
   le répertoire courant.
 
-**À terme** : modèles `Task`, `Run`, `Conversation`, `Message`, `ProjectDocument`.
+**À terme** : modèles `Run`, `Conversation`, `Message`.
 
 Règles : seul `apps/web` importe ce package. Le runner reste sans état — il exécute et rapporte,
 il n'écrit pas en base. Aucun composant React n'appelle Prisma directement.
@@ -276,7 +284,84 @@ Quatre propriétés font tenir cette chaîne :
 Ce que cette chaîne ne fait **pas**, volontairement : créer un document, en supprimer un, le
 renommer, le déplacer, sauvegarder automatiquement, ou proposer d'écraser un conflit.
 
-### 5.5 Répartition des validations
+### 5.5 Création d'un document Markdown
+
+```text
+Formulaire Nouveau document
+        ↓  destination + nom relatif
+Server Action
+        ↓  reconstruction du chemin relatif
+Client runner serveur
+        ↓ HTTP authentifié
+Runner
+        ↓ validation des parents + création exclusive
+Nouveau document Markdown
+```
+
+La création partage la chaîne de l'édition, mais pas ses garanties — son risque est différent :
+
+- **Le navigateur ne choisit jamais le chemin complet.** Il envoie une destination — une valeur
+  parmi cinq — et un nom relatif. La Server Action recompose le chemin à partir de la
+  destination qu'elle a elle-même validée. Un préfixe falsifié dans le formulaire n'a aucun
+  effet : il n'est pas transmis, donc pas lu.
+- **Le runner refuse tout écrasement.** La création passe par une ouverture exclusive : le
+  système crée le fichier ou échoue, sans étape intermédiaire exploitable. Un contrôle
+  d'existence préalable améliore le message, mais il ne garantit rien — un fichier peut
+  apparaître juste après.
+- **Aucun dossier n'est créé.** Chaque parent doit exister, être un vrai dossier, ne pas être un
+  lien, et rester dans le repository après résolution réelle.
+- **Le document ne vit que dans Git.** SQLite ne stocke ni son contenu, ni son chemin, ni sa
+  révision. Un document créé apparaît dans l'inventaire parce qu'il est sur le disque, pas parce
+  qu'une ligne a été écrite quelque part.
+
+Ce que cette chaîne ne fait **pas**, volontairement : supprimer, renommer, déplacer, créer un
+dossier, ou proposer de remplacer un fichier existant.
+
+### 5.6 Création d'une tâche et de son document
+
+```text
+Formulaire de tâche
+        ↓
+Transaction SQLite
+        ↓
+Tâche PENDING
+        ↓
+Générateur Markdown
+        ↓
+Runner
+        ↓
+tasks/TASK-xxx.md
+        ↓
+SYNCED / ERROR / CONFLICT
+```
+
+Cette chaîne est la première de NOX à écrire **des deux côtés** : une ligne en base et un
+fichier dans Git. Cinq propriétés la rendent tenable.
+
+- **SQLite est la source de vérité structurée.** Le titre, l'objectif, le périmètre, les
+  critères, les documents et les commandes vivent en base. C'est d'elle que tout part, et c'est
+  elle que l'interface affiche. Pendant TASK-007, modifier le fichier à la main ne met pas la
+  base à jour — l'interface le dit explicitement plutôt que de laisser croire l'inverse.
+- **Le Markdown est l'artefact versionné destiné aux agents.** Il n'est pas un doublon de
+  confort : c'est le format que Claude Code lira, et Git en garde l'historique. Il est produit
+  par une fonction pure et déterministe, ce qui permet de le regénérer à l'identique et donc de
+  reconnaître un fichier que NOX a lui-même écrit.
+- **Ni statut ni priorité n'y figurent.** Ces valeurs changent sans que la spécification
+  change. Les inscrire obligerait à réécrire le fichier à chaque clic et remplirait
+  l'historique Git de modifications qui n'apprennent rien.
+- **Une panne du runner ne fait pas perdre la tâche.** Les deux étapes sont dissociées : la
+  transaction en base aboutit d'abord, l'écriture ensuite. Un runner arrêté laisse une tâche
+  complète en `ERROR`, reprenable d'un bouton, avec une spécification intacte.
+- **Les numéros ne sont jamais réutilisés.** Le compteur `Project.nextTaskSequence` est
+  incrémenté de façon atomique et ne recule jamais. Un échec après réservation laisse un trou —
+  préférable de loin à un identifiant qui désignerait deux travaux différents dans Git, dans un
+  log ou dans une conversation.
+
+La reprise est **idempotente et sans écrasement** : elle tente toujours la création exclusive,
+adopte un fichier dont le contenu correspond exactement au Markdown attendu, et signale un
+conflit dès qu'il diffère. Aucun forçage n'est proposé.
+
+### 5.7 Répartition des validations
 
 La distinction est structurante et vaut d'être explicite :
 
@@ -286,6 +371,11 @@ La distinction est structurante et vaut d'être explicite :
 | Quels documents Markdown existent ? Que contient celui-ci ? | **Le runner** | Même raison : le web n'a aucun accès au disque. |
 | Ce chemin de document sort-il du repository ? | **Le runner** | Le confinement se vérifie sur les chemins réels, après résolution des liens. |
 | Le fichier a-t-il changé depuis son ouverture ? | **Le runner** | Seul lui peut relire les octets réels au moment d'écrire. |
+| Ce fichier existe-t-il déjà ? Ses dossiers parents existent-ils ? | **Le runner** | Même raison, et seule l'ouverture exclusive fait autorité. |
+| Le dossier `tasks/` existe-t-il, et est-ce un vrai dossier ? | **Le runner** | Même raison ; c'est aussi lui qui le crée, s'il manque. |
+| Quel est le chemin final d'un nouveau document ? | **Le web** | Il seul connaît la destination choisie ; il la valide et recompose le chemin. |
+| Quel est le chemin du document d'une tâche ? | **Le runner** | Il le déduit du code ; le web n'envoie aucun chemin. |
+| Quel numéro porte cette tâche ? Cette transition est-elle permise ? | **Le web** | Règles métier, tranchées en base ; le runner reste sans état. |
 | Le nom est-il renseigné ? La description est-elle trop longue ? | **Le web** | Règles métier, sans rapport avec la machine. |
 | Ce repository est-il déjà enregistré ? | **Le web** | Seul lui voit la base ; le runner reste sans état. |
 

@@ -31,6 +31,19 @@ const nextConfig: NextConfig = {
    * pas inclus dans le bundle serveur : un binaire `.node` n'est pas bundlable.
    */
   serverExternalPackages: ["@nox/database", "@prisma/client", "better-sqlite3"],
+  experimental: {
+    /**
+     * Les Server Actions de NOX transportent un document Markdown entier, et la
+     * limite par defaut de Next.js est de 1 Mo — juste en dessous du 1 Mio
+     * qu'accepte le runner. Un document de taille legitime echouait donc avec
+     * une erreur 500 opaque, au lieu du message « taille maximale » prevu.
+     *
+     * La valeur retenue correspond a la limite de corps de la route d'ecriture
+     * du runner : les deux bornes disent desormais la meme chose, et c'est le
+     * runner — seul a voir les octets reels — qui tranche.
+     */
+    serverActions: { bodySizeLimit: "4mb" },
+  },
 };
 
 export default nextConfig;

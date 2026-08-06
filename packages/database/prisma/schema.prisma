@@ -36,4 +36,111 @@ model Project {
   status         String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  /// Prochain numero de tache a attribuer dans ce projet.
+  ///
+  /// Ce compteur ne decrit pas le nombre de taches : il ne recule jamais, meme
+  /// si une creation echoue apres reservation. Un trou dans la numerotation est
+  /// prefere a la reutilisation d'un identifiant qui a pu circuler dans Git,
+  /// dans un log ou dans une conversation.
+  nextTaskSequence Int @default(1)
+
+  tasks Task[]
+}
+
+/// Une tache de developpement : la specification d'une unite de travail.
+///
+/// Le code affiche (`TASK-001`) n'est pas stocke : il se derive de `sequence`,
+/// qui est immuable. Deux representations d'une meme verite finissent toujours
+/// par diverger ; une seule ne le peut pas.
+///
+/// `status`, `priority` et `documentSyncStatus` sont des chaines : SQLite ne
+/// connait pas les enums, et ces listes sont deja definies une seule fois dans
+/// `@nox/shared`. La validation est faite a la relecture, par la couche
+/// applicative.
+model Task {
+  id        String @id @default(cuid())
+  projectId String
+
+  /// Numero attribue a la creation, unique dans le projet et jamais modifie.
+  sequence Int
+
+  title      String
+  objective  String
+  context    String?
+  outOfScope String?
+
+  status   String
+  priority String
+
+  /// Chemin relatif du Markdown associe : `tasks/TASK-001.md`.
+  documentPath String
+
+  /// Empreinte du document, connue seulement lorsqu'il est synchronise.
+  documentRevision String?
+
+  documentSyncStatus String
+  documentSyncError  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project            Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  acceptanceCriteria TaskAcceptanceCriterion[]
+  documentReferences TaskDocumentReference[]
+  validationCommands TaskValidationCommand[]
+
+  @@unique([projectId, sequence])
+  @@index([projectId, status])
+}
+
+/// Un critere d'acceptation, a la position ou l'utilisateur l'a saisi.
+///
+/// Aucune case « terminee » : cette table decrit ce qui devra etre vrai a la
+/// fin, pas ce qui l'est deja. Le resultat d'une execution appartiendra a un
+/// autre modele, quand NOX saura lancer Claude Code.
+model TaskAcceptanceCriterion {
+  id        String   @id @default(cuid())
+  taskId    String
+  position  Int
+  text      String
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, position])
+}
+
+/// Un document que l'agent devra lire avant d'implementer la tache.
+///
+/// Le chemin est relatif au repository et n'est pas verifie sur le disque : une
+/// tache peut legitimement referencer un fichier qui sera cree avant son
+/// execution.
+model TaskDocumentReference {
+  id        String   @id @default(cuid())
+  taskId    String
+  position  Int
+  path      String
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, position])
+}
+
+/// Une commande de validation declaree par la tache.
+///
+/// Elle est stockee comme du texte et n'est **jamais** executee : NOX ne sait
+/// pas encore lancer de processus depuis une tache, et rien ici n'ouvre ce
+/// droit.
+model TaskValidationCommand {
+  id        String   @id @default(cuid())
+  taskId    String
+  position  Int
+  command   String
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, position])
 }
