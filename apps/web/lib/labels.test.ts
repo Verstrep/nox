@@ -140,9 +140,11 @@ describe("valeurs internes", () => {
       "REVIEW",
       "COMPLETED",
     ]);
+    // `CANCELLING` est ajoute par TASK-010 ; aucune valeur existante ne bouge.
     assert.deepEqual([...RUN_STATUSES], [
       "QUEUED",
       "RUNNING",
+      "CANCELLING",
       "BLOCKED",
       "FAILED",
       "CANCELLED",

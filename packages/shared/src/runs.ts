@@ -31,6 +31,25 @@ export function isFinalRunStatus(status: RunStatus): boolean {
   return FINAL_RUN_STATUSES.includes(status);
 }
 
+/**
+ * Statuts d'une execution encore suivie par le runner.
+ *
+ * `CANCELLING` en fait partie : un arret demande n'est pas un arret constate, et
+ * tant que le processus n'a pas ferme, il peut encore ecrire dans le repository.
+ * Le traiter comme termine reviendrait a cesser de le surveiller au moment
+ * precis ou il faut le surveiller.
+ */
+export const ACTIVE_RUN_STATUSES: readonly RunStatus[] = [
+  RUN_STATUS.QUEUED,
+  RUN_STATUS.RUNNING,
+  RUN_STATUS.CANCELLING,
+];
+
+/** Vrai si une demande d'annulation peut encore etre acceptee. */
+export function isCancellableRunStatus(status: RunStatus): boolean {
+  return status === RUN_STATUS.QUEUED || status === RUN_STATUS.RUNNING;
+}
+
 /** Prefixe du code affiche d'une execution. */
 export const RUN_CODE_PREFIX = "RUN-";
 
@@ -179,6 +198,8 @@ export type DevelopmentRunDetail = DevelopmentRunSummary & {
   errorMessage: string | null;
   /** Queue de la sortie d'erreur, bornee. */
   stderrTail: string | null;
+  /** Date ISO de la demande d'annulation, si un humain en a formule une. */
+  cancellationRequestedAt: string | null;
   updatedAt: string;
 };
 
@@ -223,8 +244,12 @@ export function taskStatusForRunOutcome(status: RunStatus): TaskStatus | null {
     case RUN_STATUS.BLOCKED:
     case RUN_STATUS.CANCELLED:
       return TASK_STATUS.BLOCKED;
+    // `CANCELLING` est deliberement sans effet : la tache reste `RUNNING`
+    // jusqu'a la terminaison reelle. Faire basculer la tache sur une simple
+    // *demande* d'arret annoncerait une fin que rien ne garantit encore.
     case RUN_STATUS.QUEUED:
     case RUN_STATUS.RUNNING:
+    case RUN_STATUS.CANCELLING:
       return null;
   }
 }

@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import {
   checkRunnerHealth,
   claudePreflight,
+  cancelClaudeRun,
+  fetchClaudeRunEvents,
   fetchClaudeRunStatus,
   startClaudeRun,
   createProjectDocument,
@@ -1259,6 +1261,9 @@ describe("fetchClaudeRunStatus", () => {
       status: "COMPLETED",
       startedAt: "2026-08-06T10:00:00.000Z",
       finishedAt: "2026-08-06T10:05:00.000Z",
+      cancellationRequestedAt: null,
+      lastEventSequence: 12,
+      eventsTruncated: false,
       exitCode: 0,
       errorCode: null,
       stderrTail: null,
@@ -1344,5 +1349,180 @@ describe("fetchClaudeRunStatus", () => {
     });
 
     assert.equal(failureOf(result).kind, "invalid_response");
+  });
+});
+
+describe("fetchClaudeRunEvents", () => {
+  const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  const EVENT = {
+    sequence: 1,
+    kind: "TOOL_STARTED",
+    occurredAt: "2026-08-07T10:00:00.000Z",
+    label: "Reading README.md",
+    detail: null,
+    toolName: "Read",
+    isError: false,
+  };
+
+  const page = {
+    ok: true,
+    events: [EVENT],
+    nextSequence: 1,
+    status: "RUNNING",
+    isFinal: false,
+    truncated: false,
+  };
+
+  it("retourne un lot d'evenements", async () => {
+    const result = await fetchClaudeRunEvents(RUN_ID, 0, 100, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, page),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.events.length, 1);
+    assert.equal(result.ok && result.value.events[0]?.label, "Reading README.md");
+  });
+
+  it("transmet le curseur et la limite", async () => {
+    const calls: RequestInit[] = [];
+    const capture: typeof globalThis.fetch = (_url, init) => {
+      calls.push(init ?? {});
+      return Promise.resolve(
+        new Response(JSON.stringify(page), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+
+    await fetchClaudeRunEvents(RUN_ID, 12, 50, { environment: ENVIRONMENT, fetch: capture });
+
+    const body = JSON.parse(String(calls[0]?.body)) as Record<string, unknown>;
+    assert.equal(body["afterSequence"], 12);
+    assert.equal(body["limit"], 50);
+    assert.equal(body["runId"], RUN_ID);
+  });
+
+  it("rejette une reponse dont un evenement est hors contrat", async () => {
+    const corrupted = {
+      ...page,
+      events: [{ ...EVENT, kind: "THINKING" }],
+    };
+
+    const result = await fetchClaudeRunEvents(RUN_ID, 0, 100, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, corrupted),
+    });
+
+    // Une reponse hors contrat n'atteint jamais l'interface.
+    assert.equal(result.ok, false);
+  });
+
+  it("traduit une execution inconnue du runner", async () => {
+    const result = await fetchClaudeRunEvents(RUN_ID, 0, 100, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(404, { ok: false, error: { code: "CLAUDE_RUN_NOT_FOUND" } }),
+    });
+
+    assert.equal(failureOf(result).kind, "runner_error");
+  });
+
+  it("signale un runner injoignable", async () => {
+    const result = await fetchClaudeRunEvents(RUN_ID, 0, 100, {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new Error("connexion refusee")),
+    });
+
+    assert.equal(failureOf(result).kind, "unreachable");
+  });
+});
+
+describe("cancelClaudeRun", () => {
+  const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  const accepted = {
+    ok: true,
+    run: {
+      runId: RUN_ID,
+      status: "CANCELLING",
+      cancellationRequestedAt: "2026-08-07T10:00:00.000Z",
+    },
+  };
+
+  it("accepte une reponse 202", async () => {
+    const result = await cancelClaudeRun(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(202, accepted),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.status, "CANCELLING");
+  });
+
+  it("refuse une reponse 200, qui affirmerait une fin non constatee", async () => {
+    const result = await cancelClaudeRun(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(200, accepted),
+    });
+
+    assert.equal(result.ok, false);
+  });
+
+  it("n'envoie que l'identifiant d'execution", async () => {
+    const calls: RequestInit[] = [];
+    const capture: typeof globalThis.fetch = (_url, init) => {
+      calls.push(init ?? {});
+      return Promise.resolve(
+        new Response(JSON.stringify(accepted), {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+
+    await cancelClaudeRun(RUN_ID, { environment: ENVIRONMENT, fetch: capture });
+
+    // Ni PID, ni signal, ni delai, ni option de forcage : le corps n'a qu'un
+    // seul champ, et c'est structurel.
+    assert.deepEqual(Object.keys(JSON.parse(String(calls[0]?.body)) as object), ["runId"]);
+  });
+
+  it("traduit une execution deja terminee", async () => {
+    const result = await cancelClaudeRun(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, {
+        ok: false,
+        error: { code: "CLAUDE_RUN_ALREADY_FINISHED" },
+      }),
+    });
+
+    const failure = failureOf(result);
+    assert.equal(failure.kind, "runner_error");
+    assert.equal(
+      failure.kind === "runner_error" && failure.code,
+      "CLAUDE_RUN_ALREADY_FINISHED",
+    );
+  });
+
+  it("traduit un arret deja engage", async () => {
+    const result = await cancelClaudeRun(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: stubFetch(409, { ok: false, error: { code: "CLAUDE_RUN_CANCELLING" } }),
+    });
+
+    const failure = failureOf(result);
+    assert.equal(
+      failure.kind === "runner_error" && failure.code,
+      "CLAUDE_RUN_CANCELLING",
+    );
+  });
+
+  it("signale un runner injoignable", async () => {
+    const result = await cancelClaudeRun(RUN_ID, {
+      environment: ENVIRONMENT,
+      fetch: () => Promise.reject(new Error("connexion refusee")),
+    });
+
+    assert.equal(failureOf(result).kind, "unreachable");
   });
 });

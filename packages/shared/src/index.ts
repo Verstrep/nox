@@ -71,6 +71,7 @@ export type {
 export { renderTaskMarkdown } from "./task-markdown.js";
 
 export {
+  ACTIVE_RUN_STATUSES,
   FINAL_RUN_STATUSES,
   RUN_CODE_PREFIX,
   RUN_LIMITS,
@@ -78,10 +79,29 @@ export {
   boundText,
   canAutomateTaskStatusTransition,
   formatRunCode,
+  isCancellableRunStatus,
   isFinalRunStatus,
   isRunnerRunId,
   taskStatusForRunOutcome,
 } from "./runs.js";
+
+export {
+  CLAUDE_RUN_EVENT_KIND,
+  CLAUDE_RUN_EVENT_KINDS,
+  ESSENTIAL_EVENT_KINDS,
+  RUN_EVENT_LIMITS,
+  TRUNCATION_EVENT_DETAIL,
+  TRUNCATION_EVENT_LABEL,
+  isClaudeRunEvent,
+  isClaudeRunEventKind,
+  isEssentialEventKind,
+} from "./claude-events.js";
+
+export type {
+  ClaudeRunEvent,
+  ClaudeRunEventDraft,
+  ClaudeRunEventKind,
+} from "./claude-events.js";
 
 export type {
   DevelopmentRunDetail,
@@ -110,9 +130,13 @@ export { renderClaudeExecutionPrompt } from "./claude-prompt.js";
 
 export {
   isClaudePreflightSuccess,
+  isClaudeRunCancelSuccess,
+  isClaudeRunEventsSuccess,
   isClaudeRunStatusSuccess,
   isStartClaudeRunSuccess,
   parseClaudePreflightRequest,
+  parseClaudeRunCancelRequest,
+  parseClaudeRunEventsRequest,
   parseClaudeRunStatusRequest,
   parseStartClaudeRunRequest,
 } from "./claude.js";
@@ -121,6 +145,10 @@ export type {
   ClaudePreflightGit,
   ClaudePreflightRequest,
   ClaudePreflightSuccess,
+  ClaudeRunCancelRequest,
+  ClaudeRunCancelSuccess,
+  ClaudeRunEventsRequest,
+  ClaudeRunEventsSuccess,
   ClaudeRunSnapshot,
   ClaudeRunStatusRequest,
   ClaudeRunStatusSuccess,

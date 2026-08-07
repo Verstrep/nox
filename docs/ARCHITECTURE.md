@@ -105,6 +105,11 @@ modules dédiés décident.
   la fin du processus.
 - `POST /claude/runs/status` — authentifiée, retourne l'état d'une exécution depuis le registre
   en mémoire.
+- `POST /claude/runs/events` — authentifiée, retourne les événements **publics** postérieurs à
+  un curseur. Répond immédiatement, sans attente : c'est le flux SSE du web qui espace les
+  appels.
+- `POST /claude/runs/cancel` — authentifiée, enregistre une demande d'arrêt, passe l'exécution
+  en `CANCELLING` et répond `202`. Le corps ne porte qu'un identifiant d'exécution.
 - Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
 - Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
 - Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
@@ -116,11 +121,8 @@ de HTTP).
 
 **À terme** :
 
-- Lancement de Claude Code CLI dans le repository d'un projet.
-- Diffusion des logs d'exécution en temps réel.
-- Lecture de l'état Git : branche, fichiers modifiés, diff.
 - Exécution des commandes de validation déclarées par la tâche (lint, typecheck, build).
-- Annulation d'une exécution en cours.
+- Reprise d'une session Claude interrompue.
 
 Contraintes permanentes du runner :
 
@@ -556,3 +558,222 @@ désignerait deux travaux différents dans Git, dans un log et dans une conversa
 Si le runner ne répond pas, la base n'est pas touchée et l'interface le dit. L'utilisateur
 redémarre le runner et recommence. C'est le pendant exact de la règle de TASK-007 : une panne du
 runner ne fait pas perdre une tâche — ici, elle ne la fait pas disparaître à moitié.
+
+### 5.11 Suivi d'une exécution en direct
+
+```text
+Claude Code stream-json
+        ↓
+Parser NDJSON runner
+        ↓
+Événements normalisés et sanitizés
+        ↓
+Registre mémoire
+        ↓
+Route runner events
+        ↓
+SSE Next.js
+        ↓
+Timeline navigateur
+        ↓
+Persistance RunEvent
+```
+
+Depuis TASK-010, Claude Code est lancé avec `--output-format stream-json` : la même information
+finale qu'avant, précédée de tout ce qui permet de suivre le travail pendant qu'il se fait. Le
+dernier message du flux est l'objet `result` que TASK-008 lisait déjà — le parser de TASK-008 est
+inchangé, il reçoit simplement cette ligne-là plutôt que la sortie entière.
+
+`--verbose` accompagne obligatoirement `stream-json` : avec `-p`, Claude Code `2.1.223` refuse la
+combinaison sans lui (`When using --print, --output-format=stream-json requires --verbose`). Le
+format `json` ne le demande pas et ne le reçoit pas.
+
+`--include-partial-messages` n'est **pas** passé : un événement par fragment de token produirait
+plusieurs milliers d'entrées pour un run de deux minutes, dont aucune n'apprendrait plus que le
+message complet qui les suit.
+
+#### Pourquoi les événements bruts ne sortent jamais du runner
+
+Une ligne de `stream-json` contient tout ce que l'agent manipule : le contenu intégral des
+fichiers lus, les entrées et sorties de chaque outil, ses raisonnements intermédiaires, et les
+chemins absolus de la machine. Transmettre ces lignes au navigateur — même « juste pour les
+afficher » — exposerait par construction tout ce que NOX passe son temps à protéger ailleurs.
+
+Le runner traduit donc chaque message en un événement dont **il décide chaque champ** :
+
+```ts
+type ClaudeRunEvent = {
+  sequence: number;      // attribué par le runner, jamais repris de Claude
+  kind: ClaudeRunEventKind;
+  occurredAt: string;    // date produite par le runner
+  label: string;         // court, construit par NOX
+  detail: string | null; // borné, jamais du JSON
+  toolName: string | null;
+  isError: boolean;
+};
+```
+
+Il n'existe aucun champ libre par lequel un fragment d'origine pourrait passer. Le type est fermé,
+et le contrat partagé le revalide à chaque frontière : réponse du runner lue par le web, ligne
+relue en base, charge reçue par le navigateur.
+
+#### Pourquoi le raisonnement interne est ignoré
+
+Les blocs `thinking`, `redacted_thinking`, `reasoning`, `analysis` et tout bloc portant une
+`signature` sont écartés **avant** d'être lus. Ils ne sont ni stockés, ni journalisés, ni résumés,
+ni comptés comme message visible. NOX n'affiche même pas « Claude réfléchit » : un tel événement
+serait déjà une information sur un contenu qui ne doit pas sortir.
+
+La liste des blocs affichables est **fermée** — `text` et `tool_use`, rien d'autre — plutôt qu'une
+liste d'exclusions. Une liste d'exclusions laisse passer tout ce qu'on n'a pas prévu, et c'est
+précisément ce qu'on n'a pas prévu qui est dangereux.
+
+#### Ce que dit un événement d'outil, et ce qu'il tait
+
+| Appel | Affiché | Jamais affiché |
+| --- | --- | --- |
+| `Read` / `Edit` / `Write` | `Reading README.md` | le contenu lu ou écrit |
+| `Grep` / `Glob` | `Searching for "renderTaskMarkdown"` | un motif de plus de 120 caractères |
+| `Bash` autorisé | `Running npm run test` | l'environnement, le répertoire, les redirections |
+| `Bash` autre | `Running an allowed command` | la commande elle-même |
+| Outil inconnu | `Using <Nom>` | son entrée, quelle qu'elle soit |
+| `tool_result` | `Read completed` · `Validation failed` | la sortie de l'outil |
+
+Une commande n'est reproduite que si elle correspond **exactement** à une commande de validation
+enregistrée ou à une commande Git en lecture seule autorisée. `npm run test -- --grep secret`
+n'est pas `npm run test`, et l'afficher exposerait un argument que personne n'a validé.
+
+#### Sanitation : une seule fonction, appliquée à toutes les chaînes
+
+Toute chaîne qui finira dans un `label` ou un `detail` passe par le même nettoyeur — pas « toute
+chaîne suspecte » : toutes. Il rend relatifs les chemins du repository, masque les chemins
+extérieurs, retire les valeurs et les noms des variables `NOX_*`, supprime les caractères de
+contrôle et les marques de direction, puis borne la taille. Les accents, idéogrammes et emoji sont
+préservés : un nettoyage qui réduirait tout à l'ASCII rendrait la moitié des messages illisibles
+pour un gain nul.
+
+#### Bornes et troncature
+
+| Borne | Valeur |
+| --- | --- |
+| Événements ordinaires par exécution | 2 000 |
+| Marge réservée aux statuts, erreurs et résultat | 64 |
+| Détail | 4 Kio |
+| Volume total normalisé | 2 Mio |
+| Ligne NDJSON acceptée | 1 Mio |
+| Événements par réponse | 200 |
+
+Ces valeurs sont **constantes** et non configurables : une limite de sécurité qu'on peut desserrer
+par variable d'environnement n'en est plus une.
+
+Quand la limite est atteinte, le runner ajoute un unique événement `TRUNCATED` puis cesse
+d'enregistrer les événements ordinaires — mais il **continue de lire `stdout`**. Cesser de lire
+remplirait le tampon du système et figerait Claude Code au milieu d'une édition, ce qui serait
+bien pire qu'une timeline incomplète. Les changements de statut, les erreurs et le résultat final
+continuent de passer.
+
+#### Reconnexion, et ce qui survit à quoi
+
+| Événement | Le registre du runner | La table `RunEvent` |
+| --- | --- | --- |
+| Fermeture de l'onglet | intact | intacte |
+| Fin de l'exécution | conservé 24 h | intacte |
+| Redémarrage du runner | **perdu** | intacte |
+
+Le registre est la mémoire du direct ; SQLite est la mémoire longue. Le flux SSE fait la jonction :
+il lit chez le runner, écrit en base, puis pousse au navigateur — dans cet ordre. Un événement
+affiché mais non enregistré disparaîtrait au premier rafraîchissement, et l'utilisateur croirait
+avoir mal lu.
+
+La reprise se fait par **curseur**, jamais par décalage : `Last-Event-ID` en SSE, `afterSequence`
+au premier appel. Le couple `runId + sequence` étant unique en base, rejouer un lot ne crée aucun
+doublon — deux onglets, une reconnexion, un rafraîchissement : aucun de ces cas ne duplique une
+ligne.
+
+**Le rattrapage à la réouverture** complète le dispositif. Le flux SSE ne tourne que tant qu'un
+onglet est ouvert ; fermer la page pendant une exécution — ce que NOX encourage explicitement —
+laisse le runner produire des événements que personne ne lit. À l'ouverture de la page, NOX
+récupère donc du registre tout ce que la base ignore, y compris pour une exécution **terminée** :
+c'est justement le cas où le flux ne se rouvrira jamais.
+
+Si le runner a redémarré, les événements déjà persistés restent affichés, l'exécution suit le
+comportement `BLOCKED` défini par TASK-008, et NOX ne prétend pas connaître ce qui s'est passé
+entre-temps.
+
+### 5.12 Annulation d'une exécution
+
+```text
+Cancel run
+      ↓
+Server Action
+      ↓
+Runner
+      ↓
+CANCELLING
+      ↓
+Arrêt contrôlé de l'arbre
+      ↓
+Git final
+      ↓
+Run CANCELLED
+      ↓
+Task BLOCKED
+```
+
+#### Ce que le navigateur peut demander
+
+Trois identifiants : projet, tâche, exécution. **Rien d'autre.** Aucun identifiant de processus,
+aucun chemin de repository, aucun jeton, aucun signal système, aucune commande `taskkill`, aucun
+délai, aucune option de forçage. Le seul pouvoir du formulaire est de désigner une exécution que
+NOX connaît déjà ; la manière de l'arrêter appartient entièrement au runner, et le PID reste dans
+la fermeture de la fonction d'arrêt, hors d'atteinte.
+
+#### Une seule implémentation de l'arrêt
+
+L'arrêt de l'arbre de processus a été écrit une fois, pour le délai maximal de TASK-008 : demande
+polie, délai de grâce de cinq secondes, puis arrêt forcé — et sous Windows un `taskkill /T` qui ne
+vise **que** le PID créé par NOX, jamais un processus trouvé par son nom. L'annulation appelle
+exactement cette fonction. Deux implémentations d'un arrêt de processus divergeraient, et c'est
+celle qui n'est pas testée qui tournerait le jour où ça compte.
+
+#### `CANCELLING` n'est pas un état final
+
+Une demande d'arrêt n'est pas un arrêt constaté. Tant que le processus n'a pas fermé, il peut
+encore écrire dans le repository ; le traiter comme terminé reviendrait à cesser de le surveiller
+au moment précis où il faut le surveiller. La tâche reste donc `RUNNING` jusqu'à la terminaison
+réelle, et aucune autre exécution ne peut démarrer.
+
+Si le processus ne ferme pas, NOX ne fait pas semblant : passé un délai, l'exécution est marquée
+`BLOCKED` avec `CLAUDE_CANCEL_FAILED`, et le message dit que le processus peut encore vivre.
+
+#### La course entre la fin et l'annulation
+
+Un clic et une terminaison naturelle peuvent arriver dans la même milliseconde. La règle est
+simple : **le premier état final validement enregistré gagne**, et `CANCELLING` n'en est pas un.
+
+- Le processus a rendu un résultat complet, un code de sortie nul et aucune erreur → il a fini son
+  travail. L'annulation est arrivée trop tard, le run est `COMPLETED`, et le dire autrement
+  effacerait un résultat réel.
+- Dans tous les autres cas → le run est `CANCELLED`.
+- Un run déjà conclu refuse l'annulation avec `CLAUDE_RUN_ALREADY_FINISHED`, sans rien changer.
+
+Un run tué rend presque toujours une sortie incomplète et un code non nul. Les diagnostics
+habituels — sortie illisible, échec du processus — sont donc court-circuités quand un arrêt a été
+demandé : signaler « sortie illisible » pour une interruption parfaitement volontaire serait
+trompeur.
+
+#### Pourquoi l'annulation ne restaure rien
+
+Claude Code a pu écrire la moitié d'un fichier avant de mourir. NOX capture l'état Git — comme
+pour n'importe quelle autre fin — et s'arrête là. Pas de `reset`, pas de `restore`, pas de
+`checkout`, aucune suppression de fichier : restaurer détruirait justement le travail partiel que
+l'utilisateur doit relire pour décider quoi en faire.
+
+Une **violation Git reste prioritaire**, y compris après une annulation. Si `HEAD` a changé, si la
+branche a changé ou si un commit a été créé, le run est `FAILED` avec `GIT_POLICY_VIOLATION` même
+si un arrêt avait été demandé : l'utilisateur doit apprendre d'abord qu'un commit interdit existe,
+et ensuite seulement que le processus a été interrompu.
+
+Un run annulé fait passer la tâche à `BLOCKED`, jamais à `READY`. Passer directement à `READY`
+masquerait l'état partiel du repository ; `BLOCKED → READY` reste une décision humaine, prise
+après avoir regardé `git status` et `git diff`.

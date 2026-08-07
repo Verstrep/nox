@@ -211,12 +211,12 @@ explicitement, et en rendre le résultat relisible.
 repository, et son résultat est relisible sans copier-coller — vérifié par un test fonctionnel
 avec un faux Claude Code, voir [PROJECT_STATE.md](PROJECT_STATE.md).
 
-> **Réserve.** Claude Code n'était pas installé sur la machine au moment de cette étape. La
-> syntaxe des arguments (`-p`, `--output-format json`, `--max-turns`, `--allowedTools`,
-> `--disallowedTools`) et celle des règles d'outils suivent la forme documentée du mode non
-> interactif, mais **n'ont pas été vérifiées contre un binaire local**. Aucune requête Claude
-> réelle n'a été lancée. `buildClaudeArguments`, `formatBashRule` et `probeClaudeVersion` sont
-> isolées pour qu'un écart se corrige à un seul endroit. Le premier run réel reste à faire.
+> **Réserve levée.** Au moment de l'étape 8, Claude Code n'était pas installé et la syntaxe des
+> arguments n'avait pas pu être vérifiée. Elle l'a été depuis : un premier run réel a été exécuté
+> avec Claude Code `2.1.223` sous Windows — lancement non interactif fonctionnel, prompt transmis
+> par `stdin`, résultat JSON final récupéré, repository modifié sans commit, `HEAD` inchangé,
+> métadonnées de session, durée, nombre de tours et coût rapporté récupérés, tâche passée en
+> `REVIEW`. L'étape 10 a confirmé les arguments contre le binaire local, sans lancer de requête.
 
 Hors périmètre volontaire : streaming des événements, annulation manuelle, reprise de session,
 prompt correctif automatique, exécution automatique d'une autre tâche, plusieurs agents en
@@ -265,35 +265,78 @@ forcée, récursive ou en masse, corbeille, restauration, archivage, renommage, 
 
 ---
 
-## 🟢 10. Streaming et annulation d'une exécution
+## ✅ 10. Streaming des événements et annulation — `TASK-010`
 
-**Étape active.**
+**Objectif** : suivre une exécution en direct et pouvoir l'interrompre, sans jamais exposer ce
+que Claude Code manipule.
 
-**Objectif** : suivre une exécution en direct et pouvoir l'interrompre.
+- Invocation en `--output-format stream-json --verbose`, `--verbose` étant une précondition du
+  binaire ([D-124](DECISIONS.md#d-124--sortie-stream-json-avec---verbose-sans-messages-partiels)).
+- Parser NDJSON incrémental : chunks partiels, CRLF, ligne finale sans terminateur, ligne
+  démesurée abandonnée ([D-125](DECISIONS.md#d-125--un-parser-ndjson-incrémental-et-non-un-découpage-par-chunk)).
+- Événements publics normalisés, type fermé, aucun message brut hors du runner
+  ([D-126](DECISIONS.md#d-126--aucun-événement-brut-ne-quitte-le-runner)).
+- Raisonnement interne sans aucune représentation possible
+  ([D-127](DECISIONS.md#d-127--le-raisonnement-interne-na-aucune-représentation)).
+- Commandes affichées seulement si exactement autorisées, résultats d'outils réduits à leur issue
+  ([D-128](DECISIONS.md#d-128--une-commande-nest-affichée-que-si-elle-est-exactement-autorisée)).
+- Sanitation centralisée et bornes constantes, avec troncature explicite
+  ([D-129](DECISIONS.md#d-129--sanitation-centralisée-appliquée-à-toutes-les-chaînes),
+  [D-130](DECISIONS.md#d-130--les-événements-sont-bornés-et-la-troncature-est-explicite)).
+- Modèle `RunEvent`, insertion idempotente par contrainte d'unicité
+  ([D-131](DECISIONS.md#d-131--runevent-en-sqlite-sans-compteur-dénormalisé),
+  [D-132](DECISIONS.md#d-132--idempotence-par-contrainte-pas-par-confiance)).
+- Flux SSE via Next.js, persistance avant affichage, reprise par curseur
+  ([D-133](DECISIONS.md#d-133--sse-plutôt-quun-websocket-avec-du-polling-côté-serveur),
+  [D-134](DECISIONS.md#d-134--la-persistance-précède-lenvoi-au-navigateur),
+  [D-136](DECISIONS.md#d-136--reprise-par-curseur-jamais-par-décalage)).
+- Rattrapage des événements manqués à la réouverture de la page
+  ([D-135](DECISIONS.md#d-135--rattrapage-des-événements-à-la-réouverture-de-la-page)).
+- Statut `CANCELLING`, arrêt réutilisant l'unique implémentation de TASK-008
+  ([D-138](DECISIONS.md#d-138--un-statut-cancelling-non-final),
+  [D-139](DECISIONS.md#d-139--une-seule-implémentation-de-larrêt-de-larbre)).
+- Course fin / annulation tranchée par le premier état final
+  ([D-140](DECISIONS.md#d-140--le-premier-état-final-gagne)).
+- Git capturé après l'arrêt, aucune restauration, tâche `BLOCKED`
+  ([D-141](DECISIONS.md#d-141--git-est-capturé-après-larrêt-et-rien-nest-restauré),
+  [D-142](DECISIONS.md#d-142--un-run-annulé-bloque-la-tâche)).
 
-- Diffusion progressive des événements Claude Code en Server-Sent Events.
-- Bouton d'annulation d'une exécution active, avec arrêt propre du processus.
-- Reprise du flux après une coupure du navigateur.
+**Fin d'étape atteinte** : la page d'une exécution affiche en direct les lectures, recherches,
+modifications, validations et messages publics de Claude Code ; fermer l'onglet n'interrompt rien
+et ne perd rien ; `Cancel run` arrête le processus et ses descendants, laisse le repository en
+l'état et bloque la tâche — vérifié par un test fonctionnel avec un faux Claude Code, voir
+[PROJECT_STATE.md](PROJECT_STATE.md).
 
-**Prérequis** : cette étape ne doit commencer qu'**après** l'installation de Claude Code et la
-validation d'un premier run réel contrôlé. Streamer et annuler des événements dont on n'a jamais
-vu la forme réelle reviendrait à empiler des suppositions sur celles de l'étape 8.
+> **Réserve.** Le premier run réel de cette étape a **échoué immédiatement** : `-p` avec
+> `--output-format stream-json` exige `--verbose`, ce qu'un probe à `stdin` vide n'avait pas
+> détecté — il s'arrêtait plus tôt, faute d'entrée. L'invocation a été corrigée ; le détail et la
+> leçon sont dans [D-124](DECISIONS.md#d-124--sortie-stream-json-avec---verbose-sans-messages-partiels).
+> La forme réelle des messages reste partiellement observée : `system/init` et `result` le sont,
+> `assistant` et `user` non. Une procédure de vérification manuelle en deux scénarios est décrite
+> dans [PROJECT_STATE.md](PROJECT_STATE.md).
 
-**Fin d'étape** : l'interface affiche en direct la progression d'une exécution, et permet de
-l'interrompre sans laisser de processus orphelin.
+Hors périmètre volontaire : reprise avec `--resume`, continuation avec `--continue`, message
+envoyé à une session active, approbation interactive d'outils, terminal interactif, plusieurs runs
+parallèles, persistance du processus après redémarrage du runner, restauration automatique du
+repository, diff complet, orchestration OpenAI, suppression ou archivage de run.
 
 ---
 
-## ⬜ 11. Git et validations
+## 🟢 11. Review Git intégrée et validations structurées — `TASK-011`
 
-**Objectif** : rendre le résultat relisible.
+**Étape active.**
+
+**Objectif** : afficher le diff détaillé d'un run, structurer les résultats des validations et
+aider à accepter ou rejeter le travail — sans jamais créer de commit automatiquement.
 
 - ~~`git status`, liste des fichiers modifiés~~ — fait à l'étape 8.
+- ~~Événements de validation dans la timeline~~ — fait à l'étape 10, à l'état près.
 - Diff complet consultable dans l'interface.
-- Résultat des commandes de validation, exécutées par Claude Code, extrait de son compte rendu.
+- Résultat des commandes de validation, extrait de manière fiable.
 - Distinction explicite entre échec et commande non lancée.
 
-**Fin d'étape** : la review d'une tâche se fait entièrement dans NOX.
+**Fin d'étape** : la review d'une tâche se fait entièrement dans NOX, et le commit reste une
+action humaine.
 
 ---
 

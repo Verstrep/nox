@@ -171,6 +171,14 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
     "L'execution a modifie l'historique Git alors que c'etait interdit — un commit ou un changement de branche. NOX n'a rien restaure : verifiez l'etat du repository avant toute autre chose.",
   [RUNNER_ERROR.CLAUDE_START_FAILED]:
     "Le processus Claude Code n'a pas pu etre lance. Verifiez son installation et les logs du runner.",
+
+  // --- Annulation -----------------------------------------------------------
+  [RUNNER_ERROR.CLAUDE_RUN_ALREADY_FINISHED]:
+    "Cette execution est deja terminee : il n'y a plus rien a interrompre. Rafraichissez la page pour voir son resultat.",
+  [RUNNER_ERROR.CLAUDE_RUN_CANCELLING]:
+    "L'arret est deja engage. Laissez le processus se terminer : NOX affichera le resultat des qu'il aura ferme.",
+  [RUNNER_ERROR.CLAUDE_CANCEL_FAILED]:
+    "NOX a demande l'arret mais n'a pas pu constater la fin du processus. Celui-ci peut encore modifier le repository : verifiez-le vous-meme, et au besoin terminez-le depuis le gestionnaire de taches.",
   [RUNNER_ERROR.CLAUDE_PROCESS_FAILED]:
     "L'execution s'est terminee sur une erreur. Consultez le compte rendu et la sortie d'erreur ci-dessous.",
   [RUNNER_ERROR.CLAUDE_OUTPUT_INVALID]:

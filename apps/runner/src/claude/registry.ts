@@ -21,8 +21,25 @@
  * runner : c'est le seul composant qui voit les processus reels.
  */
 
-import { RUN_LIMITS, RUN_STATUS, boundTail, boundText, isFinalRunStatus } from "@nox/shared";
-import type { ClaudeRunSnapshot, RunStatus } from "@nox/shared";
+import {
+  CLAUDE_RUN_EVENT_KIND,
+  RUN_EVENT_LIMITS,
+  RUN_LIMITS,
+  RUN_STATUS,
+  TRUNCATION_EVENT_DETAIL,
+  TRUNCATION_EVENT_LABEL,
+  boundTail,
+  boundText,
+  isCancellableRunStatus,
+  isEssentialEventKind,
+  isFinalRunStatus,
+} from "@nox/shared";
+import type {
+  ClaudeRunEvent,
+  ClaudeRunEventDraft,
+  ClaudeRunSnapshot,
+  RunStatus,
+} from "@nox/shared";
 
 /** Nombre maximal d'executions terminees conservees. */
 export const MAX_RETAINED_RUNS = 20;
@@ -30,11 +47,24 @@ export const MAX_RETAINED_RUNS = 20;
 /** Duree de conservation d'une execution terminee. */
 export const RETENTION_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Contexte interne d'une execution.
+ *
+ * Ces valeurs ne figurent dans **aucun** instantane : elles servent a finaliser
+ * une execution dont le processus ne s'arrete pas, et un chemin absolu n'a rien
+ * a faire dans une reponse HTTP.
+ */
+export type RunContext = {
+  repositoryRoot: string;
+  headBefore: string;
+};
+
 type RegistryEntry = {
   runId: string;
   status: RunStatus;
   startedAt: Date | null;
   finishedAt: Date | null;
+  cancellationRequestedAt: Date | null;
   exitCode: number | null;
   errorCode: string | null;
   stderrTail: string | null;
@@ -52,6 +82,14 @@ type RegistryEntry = {
     diffStat: string | null;
     changedFiles: string[];
   };
+  /** Evenements publics, dans l'ordre d'attribution. */
+  events: ClaudeRunEvent[];
+  /** Prochain numero a attribuer ; ne recule jamais, meme apres troncature. */
+  nextEventSequence: number;
+  /** Volume de texte deja conserve, en caracteres. */
+  eventCharacters: number;
+  eventsTruncated: boolean;
+  context: RunContext | null;
   /** Permet de terminer le processus au depassement du delai. */
   kill: (() => void) | null;
 };
@@ -60,8 +98,34 @@ export type RegisterResult =
   | { ok: true }
   | { ok: false; reason: "already_active" | "duplicate_id" };
 
-/** Champs modifiables d'une entree, hors identite et statut. */
-export type RunUpdate = Partial<Omit<RegistryEntry, "runId" | "status" | "kill">>;
+/** Champs modifiables d'une entree, hors identite, statut et mecanique interne. */
+export type RunUpdate = Partial<
+  Omit<
+    RegistryEntry,
+    | "runId"
+    | "status"
+    | "kill"
+    | "events"
+    | "nextEventSequence"
+    | "eventCharacters"
+    | "eventsTruncated"
+    | "context"
+  >
+>;
+
+/** Issue d'une demande d'annulation. */
+export type CancellationResult =
+  | { ok: true; requestedAt: Date }
+  | { ok: false; reason: "not_found" | "already_final" | "already_cancelling" };
+
+/** Lot d'evenements retourne apres un curseur. */
+export type EventsPage = {
+  events: ClaudeRunEvent[];
+  nextSequence: number;
+  status: RunStatus;
+  isFinal: boolean;
+  truncated: boolean;
+};
 
 function emptyEntry(runId: string): RegistryEntry {
   return {
@@ -69,6 +133,7 @@ function emptyEntry(runId: string): RegistryEntry {
     status: RUN_STATUS.QUEUED,
     startedAt: null,
     finishedAt: null,
+    cancellationRequestedAt: null,
     exitCode: null,
     errorCode: null,
     stderrTail: null,
@@ -86,6 +151,11 @@ function emptyEntry(runId: string): RegistryEntry {
       diffStat: null,
       changedFiles: [],
     },
+    events: [],
+    nextEventSequence: 1,
+    eventCharacters: 0,
+    eventsTruncated: false,
+    context: null,
     kill: null,
   };
 }
@@ -184,14 +254,179 @@ export class ClaudeRunRegistry {
     Object.assign(entry, update);
   }
 
-  /** Marque une execution comme demarree. */
+  /**
+   * Marque une execution comme demarree.
+   *
+   * Ne ramene jamais un `CANCELLING` a `RUNNING` : une demande d'annulation
+   * arrivee entre l'enregistrement et le demarrage serait sinon effacee, et
+   * l'utilisateur verrait son clic disparaitre sans effet.
+   */
   start(runId: string, startedAt: Date): void {
     const entry = this.#entries.get(runId);
     if (entry === undefined || isFinalRunStatus(entry.status)) {
       return;
     }
-    entry.status = RUN_STATUS.RUNNING;
+    if (entry.status !== RUN_STATUS.CANCELLING) {
+      entry.status = RUN_STATUS.RUNNING;
+    }
     entry.startedAt = startedAt;
+  }
+
+  /** Associe le contexte interne d'une execution. Jamais expose. */
+  attachContext(runId: string, context: RunContext): void {
+    const entry = this.#entries.get(runId);
+    if (entry !== undefined) {
+      entry.context = context;
+    }
+  }
+
+  /** Contexte interne d'une execution, ou `null` si elle est inconnue. */
+  context(runId: string): RunContext | null {
+    return this.#entries.get(runId)?.context ?? null;
+  }
+
+  /** Vrai si un arret a ete demande pour cette execution. */
+  isCancellationRequested(runId: string): boolean {
+    return this.#entries.get(runId)?.cancellationRequestedAt != null;
+  }
+
+  /**
+   * Ajoute des evenements, en leur attribuant leur numero.
+   *
+   * `sequence` et `occurredAt` sont produits **ici**, jamais repris de l'appelant :
+   * c'est le seul moyen de garantir une suite strictement croissante par
+   * execution, meme si le producteur se trompe ou se repete.
+   *
+   * ## La troncature ne fait pas taire l'essentiel
+   *
+   * Une fois la limite atteinte, un unique evenement `TRUNCATED` est ajoute, puis
+   * seuls les statuts, les erreurs et le resultat final continuent de passer. Ce
+   * qui compte apres coup n'est pas la centieme lecture de fichier : c'est de
+   * savoir ce qui a echoue et ce que l'execution a rendu.
+   */
+  appendEvents(runId: string, drafts: readonly ClaudeRunEventDraft[]): ClaudeRunEvent[] {
+    const entry = this.#entries.get(runId);
+    if (entry === undefined || drafts.length === 0) {
+      return [];
+    }
+
+    const appended: ClaudeRunEvent[] = [];
+
+    for (const draft of drafts) {
+      const weight = draft.label.length + (draft.detail?.length ?? 0);
+      const full =
+        entry.events.length >= RUN_EVENT_LIMITS.maxEvents ||
+        entry.eventCharacters + weight > RUN_EVENT_LIMITS.totalCharacters;
+
+      if (full && !entry.eventsTruncated) {
+        entry.eventsTruncated = true;
+        appended.push(
+          this.#push(entry, {
+            kind: CLAUDE_RUN_EVENT_KIND.TRUNCATED,
+            label: TRUNCATION_EVENT_LABEL,
+            detail: TRUNCATION_EVENT_DETAIL,
+            toolName: null,
+            isError: false,
+          }),
+        );
+      }
+
+      if (full && !isEssentialEventKind(draft.kind)) {
+        continue;
+      }
+
+      // Meme l'essentiel a une fin : sans ce plafond, une execution qui
+      // n'emettrait que des erreurs contournerait entierement la borne.
+      if (entry.events.length >= RUN_EVENT_LIMITS.maxEvents + RUN_EVENT_LIMITS.reservedEvents) {
+        continue;
+      }
+
+      appended.push(this.#push(entry, draft));
+    }
+
+    return appended;
+  }
+
+  #push(entry: RegistryEntry, draft: ClaudeRunEventDraft): ClaudeRunEvent {
+    const event: ClaudeRunEvent = {
+      sequence: entry.nextEventSequence,
+      kind: draft.kind,
+      occurredAt: this.#now().toISOString(),
+      label: draft.label,
+      detail: draft.detail,
+      toolName: draft.toolName,
+      isError: draft.isError,
+    };
+
+    entry.nextEventSequence += 1;
+    entry.eventCharacters += event.label.length + (event.detail?.length ?? 0);
+    entry.events.push(event);
+    return event;
+  }
+
+  /**
+   * Retourne les evenements posterieurs a un curseur.
+   *
+   * `nextSequence` est calcule plutot que deduit du dernier element : un lot vide
+   * doit laisser le curseur ou il est, et l'appelant n'a pas a le deviner.
+   */
+  getEvents(runId: string, afterSequence: number, limit: number): EventsPage | null {
+    const entry = this.#entries.get(runId);
+    if (entry === undefined) {
+      return null;
+    }
+
+    const bounded = Math.min(Math.max(1, limit), RUN_EVENT_LIMITS.maxBatch);
+    const pending = entry.events.filter((event) => event.sequence > afterSequence);
+    const events = pending.slice(0, bounded);
+    const last = events.at(-1);
+
+    return {
+      events,
+      nextSequence: last?.sequence ?? Math.max(afterSequence, 0),
+      status: entry.status,
+      isFinal: isFinalRunStatus(entry.status),
+      truncated: entry.eventsTruncated,
+    };
+  }
+
+  /**
+   * Enregistre une demande d'annulation et passe l'execution en `CANCELLING`.
+   *
+   * Ne tue rien : l'arret du processus est declenche par l'appelant, apres cette
+   * reponse. La separation est deliberee — le registre decide si la demande est
+   * recevable, il ne manipule pas de processus.
+   *
+   * Trois refus distincts, parce qu'ils appellent trois messages differents : une
+   * execution inconnue, une execution deja terminee, une annulation deja engagee.
+   */
+  requestCancellation(runId: string): CancellationResult {
+    const entry = this.#entries.get(runId);
+    if (entry === undefined) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (isFinalRunStatus(entry.status)) {
+      return { ok: false, reason: "already_final" };
+    }
+    if (!isCancellableRunStatus(entry.status)) {
+      return { ok: false, reason: "already_cancelling" };
+    }
+
+    const requestedAt = this.#now();
+    entry.status = RUN_STATUS.CANCELLING;
+    entry.cancellationRequestedAt = requestedAt;
+
+    this.appendEvents(runId, [
+      {
+        kind: CLAUDE_RUN_EVENT_KIND.STATUS,
+        label: "Cancellation requested",
+        detail: null,
+        toolName: null,
+        isError: false,
+      },
+    ]);
+
+    return { ok: true, requestedAt };
   }
 
   /**
@@ -237,6 +472,9 @@ export class ClaudeRunRegistry {
       status: entry.status,
       startedAt: entry.startedAt?.toISOString() ?? null,
       finishedAt: entry.finishedAt?.toISOString() ?? null,
+      cancellationRequestedAt: entry.cancellationRequestedAt?.toISOString() ?? null,
+      lastEventSequence: entry.nextEventSequence - 1,
+      eventsTruncated: entry.eventsTruncated,
       exitCode: entry.exitCode,
       errorCode: entry.errorCode,
       stderrTail: entry.stderrTail,

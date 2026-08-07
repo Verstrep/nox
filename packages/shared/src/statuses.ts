@@ -30,10 +30,20 @@ export const TASK_STATUS = {
   COMPLETED: "COMPLETED",
 } as const;
 
-/** Cycle de vie d'une execution (un passage de Claude Code sur une tache). */
+/**
+ * Cycle de vie d'une execution (un passage de Claude Code sur une tache).
+ *
+ * `CANCELLING` est le seul statut **transitoire** de la liste : il dit qu'un
+ * arret a ete demande et accepte, mais que le processus n'est pas encore mort.
+ * Sans lui, un clic sur « Cancel run » ne changerait rien a l'ecran pendant tout
+ * le delai de grace, et l'utilisateur cliquerait une seconde fois. Il n'est
+ * jamais final : c'est la terminaison reelle du processus qui produit
+ * `CANCELLED`.
+ */
 export const RUN_STATUS = {
   QUEUED: "QUEUED",
   RUNNING: "RUNNING",
+  CANCELLING: "CANCELLING",
   BLOCKED: "BLOCKED",
   FAILED: "FAILED",
   CANCELLED: "CANCELLED",

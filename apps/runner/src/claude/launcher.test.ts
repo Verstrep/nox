@@ -77,12 +77,32 @@ after(async () => {
 });
 
 describe("buildClaudeArguments", () => {
-  it("construit le mode non interactif avec sortie JSON", () => {
+  it("construit le mode non interactif avec sortie progressive", () => {
     const args = buildClaudeArguments({ allowedTools: [], disallowedTools: [], maxTurns: 80 });
 
     assert.ok(args.includes("-p"));
-    assert.equal(args[args.indexOf("--output-format") + 1], "json");
+    assert.equal(args[args.indexOf("--output-format") + 1], "stream-json");
     assert.equal(args[args.indexOf("--max-turns") + 1], "80");
+  });
+
+  it("ne demande pas les messages partiels", () => {
+    const args = buildClaudeArguments({ allowedTools: [], disallowedTools: [], maxTurns: 10 });
+
+    // Un evenement par fragment de token produirait des milliers d'evenements
+    // sans rien apprendre de plus que le message complet qui les suit.
+    assert.equal(args.includes("--include-partial-messages"), false);
+  });
+
+  it("ajoute --verbose exactement une fois, comme l'exige stream-json", () => {
+    const args = buildClaudeArguments({ allowedTools: [], disallowedTools: [], maxTurns: 10 });
+
+    // Precondition du binaire, pas un choix de confort : avec `-p`, Claude Code
+    // 2.1.223 refuse `--output-format stream-json` sans `--verbose`
+    // (« When using --print, --output-format=stream-json requires --verbose »).
+    // Le premier run reel a echoue la-dessus.
+    assert.ok(args.includes("-p"));
+    assert.equal(args[args.indexOf("--output-format") + 1], "stream-json");
+    assert.equal(args.filter((argument) => argument === "--verbose").length, 1);
   });
 
   it("transmet les autorisations et les refus", () => {
@@ -154,6 +174,28 @@ describe("launchClaude - lancement reel du faux Claude", () => {
     assert.equal(report.prompt, prompt);
     // Le prompt n'apparait nulle part dans les arguments.
     assert.equal(report.argv.join(" ").includes("Prompt multi-ligne"), false);
+  });
+
+  it("passe reellement stream-json et --verbose au processus", async () => {
+    process.env["FAKE_CLAUDE_MODE"] = "success";
+
+    const handle = launchClaude({
+      repositoryRoot: workspace,
+      prompt: "x",
+      allowedTools: [],
+      disallowedTools: [],
+      claude: claudeConfig(),
+    });
+    await handle.completed;
+
+    // Verifie la chaine complete, pas seulement la fonction pure : c'est ici que
+    // le premier run reel a echoue, faute de `--verbose`.
+    const { argv } = await readReport();
+    assert.ok(argv.includes("-p"));
+    assert.equal(argv[argv.indexOf("--output-format") + 1], "stream-json");
+    assert.equal(argv.filter((argument) => argument === "--verbose").length, 1);
+    assert.equal(argv.includes("--include-partial-messages"), false);
+    assert.equal(argv.includes("--dangerously-skip-permissions"), false);
   });
 
   it("fixe le repertoire de travail a la racine du repository", async () => {

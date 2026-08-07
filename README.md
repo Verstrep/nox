@@ -752,37 +752,147 @@ l'élargit pas pour la faire passer : corrigez-la dans la tâche.
 `--dangerously-skip-permissions` n'est **jamais** passé, et les variables `NOX_*` sont retirées
 de l'environnement du processus : l'agent ne peut ni lire le jeton du runner, ni joindre la base.
 
-### Pendant l'exécution
+### Pendant l'exécution : l'activité en direct
 
-La page du run se met à jour toute seule, par interrogation toutes les deux secondes. Il n'y a
-pas de flux d'événements en direct pendant TASK-008 : NOX vous dit *si* c'est fini, pas ce que
-l'agent est en train de taper.
+La page du run affiche une section **« Activité Claude Code »** qui se remplit pendant que
+l'agent travaille :
 
-**Vous pouvez fermer l'onglet.** Claude Code continue dans le runner, et rouvrir la page suffit
-à récupérer le résultat.
+```text
+01:28:03  Started
+01:28:04  Claude Code ready
+01:28:05  Reading tasks/TASK-001.md
+01:28:09  Reading README.md
+01:28:14  Editing README.md
+01:28:22  Running npm run test
+01:28:29  Validation succeeded
+01:28:40  Assistant message
+01:30:01  Completed
+```
 
-**Redémarrer le runner, en revanche, interrompt le suivi.** L'état des exécutions vit en mémoire.
-NOX marque alors l'exécution bloquée et vous invite à vérifier l'état du repository vous-même —
-il ne prétend pas connaître le résultat d'un processus qu'il a cessé de suivre.
+Chaque ligne porte l'heure, ce qui s'est passé, et parfois un détail. La liste défile toute seule
+tant que vous restez en bas ; dès que vous remontez pour relire un événement, elle vous laisse
+tranquille et reprend si vous redescendez.
+
+#### Ce qui est affiché
+
+| Action de Claude Code | Ce que vous voyez |
+| --- | --- |
+| Lecture d'un fichier | `Reading docs/ARCHITECTURE.md` |
+| Recherche | `Searching for "renderTaskMarkdown"` |
+| Modification | `Editing README.md` · `Writing apps/web/lib/runs.ts` |
+| Commande de validation | `Running npm run test`, puis `Validation succeeded` ou `failed` |
+| Autre commande autorisée | `Running an allowed command` |
+| Message public de l'agent | son texte, borné |
+| Fin | `Completed`, `Cancelled`, `Failed`… |
+
+#### Ce qui est volontairement masqué
+
+NOX ne vous montre **jamais** :
+
+- **le raisonnement interne du modèle** — les blocs de réflexion sont ignorés avant même d'être
+  lus ; ils ne sont ni stockés, ni journalisés, ni résumés ;
+- **le contenu des fichiers** lus ou écrits ;
+- **la sortie des outils** — seule l'issue est conservée : réussi, échoué ;
+- **les chemins absolus** de votre machine : `D:\Projets\Dev\nox\README.md` devient
+  `README.md`, et un chemin hors du repository devient `<chemin externe>` ;
+- **vos secrets** : toute variable `NOX_*`, valeur comme nom, est retirée ;
+- **les commandes non autorisées** : une commande n'est reproduite que si elle correspond mot pour
+  mot à une commande de validation que vous avez enregistrée, ou à une commande Git en lecture
+  seule. Sinon vous lisez `Running an allowed command`.
+
+Ce n'est pas de la pudeur : ces lignes traversent votre navigateur, et un jour peut-être une
+capture d'écran.
+
+#### Si l'exécution est très bavarde
+
+Au-delà de 2 000 événements, NOX cesse d'en enregistrer et ajoute une ligne unique :
+
+```text
+TRUNCATED — Certains evenements intermediaires n'ont pas ete conserves.
+```
+
+Les changements de statut, les erreurs et le compte rendu final continuent d'être conservés. NOX
+continue par ailleurs de lire la sortie de Claude Code : arrêter de la lire figerait l'agent au
+milieu de son travail.
+
+#### Fermer l'onglet, et revenir
+
+**Vous pouvez fermer l'onglet.** Claude Code continue dans le runner. À la réouverture, NOX
+récupère les événements produits pendant votre absence et vous les affiche : rien n'est perdu.
+
+Si le flux en direct tombe — proxy, extension, coupure —, un avertissement discret apparaît avec
+un bouton **`Reconnect`**. Les événements déjà reçus restent affichés, et NOX continue par
+ailleurs de vérifier si l'exécution s'est terminée.
+
+**Redémarrer le runner, en revanche, interrompt le suivi.** Les événements déjà enregistrés
+restent visibles, mais ceux qui n'avaient pas encore été observés sont perdus. NOX marque
+l'exécution bloquée et vous invite à vérifier le repository vous-même — il ne prétend pas
+connaître le résultat d'un processus qu'il a cessé de suivre.
 
 **Une seule exécution à la fois**, tous projets confondus.
+
+### Interrompre une exécution
+
+Pendant qu'un run est actif, la page propose **`Cancel run`**. La confirmation prévient :
+
+> Interrompre Claude Code peut laisser des modifications partielles dans le repository. NOX ne
+> restaurera aucun fichier automatiquement.
+
+Deux boutons : **`Keep running`** pour renoncer, **`Cancel run`** pour confirmer.
+
+Après confirmation, l'exécution passe immédiatement à **`Cancelling…`**. NOX demande poliment au
+processus de s'arrêter, lui laisse cinq secondes, puis l'arrête de force — lui **et ses processus
+descendants**. Un second clic est refusé : l'arrêt est déjà engagé.
+
+Une fois le processus fermé :
+
+| | |
+| --- | --- |
+| Exécution | `Cancelled` |
+| Tâche | `Blocked` |
+
+**NOX ne restaure rien.** Pas de `git reset`, pas de `git restore`, aucun fichier supprimé. Claude
+Code a peut-être écrit la moitié d'un fichier : c'est exactement ce que vous devez pouvoir relire
+pour décider quoi en faire.
+
+> L'exécution a été annulée. Claude Code peut avoir laissé des modifications partielles. Vérifiez
+> `git status` et `git diff` avant de remettre la tâche en Ready.
+
+La tâche passe à `Blocked` et non à `Ready` : c'est vous qui décidez, après avoir regardé, que le
+repository est dans un état d'où l'on peut repartir. La transition `Blocked → Ready` reste
+manuelle, et un nouveau lancement exigera de toute façon un repository propre et synchronisé.
+
+**Si l'annulation arrive trop tard** — Claude Code a fini pendant que vous cliquiez —, l'exécution
+reste `Completed` et NOX vous le dit. Un travail réellement terminé n'est jamais réétiqueté en
+annulé.
+
+**Si un commit interdit a été créé avant l'arrêt**, c'est cela qui prime : l'exécution est
+`Failed` avec `GIT_POLICY_VIOLATION`, même si vous aviez demandé l'annulation. Vous devez
+apprendre d'abord qu'un commit existe.
+
+**Si NOX ne parvient pas à constater l'arrêt**, l'exécution est `Blocked` et le message le dit
+franchement : le processus peut encore être en train d'écrire.
 
 ### Le résultat
 
 | Issue | Exécution | Tâche |
 | --- | --- | --- |
-| Terminée sans erreur | `Terminée` | `À relire` |
-| Erreur du processus ou sortie illisible | `Échouée` | `Échouée` |
-| Limite Claude, délai dépassé, suivi perdu | `Bloquée` | `Bloquée` |
+| Terminée sans erreur | `Completed` | `Review` |
+| Erreur du processus ou sortie illisible | `Failed` | `Failed` |
+| Limite Claude, délai dépassé, suivi perdu | `Blocked` | `Blocked` |
+| Interrompue par vous | `Cancelled` | `Blocked` |
 
-Une réussite mène à **`À relire`**, jamais directement à « terminée » : un résultat de Claude
-Code est un travail à relire, pas un travail validé. C'est vous qui l'acceptez, et cette
-acceptation ne crée aucun commit.
+Une réussite mène à **`Review`**, jamais directement à `Done` : un résultat de Claude Code est un
+travail à relire, pas un travail validé. C'est vous qui l'acceptez, et cette acceptation ne crée
+aucun commit.
 
 La page affiche le compte rendu de l'agent, la durée, le nombre de tours, le coût **rapporté par
 Claude Code** — « non fourni » quand l'outil ne le communique pas, jamais une estimation —, les
 fichiers modifiés, `git diff --stat`, et la confirmation que `HEAD` n'a pas bougé. Le diff
 complet n'est pas affiché : relisez-le dans votre éditeur.
+
+La timeline **complète** ce compte rendu, elle ne le remplace pas : elle dit ce que l'agent a
+fait, le compte rendu dit ce qu'il en pense.
 
 ### En cas de limite Claude
 
@@ -802,7 +912,9 @@ passé.
 ### Les tests n'appellent jamais Claude
 
 Aucun test automatisé de NOX ne lance le vrai Claude Code : la suite utilise un faux exécutable
-qui imite son contrat. Elle ne consomme donc aucun quota et ne dépend d'aucun réseau.
+qui imite son contrat, y compris son flux `stream-json` — sessions complètes, flux abîmés,
+blocs de réflexion, secrets, sorties énormes, processus descendants. Elle ne consomme donc aucun
+quota et ne dépend d'aucun réseau.
 
 ## Lancer le runner
 
@@ -943,7 +1055,7 @@ NOX/
 │   │   │               ├── new/        Formulaire de tâche + Server Action
 │   │   │               └── [taskId]/   Détail, transitions, reprise
 │   │   │                   └── runs/   Préparation et résultat d'une exécution
-│   │   ├── app/api/                Route Handler d'interrogation d'un run
+│   │   ├── app/api/                Route Handlers : interrogation et flux SSE d'un run
 │   │   ├── components/         Composants d'interface réutilisables
 │   │   ├── lib/
 │   │   │   ├── runner/         Client HTTP du runner (serveur uniquement)
@@ -956,7 +1068,10 @@ NOX/
 │   │   │   ├── tasks.ts            Chargement des tâches pour les pages
 │   │   │   ├── run-prompt.ts       Prompt d'exécution et son empreinte
 │   │   │   ├── run-report.ts       Traduction du rapport du runner
-│   │   │   ├── run-display.ts      Libellés, durées, URL des exécutions
+│   │   │   ├── run-display.ts      Tons, durées, URL des exécutions
+│   │   │   ├── run-cancel.ts       Règles d'annulation, pures et testables
+│   │   │   ├── run-events.ts       Jonction registre ↔ SQLite, rattrapage
+│   │   │   ├── labels.ts           Seule couche de traduction des valeurs internes
 │   │   │   ├── runs.ts             Chargement et réconciliation des runs
 │   │   │   └── ...             Validation métier et lecture des données
 │   │   └── public/             Fichiers statiques
@@ -973,7 +1088,9 @@ NOX/
 │           │   ├── preflight.ts    Vérifications avant lancement
 │           │   ├── launcher.ts     Lancement, stdin, délai, arrêt de l'arbre
 │           │   ├── output.ts       Analyse JSON et détection de limite
-│           │   ├── registry.ts     Registre en mémoire des exécutions
+│           │   ├── registry.ts     Registre en mémoire : états et événements
+│           │   ├── cancel.ts       Annulation contrôlée, sans seconde logique d'arrêt
+│           │   ├── stream/         Parser NDJSON, normalisation, sanitation
 │           │   └── runs.ts         Cycle de vie complet d'une exécution
 │           └── repositories/
 │               ├── resolve-repository.ts   Résolution Git (execFile, sans shell)
@@ -992,11 +1109,12 @@ NOX/
 │   │   ├── src/runs.ts             Codes RUN, états finaux, bornes, transitions
 │   │   ├── src/claude-prompt.ts    Prompt d'exécution pur et déterministe
 │   │   ├── src/claude-commands.ts  Validation des commandes et permissions
+│   │   ├── src/claude-events.ts    Événements publics, types fermés et bornes
 │   │   └── src/claude.ts           Contrat des routes Claude Code
 │   │
 │   └── database/               Accès aux données (@nox/database)
 │       ├── prisma/             Schéma et migrations versionnées
-│       ├── src/                Client, chemins, requêtes sur Project, Task et Run
+│       ├── src/                Client, chemins, requêtes sur Project, Task, Run, RunEvent
 │       └── prisma.config.ts    Configuration du CLI Prisma
 │
 ├── data/                       Base SQLite locale (contenu non versionné)

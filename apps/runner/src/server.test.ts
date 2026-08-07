@@ -1804,3 +1804,266 @@ describe("POST /claude/runs/status", () => {
     assert.equal(/[A-Za-z]:\\/.test(response.text), false);
   });
 });
+
+describe("POST /claude/runs/events", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const EVENTS_RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3401";
+
+  function seed(): void {
+    // Le registre n'accepte qu'une execution active a la fois : celles des
+    // suites precedentes doivent d'abord etre conclues. Celle de cette suite,
+    // en revanche, doit rester active d'un test a l'autre.
+    const active = testRegistry.activeRunId();
+    if (active !== null && active !== EVENTS_RUN) {
+      testRegistry.finish(active, "COMPLETED");
+    }
+    if (!testRegistry.has(EVENTS_RUN)) {
+      testRegistry.register(EVENTS_RUN);
+      testRegistry.start(EVENTS_RUN, new Date("2026-08-07T10:00:00.000Z"));
+      testRegistry.appendEvents(EVENTS_RUN, [
+        { kind: "STATUS", label: "Started", detail: null, toolName: null, isError: false },
+        {
+          kind: "TOOL_STARTED",
+          label: "Reading README.md",
+          detail: null,
+          toolName: "Read",
+          isError: false,
+        },
+        {
+          kind: "ASSISTANT_MESSAGE",
+          label: "Assistant message",
+          detail: "Un message public.",
+          toolName: null,
+          isError: false,
+        },
+      ]);
+    }
+  }
+
+  it("retourne les evenements d'une execution connue", async () => {
+    seed();
+
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: EVENTS_RUN, afterSequence: 0, limit: 100 }),
+    });
+
+    assert.equal(response.status, 200);
+    const payload = response.json as { events?: { sequence?: number; label?: string }[] };
+    assert.equal(payload.events?.length, 3);
+    assert.deepEqual(payload.events?.map((event) => event.sequence), [1, 2, 3]);
+  });
+
+  it("respecte le curseur", async () => {
+    seed();
+
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: EVENTS_RUN, afterSequence: 2, limit: 100 }),
+    });
+
+    const payload = response.json as { events?: { sequence?: number }[]; nextSequence?: number };
+    assert.deepEqual(payload.events?.map((event) => event.sequence), [3]);
+    assert.equal(payload.nextSequence, 3);
+  });
+
+  it("borne la taille du lot", async () => {
+    seed();
+
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: EVENTS_RUN, afterSequence: 0, limit: 1 }),
+    });
+
+    assert.equal((response.json as { events?: unknown[] }).events?.length, 1);
+  });
+
+  it("annonce le statut et l'etat final", async () => {
+    seed();
+
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: EVENTS_RUN }),
+    });
+
+    const payload = response.json as { status?: string; isFinal?: boolean; truncated?: boolean };
+    assert.equal(payload.status, "RUNNING");
+    assert.equal(payload.isFinal, false);
+    assert.equal(payload.truncated, false);
+  });
+
+  it("retourne 404 pour une execution inconnue", async () => {
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: "3f2504e0-4f89-41d3-9a0c-999999999998" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "CLAUDE_RUN_NOT_FOUND");
+  });
+
+  it("refuse un curseur negatif", async () => {
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: EVENTS_RUN, afterSequence: -5 }),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/claude/runs/events", {
+      method: "POST",
+      token: null,
+      body: JSON.stringify({ runId: EVENTS_RUN }),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("refuse GET", async () => {
+    const response = await call("/claude/runs/events", { method: "GET", token: `Bearer ${TOKEN}` });
+    assert.equal(response.status, 405);
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu", async () => {
+    seed();
+
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: EVENTS_RUN }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+  });
+
+  it("ne renvoie aucun champ hors du contrat public", async () => {
+    seed();
+
+    const response = await call("/claude/runs/events", {
+      ...authorized,
+      body: JSON.stringify({ runId: EVENTS_RUN }),
+    });
+
+    const payload = response.json as { events?: Record<string, unknown>[] };
+    for (const event of payload.events ?? []) {
+      assert.deepEqual(
+        Object.keys(event).sort(),
+        ["detail", "isError", "kind", "label", "occurredAt", "sequence", "toolName"],
+      );
+    }
+  });
+});
+
+describe("POST /claude/runs/cancel", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const CANCEL_RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3402";
+
+  function seedActive(runId: string): void {
+    const active = testRegistry.activeRunId();
+    if (active !== null && active !== runId) {
+      testRegistry.finish(active, "COMPLETED");
+    }
+    if (!testRegistry.has(runId)) {
+      testRegistry.register(runId);
+      testRegistry.start(runId, new Date());
+      testRegistry.attachKill(runId, () => undefined);
+    }
+  }
+
+  it("accepte l'arret d'une execution active", async () => {
+    seedActive(CANCEL_RUN);
+
+    const response = await call("/claude/runs/cancel", {
+      ...authorized,
+      body: JSON.stringify({ runId: CANCEL_RUN }),
+    });
+
+    // `202` : la demande est acceptee, l'arret engage, mais rien n'est termine.
+    assert.equal(response.status, 202);
+    const payload = response.json as { run?: { status?: string } };
+    assert.equal(payload.run?.status, "CANCELLING");
+  });
+
+  it("refuse un second appel pendant l'arret", async () => {
+    seedActive(CANCEL_RUN);
+
+    const response = await call("/claude/runs/cancel", {
+      ...authorized,
+      body: JSON.stringify({ runId: CANCEL_RUN }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "CLAUDE_RUN_CANCELLING");
+  });
+
+  it("refuse une execution deja terminee", async () => {
+    const finished = "3f2504e0-4f89-41d3-9a0c-0305e82c3403";
+    testRegistry.finish(CANCEL_RUN, "CANCELLED");
+    testRegistry.register(finished);
+    testRegistry.finish(finished, "COMPLETED");
+
+    const response = await call("/claude/runs/cancel", {
+      ...authorized,
+      body: JSON.stringify({ runId: finished }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "CLAUDE_RUN_ALREADY_FINISHED");
+  });
+
+  it("retourne 404 pour une execution inconnue", async () => {
+    const response = await call("/claude/runs/cancel", {
+      ...authorized,
+      body: JSON.stringify({ runId: "3f2504e0-4f89-41d3-9a0c-999999999997" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "CLAUDE_RUN_NOT_FOUND");
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/claude/runs/cancel", {
+      method: "POST",
+      token: null,
+      body: JSON.stringify({ runId: CANCEL_RUN }),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("refuse GET", async () => {
+    const response = await call("/claude/runs/cancel", { method: "GET", token: `Bearer ${TOKEN}` });
+    assert.equal(response.status, 405);
+  });
+
+  it("ignore un PID transmis par l'appelant", async () => {
+    const target = "3f2504e0-4f89-41d3-9a0c-0305e82c3404";
+    seedActive(target);
+
+    const response = await call("/claude/runs/cancel", {
+      ...authorized,
+      body: JSON.stringify({ runId: target, pid: 4242, signal: "SIGKILL", force: true }),
+    });
+
+    // Le corps supplementaire n'a aucun effet : seul le `runId` est lu, et
+    // l'execution designee est bien celle du registre.
+    assert.equal(response.status, 202);
+    assert.equal(testRegistry.snapshot(target)?.status, "CANCELLING");
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu", async () => {
+    const target = "3f2504e0-4f89-41d3-9a0c-0305e82c3405";
+    testRegistry.finish("3f2504e0-4f89-41d3-9a0c-0305e82c3404", "CANCELLED");
+    seedActive(target);
+
+    const response = await call("/claude/runs/cancel", {
+      ...authorized,
+      body: JSON.stringify({ runId: target }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+  });
+});

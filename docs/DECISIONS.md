@@ -1452,3 +1452,308 @@ TASK-009 ne touche qu'à l'affichage.
 transitions et dans les documents Markdown déjà générés. Les renommer aurait demandé une
 migration de données pour un bénéfice purement cosmétique. Un test le vérifie explicitement, pour
 que la prochaine session ne confonde pas « traduire » et « renommer ».
+
+### D-124 — Sortie `stream-json`, avec `--verbose`, sans messages partiels
+
+**Décision.** Claude Code est lancé avec `--output-format stream-json --verbose`.
+`--include-partial-messages` n'est pas passé. `--verbose` accompagne `stream-json`, et lui seul :
+le format `json` ne l'exige pas et ne le reçoit pas.
+
+**Justification.** `--verbose` n'est pas un choix de confort, c'est une **précondition du
+binaire**. Avec `-p`, Claude Code `2.1.223` refuse de démarrer sans lui :
+
+```text
+Error: When using --print, --output-format=stream-json requires --verbose
+```
+
+`--max-turns`, lui, est bien reconnu par l'analyseur d'arguments bien qu'il n'apparaisse plus dans
+`--help`.
+
+`--include-partial-messages` produirait un événement par fragment de token : plusieurs milliers
+d'entrées pour un run de deux minutes, dont aucune n'apprendrait plus que le message complet qui
+les suit. Un événement par message ou par action suffit à suivre le travail.
+
+**Retour d'expérience — un probe qui n'emprunte pas le vrai chemin ne prouve rien.** La première
+version de cette décision affirmait l'inverse : que `stream-json` était accepté **sans**
+`--verbose`. Elle s'appuyait sur un probe écrit pendant TASK-010 :
+
+```bash
+printf '' | ANTHROPIC_BASE_URL=http://127.0.0.1:1 claude -p --output-format stream-json
+```
+
+Ce probe alimentait `stdin` avec une entrée **vide**. Le binaire s'arrêtait alors plus tôt, sur
+`Error: Input must be provided either through stdin or as a prompt argument when using --print`,
+**sans jamais atteindre** la vérification de `--verbose`. L'absence d'erreur a été lue comme une
+acceptation ; ce n'était qu'un arrêt antérieur. Le premier run réel, lui, envoie un vrai prompt,
+franchit ce contrôle, et bute sur le suivant.
+
+La leçon vaut au-delà de ce drapeau : **un probe qui court-circuite une étape ne dit rien des
+étapes suivantes**, et son silence n'est pas une preuve. Le comportement réel fait autorité. Le
+probe corrigé — même commande avec un `stdin` non vide — reproduit fidèlement l'erreur, sans
+lancer la moindre requête puisque `ANTHROPIC_BASE_URL` ne mène nulle part.
+
+**Ce que cela écarte.** Un affichage caractère par caractère, façon terminal. NOX affiche des
+actions, pas un flux de frappe.
+
+### D-125 — Un parser NDJSON incrémental, et non un découpage par chunk
+
+**Décision.** `stdout` passe par un tampon de lignes dédié : reste incomplet conservé, `\r\n` et
+`\n` équivalents, ligne démesurée abandonnée et signalée, dernière ligne sans terminateur rendue
+au `flush`.
+
+**Justification.** `stdout` n'est pas une suite de lignes : c'est une suite d'octets qui arrivent
+quand le système le décide. Une ligne JSON de 40 Kio peut arriver en douze morceaux, et trois
+lignes courtes dans un seul. Traiter chaque `chunk` comme une ligne produirait des JSON coupés au
+milieu et des événements perdus — silencieusement, ce qui est le pire.
+
+Le `flush` final n'est pas un détail : beaucoup de programmes n'écrivent pas de retour à la ligne
+après leur dernière ligne, et c'est justement le `result` qui serait perdu.
+
+### D-126 — Aucun événement brut ne quitte le runner
+
+**Décision.** Les lignes de `stream-json` ne sont jamais transmises au navigateur, ni telles
+quelles, ni résumées. Le runner produit un `ClaudeRunEvent` fermé dont il décide chaque champ.
+
+**Justification.** Une ligne de `stream-json` contient le contenu intégral des fichiers lus, les
+entrées et sorties de chaque outil, et les chemins absolus de la machine. Un type fermé, sans
+champ libre, rend la règle vérifiable : il n'existe aucun chemin par lequel un fragment d'origine
+puisse ressortir. Le contrat partagé revalide chaque événement à chaque frontière — réponse du
+runner, ligne relue en base, charge reçue par le navigateur —, et une réponse dont un seul
+élément est hors contrat est rejetée entière.
+
+### D-127 — Le raisonnement interne n'a aucune représentation
+
+**Décision.** Les blocs `thinking`, `redacted_thinking`, `reasoning`, `analysis` et tout bloc
+portant une `signature` sont ignorés avant d'être lus. Aucun `ClaudeRunEventKind` ne les
+représente.
+
+**Justification.** Ce n'est pas un oubli dans l'énumération : c'est le point. Ils ne sont ni
+stockés, ni journalisés, ni résumés, ni comptés comme message visible. NOX n'affiche même pas
+« Claude réfléchit » — un tel événement serait déjà une information sur un contenu qui ne doit pas
+sortir.
+
+La liste des blocs affichables est **fermée** (`text`, `tool_use`) plutôt qu'une liste
+d'exclusions. Une liste d'exclusions laisse passer tout ce qu'on n'a pas prévu, et c'est
+précisément ce qu'on n'a pas prévu qui est dangereux. Des tests vérifient l'absence d'un faux bloc
+`thinking` dans le registre, dans SQLite, dans l'API, dans le HTML et dans le flux SSE.
+
+### D-128 — Une commande n'est affichée que si elle est exactement autorisée
+
+**Décision.** Un appel `Bash` n'est reproduit que s'il correspond mot pour mot à une commande de
+validation enregistrée ou à une commande Git en lecture seule. Sinon : « Running an allowed
+command ».
+
+**Justification.** La correspondance est stricte parce que l'approximation ne protège de rien :
+`npm run test -- --grep MOT_DE_PASSE` n'est pas `npm run test`, et l'afficher exposerait un
+argument que personne n'a validé. NOX ne cherche pas à distinguer les cas douteux — il n'affiche
+que ce qu'il a lui-même autorisé.
+
+Même logique pour les résultats d'outils : seule l'issue est transmise, jamais la sortie. Un
+`tool_result` porte le fichier lu en entier.
+
+### D-129 — Sanitation centralisée, appliquée à toutes les chaînes
+
+**Décision.** Toute chaîne publique passe par un unique nettoyeur : chemins du repository rendus
+relatifs, chemins extérieurs masqués, valeurs et noms des variables `NOX_*` retirés, caractères de
+contrôle et marques de direction supprimés, taille bornée.
+
+**Justification.** Une fonction de sanitation qu'on applique au cas par cas finit toujours par
+être oubliée une fois, et c'est cette fois-là qui compte. Le filtre des secrets porte sur le
+préfixe `NOX_` entier plutôt que sur une liste nominative : une variable ajoutée plus tard serait
+sinon exposée par oubli, et l'oubli irait dans le mauvais sens.
+
+Les accents, idéogrammes et emoji sont préservés. Un nettoyage qui réduirait tout à l'ASCII
+rendrait la moitié des messages illisibles pour un gain de sécurité nul.
+
+### D-130 — Les événements sont bornés, et la troncature est explicite
+
+**Décision.** 2 000 événements ordinaires par exécution, 64 réservés à l'essentiel, 4 Kio par
+détail, 2 Mio de texte total, 1 Mio par ligne. Ces valeurs sont constantes et non configurables.
+Au-delà, un unique événement `TRUNCATED` est ajouté, puis seuls les statuts, les erreurs et le
+résultat final continuent de passer.
+
+**Justification.** Une exécution de deux minutes produit des centaines de lignes ; une exécution
+qui part en boucle en produit des centaines de milliers. Ce ne sont pas des réglages de confort :
+elles protègent la mémoire du runner, la base et le temps de rendu de la page. Une limite de
+sécurité qu'on peut desserrer par variable d'environnement n'en est plus une — d'où l'absence de
+variable dans `.env.example`.
+
+Le runner **continue de lire `stdout`** après la troncature. Cesser de lire remplirait le tampon
+du système et figerait Claude Code au milieu d'une édition, ce qui serait bien pire qu'une
+timeline incomplète.
+
+### D-131 — `RunEvent` en SQLite, sans compteur dénormalisé
+
+**Décision.** Les événements sont persistés dans une table `RunEvent`, avec `runId + sequence`
+unique. `Run` gagne un seul champ : `cancellationRequestedAt`.
+
+**Justification.** Le registre du runner est en mémoire : un redémarrage l'efface. Sans cette
+table, rouvrir la page d'une exécution passée n'afficherait plus rien de ce qui s'est passé
+pendant qu'elle tournait.
+
+`lastEventSequence` sur `Run` a été écarté : il se dérive du `MAX(sequence)` des `RunEvent`, et un
+compteur dénormalisé finirait par diverger des lignes qu'il prétend décrire — l'inverse de
+l'idempotence recherchée. `cancelledAt` aussi : `finishedAt` avec `status = CANCELLED` dit
+exactement la même chose. `cancellationRequestedAt` est le seul des trois qui enregistre un fait
+qu'aucune autre colonne ne porte — un humain a décidé d'interrompre.
+
+La relation est en `Cascade`, contrairement à `Run → Task` qui est en `Restrict` : un événement
+n'a aucun sens sans son exécution, et la suppression d'une exécution n'existe nulle part dans NOX.
+
+### D-132 — Idempotence par contrainte, pas par confiance
+
+**Décision.** L'insertion filtre les numéros déjà connus dans une transaction, tente l'insertion
+groupée, et repasse ligne par ligne si une écriture concurrente a levé la contrainte d'unicité.
+
+**Justification.** `createMany({ skipDuplicates })` aurait été le moyen naturel, mais SQLite ne le
+supporte pas sous Prisma. Le chemin lent n'est emprunté que dans le cas concurrent réel.
+
+C'est la contrainte `runId + sequence` qui rend l'insertion idempotente, pas la prudence de
+l'appelant : le flux SSE peut rejouer un lot après une reconnexion, deux onglets peuvent persister
+les mêmes événements, un rafraîchissement peut tout redemander — aucun de ces cas ne crée de
+doublon, sans que personne ait à s'en soucier.
+
+### D-133 — SSE plutôt qu'un WebSocket, avec du polling côté serveur
+
+**Décision.** Le navigateur reçoit les événements par `text/event-stream` depuis un Route Handler
+de Next.js, qui interroge le runner côté serveur.
+
+**Justification.** Le flux est à sens unique : le serveur envoie, le navigateur écoute. Un
+WebSocket apporterait un canal montant sans usage, une poignée de main à gérer et un protocole de
+plus à sécuriser. SSE tient dans un `GET`, traverse les mêmes contrôles d'accès que le reste, et
+se reconnecte tout seul.
+
+Le runner, lui, ne pousse rien : son registre est interrogé. La boucle du Route Handler transforme
+cette interrogation en flux — c'est du polling côté serveur, mais le navigateur reçoit bien du
+temps réel sans ouvrir une requête par seconde. L'écart de complexité avec un vrai canal poussé ne
+se justifierait pas pour un outil local à une seule exécution active.
+
+Le navigateur ne parle toujours jamais au runner : le jeton ne quitte pas le serveur.
+
+### D-134 — La persistance précède l'envoi au navigateur
+
+**Décision.** Le flux SSE écrit en base **avant** de pousser au navigateur.
+
+**Justification.** Un événement affiché mais non enregistré disparaîtrait au premier
+rafraîchissement, et l'utilisateur croirait avoir mal lu. L'insertion étant idempotente, l'ordre
+inverse n'apporterait qu'un affichage imperceptiblement plus rapide contre une incohérence
+visible.
+
+### D-135 — Rattrapage des événements à la réouverture de la page
+
+**Décision.** Ouvrir la page d'une exécution récupère du registre tout ce que la base ignore, y
+compris pour une exécution déjà terminée.
+
+**Justification.** Découvert par le test fonctionnel. Le flux SSE ne tourne que tant qu'un onglet
+est ouvert ; fermer la page pendant une exécution — ce que NOX encourage explicitement — laisse le
+runner produire des dizaines d'événements que personne ne lit. Sans rattrapage, rouvrir la page
+après coup affichait une timeline qui s'arrêtait au milieu, alors que le runner avait tout gardé
+pendant vingt-quatre heures.
+
+Le cas d'une exécution terminée est précisément celui qui en avait le plus besoin : c'est celui où
+le flux ne se rouvrira jamais.
+
+### D-136 — Reprise par curseur, jamais par décalage
+
+**Décision.** La reprise utilise `Last-Event-ID` en SSE et `afterSequence` au premier appel, tous
+deux comparés à un `sequence` strictement croissant attribué par le runner.
+
+**Justification.** Un décalage se décalerait justement dès qu'un événement s'intercalerait. Le
+numéro est produit par le runner et jamais repris de Claude Code : un numéro venu du processus
+observé pourrait reculer, se répéter, ou être choisi.
+
+### D-137 — Le polling de statut reste, en repli
+
+**Décision.** `RunPoller` n'est pas supprimé. Le flux SSE le complète ; il ne le remplace pas.
+
+**Justification.** Si le flux échoue — proxy, extension, coupure —, l'utilisateur doit tout de
+même apprendre que son exécution s'est terminée. La timeline affiche alors un avertissement discret
+et un bouton `Reconnect`, et le polling continue d'assurer le minimum : savoir *si* c'est fini.
+
+### D-138 — Un statut `CANCELLING`, non final
+
+**Décision.** `RUN_STATUS` gagne `CANCELLING`, entre `RUNNING` et les états finaux. La tâche reste
+`RUNNING` pendant ce temps.
+
+**Justification.** Sans lui, un clic sur « Cancel run » ne changerait rien à l'écran pendant tout
+le délai de grâce, et l'utilisateur cliquerait une seconde fois. Une demande d'arrêt n'est pas un
+arrêt constaté : tant que le processus n'a pas fermé, il peut encore écrire dans le repository, et
+le traiter comme terminé reviendrait à cesser de le surveiller au moment précis où il faut le
+surveiller.
+
+Aucune valeur existante n'a été renommée, conformément à D-123.
+
+### D-139 — Une seule implémentation de l'arrêt de l'arbre
+
+**Décision.** L'annulation appelle exactement la fonction d'arrêt écrite pour le délai maximal de
+TASK-008. Aucune seconde logique Windows n'est introduite.
+
+**Justification.** Deux implémentations d'un arrêt de processus divergeraient, et c'est celle qui
+n'est pas testée qui tournerait le jour où ça compte. Le registre expose `kill(runId)` ; aucun
+identifiant de processus ne circule, et le PID reste dans la fermeture de la fonction d'arrêt,
+hors d'atteinte du navigateur.
+
+Si le processus ne ferme pas, NOX ne fait pas semblant : passé un délai, l'exécution est `BLOCKED`
+avec `CLAUDE_CANCEL_FAILED`, et le message dit que le processus peut encore vivre. Annoncer
+`CANCELLED` pour un processus toujours en train d'écrire serait la pire des réponses.
+
+### D-140 — Le premier état final gagne
+
+**Décision.** Un run `COMPLETED` ne devient jamais `CANCELLED`, et réciproquement. `CANCELLING`
+n'étant pas final, une annulation demandée pendant qu'un processus conclut proprement — résultat
+complet, code de sortie nul, aucune erreur — laisse le run `COMPLETED`.
+
+**Justification.** L'annulation est alors arrivée trop tard, et le dire autrement effacerait un
+résultat réel. Dans tous les autres cas, l'annulation a bien interrompu quelque chose.
+
+Corollaire : un processus tué rend presque toujours une sortie incomplète et un code non nul. Les
+diagnostics « sortie illisible » et « échec du processus » sont donc court-circuités quand un
+arrêt a été demandé — les signaler pour une interruption volontaire serait trompeur.
+
+### D-141 — Git est capturé après l'arrêt, et rien n'est restauré
+
+**Décision.** L'état Git est relu après toute fin, annulation comprise. Aucun `reset`, aucun
+`restore`, aucune suppression de fichier.
+
+**Justification.** Claude Code a pu écrire la moitié d'un fichier avant de mourir. Ce travail
+partiel est exactement ce que l'utilisateur doit pouvoir relire pour décider quoi en faire ;
+restaurer le détruirait. C'est le prolongement direct de la règle de TASK-008 : NOX constate, il ne
+répare pas.
+
+Une **violation Git reste prioritaire**, y compris après une annulation : le run est `FAILED` avec
+`GIT_POLICY_VIOLATION` même si un arrêt avait été demandé. L'utilisateur doit apprendre d'abord
+qu'un commit interdit existe, et ensuite seulement que le processus a été interrompu.
+
+### D-142 — Un run annulé bloque la tâche
+
+**Décision.** `Run = CANCELLED` fait passer la tâche à `BLOCKED`, jamais à `READY`.
+
+**Justification.** Passer directement à `READY` masquerait l'état partiel du repository et
+inviterait à relancer sur un socle inconnu. `BLOCKED → READY` reste une transition manuelle, prise
+après avoir regardé `git status` et `git diff` — et NOX le dit en toutes lettres sur la page du
+run.
+
+### D-143 — Les confirmations d'annulation vivent dans l'URL
+
+**Décision.** « Cancel run » ouvre une confirmation portée par `?confirmCancel=1`, comme les
+suppressions de TASK-009.
+
+**Justification.** Le formulaire est rendu par le serveur : il fonctionne sans JavaScript, « Keep
+running » est une navigation ordinaire, et le test fonctionnel peut le vérifier en ne lisant que
+du HTML. En `CANCELLING`, plus rien n'est proposé — ni bouton grisé, ni lien — et une explication
+française prend la place : un bouton inactif sans raison visible se lit comme une panne.
+
+### D-144 — Aucun vrai Claude Code dans les tests automatisés
+
+**Décision.** Le faux Claude est étendu avec six modes `stream-json` : session complète, session
+lente avec processus enfant, flux hostile (bloc `thinking`, chemin absolu, secret, caractères de
+contrôle), flux abîmé (JSON invalide, tableau, primitive, CRLF, ligne coupée, dernière ligne sans
+terminateur), sortie énorme, flux sans résultat.
+
+**Justification.** Aucun test ne doit consommer de quota, dépendre du réseau ou devenir
+non reproductible. Le processus enfant du mode lent n'est pas décoratif : il prouve que l'arrêt
+descend bien l'arbre, ce qu'un test sur le seul parent ne montrerait pas.
+
+La course entre la fin et l'annulation est testée avec un lanceur **contrôlable** — les tests
+décident quand les morceaux de `stdout` arrivent et quand le processus ferme. Avec un vrai
+processus, cette course ne serait jamais déterministe.

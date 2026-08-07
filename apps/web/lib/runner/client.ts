@@ -11,7 +11,10 @@
  */
 
 import {
+  RUN_EVENT_LIMITS,
   isClaudePreflightSuccess,
+  isClaudeRunCancelSuccess,
+  isClaudeRunEventsSuccess,
   isClaudeRunStatusSuccess,
   isCreateProjectDocumentSuccess,
   isCreateTaskDocumentSuccess,
@@ -26,6 +29,10 @@ import {
   isUpdateProjectDocumentSuccess,
   type ClaudePreflightRequest,
   type ClaudePreflightSuccess,
+  type ClaudeRunCancelRequest,
+  type ClaudeRunCancelSuccess,
+  type ClaudeRunEventsRequest,
+  type ClaudeRunEventsSuccess,
   type ClaudeRunSnapshot,
   type ClaudeRunStatusRequest,
   type CreateProjectDocumentRequest,
@@ -459,6 +466,59 @@ export function fetchClaudeRunStatus(
     isClaudeRunStatusSuccess,
     (value) => (value as { run: ClaudeRunSnapshot }).run,
     options,
+  );
+}
+
+/**
+ * Lit les evenements publics d'une execution, apres un curseur.
+ *
+ * Appelee uniquement depuis le serveur, comme tout le reste de ce module : le
+ * navigateur passe par le flux SSE de Next.js. Les evenements retournes ont ete
+ * normalises et nettoyes par le runner ; le contrat partage les revalide un a
+ * un avant qu'ils n'atteignent quoi que ce soit.
+ */
+export function fetchClaudeRunEvents(
+  runId: string,
+  afterSequence: number,
+  limit: number = RUN_EVENT_LIMITS.maxBatch,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ClaudeRunEventsSuccess>> {
+  const payload: ClaudeRunEventsRequest = { runId, afterSequence, limit };
+
+  return postAuthenticated(
+    "/claude/runs/events",
+    "claude/runs/events",
+    payload,
+    isClaudeRunEventsSuccess,
+    (value) => value as ClaudeRunEventsSuccess,
+    options,
+  );
+}
+
+/**
+ * Demande l'arret d'une execution active.
+ *
+ * Le corps ne porte qu'un identifiant d'execution. Aucun identifiant de
+ * processus, aucun signal, aucun delai, aucune option de forcage : ce que le
+ * navigateur peut declencher se limite a « arrete ce run », et le runner decide
+ * seul de la maniere.
+ *
+ * Le runner repond `202` sans attendre la mort du processus.
+ */
+export function cancelClaudeRun(
+  runId: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ClaudeRunCancelSuccess["run"]>> {
+  const payload: ClaudeRunCancelRequest = { runId };
+
+  return postAuthenticated(
+    "/claude/runs/cancel",
+    "claude/runs/cancel",
+    payload,
+    isClaudeRunCancelSuccess,
+    (value) => (value as ClaudeRunCancelSuccess).run,
+    options,
+    202,
   );
 }
 

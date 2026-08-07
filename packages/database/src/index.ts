@@ -43,6 +43,7 @@ export {
   getRunById,
   hasActiveRun,
   listRunsByTask,
+  markRunCancelling,
   markRunRunning,
   startTaskExecution,
   updateRunFromRunner,
@@ -51,6 +52,14 @@ export {
   type RunOutcomeInput,
   type RunnerRunReport,
 } from "./runs.js";
+
+export {
+  InvalidRunEventRecordError,
+  appendRunEvents,
+  countRunEvents,
+  getLastRunEventSequence,
+  listRunEvents,
+} from "./run-events.js";
 
 export {
   DATABASE_URL_ENV_VAR,

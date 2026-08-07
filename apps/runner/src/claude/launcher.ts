@@ -18,11 +18,28 @@
  *
  * ## Arguments et version installee
  *
- * Les drapeaux ci-dessous suivent la forme documentee du mode non interactif de
- * Claude Code. Ils n'ont **pas** pu etre verifies contre un binaire local — la
- * machine de developpement n'a pas Claude Code installe. `buildClaudeArguments`
- * est isolee pour cette raison : si la version installee attend autre chose,
- * c'est la seule fonction a corriger, et elle est directement testable.
+ * `--max-turns` est reconnu par l'analyseur d'arguments de Claude Code `2.1.223`
+ * bien qu'il n'apparaisse plus dans `--help`.
+ *
+ * **`--verbose` est obligatoire avec `-p --output-format stream-json`.** Le
+ * premier run reel l'a montre : le binaire refuse la combinaison avec
+ * `When using --print, --output-format=stream-json requires --verbose`. Un probe
+ * ecrit pendant TASK-010 avait conclu l'inverse, mais il alimentait `stdin` avec
+ * une entree vide : le binaire s'arretait plus tot, sur `Input must be provided`,
+ * sans jamais atteindre cette precondition. Un probe qui n'emprunte pas le vrai
+ * chemin d'execution ne prouve rien — c'est le run reel qui fait autorite.
+ *
+ * `--verbose` n'est ajoute **que** pour `stream-json`. Le format `json` ne le
+ * demande pas, et l'ajouter partout changerait la verbosite sans necessite.
+ *
+ * `--include-partial-messages` n'est deliberement pas passe. Il ferait emettre un
+ * evenement par fragment de token : plusieurs milliers d'evenements pour un run
+ * de deux minutes, dont aucun n'apporterait plus que le message complet qui les
+ * suit. Un evenement par message ou par action suffit a suivre le travail.
+ *
+ * `buildClaudeArguments` reste isolee et pure : si une version ulterieure attend
+ * autre chose, c'est la seule fonction a corriger, et elle est directement
+ * testable.
  */
 
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -54,6 +71,16 @@ export type LaunchRequest = {
   allowedTools: readonly string[];
   disallowedTools: readonly string[];
   claude: ClaudeConfig;
+  /**
+   * Recoit chaque morceau de `stdout` des son arrivee.
+   *
+   * Lorsqu'il est fourni, la sortie n'est **plus accumulee** : en `stream-json`,
+   * elle peut depasser plusieurs megaoctets, et la borner en memoire inserait une
+   * marque de troncature au milieu du flux — donc au milieu d'une ligne JSON,
+   * potentiellement celle du resultat final. Le consommateur garde ce dont il a
+   * besoin ; le lanceur ne garde rien.
+   */
+  onChunk?: (chunk: string) => void;
 };
 
 export type LaunchHandle = {
@@ -78,7 +105,15 @@ export function buildClaudeArguments(request: {
   disallowedTools: readonly string[];
   maxTurns: number;
 }): string[] {
-  const args = ["-p", "--output-format", "json", "--max-turns", String(request.maxTurns)];
+  // `stream-json` remplace `json` depuis TASK-010 : la meme information finale
+  // arrive, precedee de tout ce qui permet de suivre le travail en cours. Le
+  // dernier message du flux est le meme objet `result` qu'auparavant.
+  //
+  // `--verbose` est une precondition du binaire, pas un choix : avec `-p`, le
+  // format `stream-json` est refuse sans lui. Il accompagne donc le format, et
+  // seulement lui.
+  const args = ["-p", "--output-format", "stream-json", "--verbose"];
+  args.push("--max-turns", String(request.maxTurns));
 
   // Les regles sont jointes par des virgules ; `claude-commands.ts` garantit
   // qu'aucune commande autorisee n'en contient.
@@ -154,9 +189,21 @@ export const launchClaude: ClaudeLauncher = (request) => {
   child.stderr.setEncoding("utf8");
 
   // Les sorties sont bornees a la volee : un processus bavard ne doit pas
-  // pouvoir remplir la memoire du runner.
+  // pouvoir remplir la memoire du runner. En mode streaming, rien n'est
+  // accumule du tout — le consommateur decide de ce qu'il garde.
+  const onChunk = request.onChunk;
   child.stdout.on("data", (chunk: string) => {
-    stdout = boundText(stdout + chunk, RUN_LIMITS.stdout);
+    if (onChunk === undefined) {
+      stdout = boundText(stdout + chunk, RUN_LIMITS.stdout);
+      return;
+    }
+    try {
+      onChunk(chunk);
+    } catch {
+      // Une erreur du consommateur ne doit pas interrompre la lecture : cesser
+      // de consommer `stdout` remplirait le tampon du systeme et figerait
+      // Claude Code au milieu de son travail.
+    }
   });
   child.stderr.on("data", (chunk: string) => {
     stderr = boundTail(stderr + chunk, RUN_LIMITS.stderrTail);

@@ -35,6 +35,7 @@ export function toRunnerReport(snapshot: ClaudeRunSnapshot): RunnerRunReport {
     status: snapshot.status,
     startedAt: toDate(snapshot.startedAt),
     finishedAt: toDate(snapshot.finishedAt),
+    cancellationRequestedAt: toDate(snapshot.cancellationRequestedAt),
     exitCode: snapshot.exitCode,
     errorCode,
     errorMessage:

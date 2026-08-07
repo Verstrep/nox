@@ -22,6 +22,8 @@ import {
   RUNNER_SERVICE_NAME,
   RUN_STATUS,
   parseClaudePreflightRequest,
+  parseClaudeRunCancelRequest,
+  parseClaudeRunEventsRequest,
   parseClaudeRunStatusRequest,
   parseCreateProjectDocumentRequest,
   parseCreateTaskDocumentRequest,
@@ -33,6 +35,8 @@ import {
   parseStartClaudeRunRequest,
   parseUpdateProjectDocumentRequest,
   type ClaudePreflightSuccess,
+  type ClaudeRunCancelSuccess,
+  type ClaudeRunEventsSuccess,
   type ClaudeRunStatusSuccess,
   type CreateProjectDocumentSuccess,
   type CreateTaskDocumentSuccess,
@@ -73,6 +77,7 @@ import {
   deleteTaskDocument,
   type DeleteTaskDocumentResult,
 } from "./repositories/tasks/delete-task-document.ts";
+import { cancelClaudeRun, type CancelRunResult } from "./claude/cancel.ts";
 import { runPreflight, type PreflightResult } from "./claude/preflight.ts";
 import { ClaudeRunRegistry } from "./claude/registry.ts";
 import { startClaudeRun, type StartRunRequest, type StartRunResult } from "./claude/runs.ts";
@@ -110,6 +115,7 @@ export type RunnerDependencies = {
   ) => Promise<DeleteTaskDocumentResult>;
   claudePreflight?: (repositoryPath: string) => Promise<PreflightResult>;
   startClaudeRun?: (request: StartRunRequest) => Promise<StartRunResult>;
+  cancelClaudeRun?: (runId: string) => CancelRunResult;
   /**
    * Registre des executions.
    *
@@ -133,6 +139,8 @@ const TASKS_DELETE_DOCUMENT_ROUTE = "/repositories/tasks/delete-document";
 const CLAUDE_PREFLIGHT_ROUTE = "/claude/preflight";
 const CLAUDE_RUNS_START_ROUTE = "/claude/runs/start";
 const CLAUDE_RUNS_STATUS_ROUTE = "/claude/runs/status";
+const CLAUDE_RUNS_EVENTS_ROUTE = "/claude/runs/events";
+const CLAUDE_RUNS_CANCEL_ROUTE = "/claude/runs/cancel";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -238,6 +246,8 @@ export function createRunnerServer(
   const startRun =
     dependencies.startClaudeRun ??
     ((request: StartRunRequest) => startClaudeRun(request, config.claude, registry));
+  const cancelRun =
+    dependencies.cancelClaudeRun ?? ((runId: string) => cancelClaudeRun(runId, registry));
   const log = dependencies.log ?? ((message: string) => { console.log(message); });
 
   /** Journalise un refus metier : le code seul, jamais le chemin recu. */
@@ -602,6 +612,76 @@ export function createRunnerServer(
 
         const payload: ClaudeRunStatusSuccess = { ok: true, run: snapshot };
         sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === CLAUDE_RUNS_EVENTS_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, CLAUDE_RUNS_EVENTS_ROUTE, log,
+          parseClaudeRunEventsRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Aucune attente : la route rend ce qu'elle a, tout de suite. C'est le
+        // flux SSE du web qui espace les appels — un long polling ici
+        // immobiliserait une connexion du runner par onglet ouvert.
+        const page = registry.getEvents(parsed.runId, parsed.afterSequence, parsed.limit);
+        if (page === null) {
+          logRefusal(requestId, CLAUDE_RUNS_EVENTS_ROUTE, RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND);
+          sendRunnerError(response, RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND, requestId);
+          return;
+        }
+
+        // Les evenements ont ete normalises et nettoyes a leur creation : rien
+        // de brut ne peut arriver jusqu'ici.
+        const payload: ClaudeRunEventsSuccess = { ok: true, ...page };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === CLAUDE_RUNS_CANCEL_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, CLAUDE_RUNS_CANCEL_ROUTE, log,
+          parseClaudeRunCancelRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Le corps ne porte qu'un `runId`. Aucun identifiant de processus, aucun
+        // signal, aucun delai, aucune option de forcage : ce que le navigateur
+        // peut designer se limite a une execution que le runner connait deja.
+        const result = cancelRun(parsed.runId);
+        if (!result.ok) {
+          logRefusal(requestId, CLAUDE_RUNS_CANCEL_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        // `202` : la demande est acceptee et l'arret engage, mais le processus
+        // dispose encore de son delai de grace. Repondre `200` laisserait croire
+        // qu'il est deja mort.
+        const payload: ClaudeRunCancelSuccess = {
+          ok: true,
+          run: {
+            runId: parsed.runId,
+            status: RUN_STATUS.CANCELLING,
+            cancellationRequestedAt: result.requestedAt.toISOString(),
+          },
+        };
+        sendJson(response, 202, payload, requestId);
         return;
       }
 

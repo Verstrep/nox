@@ -204,6 +204,26 @@ export const RUNNER_ERROR = {
   /** L'execution a viole les regles Git : commit, changement de branche, sortie du perimetre. */
   GIT_POLICY_VIOLATION: "GIT_POLICY_VIOLATION",
 
+  // --- Annulation d'une execution -------------------------------------------
+
+  /**
+   * L'execution a deja atteint un etat final : il n'y a plus rien a arreter.
+   *
+   * C'est le cas d'une annulation qui arrive trop tard, et il merite un code a
+   * lui : l'utilisateur doit comprendre que son clic n'a rien casse, simplement
+   * qu'il est arrive apres la fin.
+   */
+  CLAUDE_RUN_ALREADY_FINISHED: "CLAUDE_RUN_ALREADY_FINISHED",
+  /** Une annulation est deja engagee : le second clic ne relance pas l'arret. */
+  CLAUDE_RUN_CANCELLING: "CLAUDE_RUN_CANCELLING",
+  /**
+   * L'arret a ete demande mais NOX n'a pas pu constater la mort du processus.
+   *
+   * Distinct d'un arret reussi : ici le processus peut encore ecrire dans le
+   * repository, et NOX ne peut rien affirmer de son etat.
+   */
+  CLAUDE_CANCEL_FAILED: "CLAUDE_CANCEL_FAILED",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

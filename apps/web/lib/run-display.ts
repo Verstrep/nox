@@ -15,6 +15,9 @@ import type { BadgeTone } from "@/components/StatusBadge";
 const STATUS_TONES: Record<RunStatus, BadgeTone> = {
   [RUN_STATUS.QUEUED]: "muted",
   [RUN_STATUS.RUNNING]: "accent",
+  // `accent` comme `RUNNING` : quelque chose se passe encore, et l'oeil doit le
+  // voir. Le libelle, lui, dit lequel des deux.
+  [RUN_STATUS.CANCELLING]: "accent",
   [RUN_STATUS.BLOCKED]: "neutral",
   [RUN_STATUS.FAILED]: "neutral",
   [RUN_STATUS.CANCELLED]: "muted",
@@ -43,6 +46,37 @@ export function runUrl(projectId: string, taskId: string, runId: string): string
 /** URL du Route Handler interrogé par le navigateur pendant une execution. */
 export function runStatusEndpoint(projectId: string, taskId: string, runId: string): string {
   return `/api/projects/${projectId}/tasks/${taskId}/runs/${runId}/status`;
+}
+
+/**
+ * URL du flux SSE des evenements.
+ *
+ * `afterSequence` evite de renvoyer au navigateur ce qu'il a deja affiche : la
+ * page rend son historique cote serveur, puis le flux reprend juste apres.
+ */
+export function runEventsEndpoint(
+  projectId: string,
+  taskId: string,
+  runId: string,
+  afterSequence: number,
+): string {
+  return `/api/projects/${projectId}/tasks/${taskId}/runs/${runId}/events?afterSequence=${String(afterSequence)}`;
+}
+
+/** URL de la page d'une execution, avec la confirmation d'annulation ouverte. */
+export function runCancelUrl(projectId: string, taskId: string, runId: string): string {
+  return `${runUrl(projectId, taskId, runId)}?confirmCancel=1`;
+}
+
+/** Heure courte d'un evenement : `01:28:03`. */
+export function formatEventTime(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) {
+    return "--:--:--";
+  }
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
 }
 
 /** Duree lisible, a partir d'une valeur en millisecondes. */

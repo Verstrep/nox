@@ -26,10 +26,12 @@
  */
 
 import {
+  CLAUDE_RUN_EVENT_KIND,
   RUN_STATUS,
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_PRIORITY,
   TASK_STATUS,
+  type ClaudeRunEventKind,
   type RunStatus,
   type TaskDocumentSyncStatus,
   type TaskPriority,
@@ -54,13 +56,40 @@ const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   [TASK_STATUS.COMPLETED]: "Done",
 };
 
+/**
+ * Statuts d'execution.
+ *
+ * `Cancelling` porte des points de suspension : c'est le seul statut de la liste
+ * qui decrive une action en cours plutot qu'un etat atteint, et les trois points
+ * disent au premier coup d'oeil qu'il faut attendre.
+ */
 const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   [RUN_STATUS.QUEUED]: "Queued",
   [RUN_STATUS.RUNNING]: "Running",
+  [RUN_STATUS.CANCELLING]: "Cancelling…",
   [RUN_STATUS.BLOCKED]: "Blocked",
   [RUN_STATUS.FAILED]: "Failed",
   [RUN_STATUS.CANCELLED]: "Cancelled",
   [RUN_STATUS.COMPLETED]: "Completed",
+};
+
+/**
+ * Nature d'un evenement de la timeline.
+ *
+ * Ces libelles ne remplacent pas le `label` de l'evenement — qui dit ce qui
+ * s'est passe — mais le classent. Ils sont lus par les lecteurs d'ecran, ou la
+ * couleur ne dit rien.
+ */
+const RUN_EVENT_KIND_LABELS: Record<ClaudeRunEventKind, string> = {
+  [CLAUDE_RUN_EVENT_KIND.STATUS]: "Status",
+  [CLAUDE_RUN_EVENT_KIND.ASSISTANT_MESSAGE]: "Message",
+  [CLAUDE_RUN_EVENT_KIND.TOOL_STARTED]: "Tool",
+  [CLAUDE_RUN_EVENT_KIND.TOOL_COMPLETED]: "Tool",
+  [CLAUDE_RUN_EVENT_KIND.VALIDATION]: "Validation",
+  [CLAUDE_RUN_EVENT_KIND.WARNING]: "Warning",
+  [CLAUDE_RUN_EVENT_KIND.ERROR]: "Error",
+  [CLAUDE_RUN_EVENT_KIND.RESULT]: "Result",
+  [CLAUDE_RUN_EVENT_KIND.TRUNCATED]: "Truncated",
 };
 
 const DOCUMENT_SYNC_LABELS: Record<TaskDocumentSyncStatus, string> = {
@@ -131,6 +160,10 @@ export function taskStatusLabel(status: TaskStatus): string {
 
 export function runStatusLabel(status: RunStatus): string {
   return RUN_STATUS_LABELS[status];
+}
+
+export function runEventKindLabel(kind: ClaudeRunEventKind): string {
+  return RUN_EVENT_KIND_LABELS[kind];
 }
 
 export function documentSyncStatusLabel(status: TaskDocumentSyncStatus): string {

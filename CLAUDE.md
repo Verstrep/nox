@@ -222,6 +222,36 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   l'état laissé sur le disque, il ne le restaure pas.
 - **Un résultat de Claude Code ne vaut pas validation humaine.** Une exécution réussie fait
   passer la tâche en `REVIEW`, jamais directement en `COMPLETED`.
+- **Aucun événement brut de Claude Code n'atteint le navigateur.** Ni tel quel, ni résumé, ni
+  « juste pour déboguer ». Ce qui circule est un `ClaudeRunEvent` dont le runner décide chaque
+  champ ; le type est fermé, et n'a aucun champ libre.
+- **Le raisonnement interne du modèle n'est jamais exposé ni persisté.** `thinking`,
+  `redacted_thinking`, `reasoning`, `analysis` et tout bloc portant une `signature` sont ignorés
+  avant d'être lus : ni stockés, ni journalisés, ni résumés, ni comptés comme message visible. La
+  liste des blocs affichables est **fermée**, jamais une liste d'exclusions.
+- **Toute chaîne publique passe par la sanitation centralisée.** Pas « toute chaîne suspecte » :
+  toutes. Chemins du repository rendus relatifs, chemins extérieurs masqués, variables `NOX_*`
+  retirées — valeur et nom —, caractères de contrôle supprimés, taille bornée.
+- **Une commande n'est affichée que si elle est exactement autorisée.** Correspondance stricte
+  avec une commande de validation enregistrée ou une commande Git en lecture seule ; sinon
+  « Running an allowed command ». Un `tool_result` n'est jamais transmis : seule son issue l'est.
+- **Les événements sont bornés, et la troncature est explicite.** Les bornes sont des constantes,
+  jamais des variables d'environnement : une limite de sécurité qu'on peut desserrer n'en est plus
+  une. Après troncature, le runner **continue de lire `stdout`** — cesser de lire figerait Claude
+  Code au milieu de son travail.
+- **Aucun numéro d'événement ne vient de Claude Code.** `sequence` et `occurredAt` sont produits
+  par le runner. La reprise se fait par curseur, jamais par décalage.
+- **Une annulation ne restaure jamais Git.** Ni `reset`, ni `restore`, ni suppression de fichier.
+  L'état est constaté, jamais réparé — y compris après un arrêt demandé.
+- **Aucun identifiant de processus ne vient du navigateur.** Le corps d'une annulation ne porte
+  qu'un `runId`. Aucun PID, aucun signal, aucun délai, aucune option de forçage. L'arrêt de l'arbre
+  a une **seule** implémentation, celle du délai maximal.
+- **Le premier état final validement enregistré gagne.** `CANCELLING` n'en est pas un. Un run
+  `COMPLETED` ne devient jamais `CANCELLED`, ni l'inverse. Une violation Git prime sur tout.
+- **Un run annulé bloque la tâche jusqu'à review humaine.** `CANCELLED` mène à `BLOCKED`, jamais à
+  `READY` : l'utilisateur doit regarder le repository avant de relancer.
+- **Les tests automatisés utilisent uniquement le faux Claude.** Aucun ne consomme de quota, ne
+  dépend du réseau, ni ne lance le vrai binaire.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
   documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code

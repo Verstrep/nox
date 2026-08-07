@@ -120,6 +120,13 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   // qui n'est temporairement plus disponible pour cet utilisateur.
   [RUNNER_ERROR.CLAUDE_LIMIT_REACHED]: 503,
 
+  // `409` : la demande est bien formee, mais l'etat de l'execution la rend sans
+  // objet. Ni une erreur de l'appelant (`400`), ni une panne (`500`).
+  [RUNNER_ERROR.CLAUDE_RUN_ALREADY_FINISHED]: 409,
+  [RUNNER_ERROR.CLAUDE_RUN_CANCELLING]: 409,
+  // `500` : l'arret a echoue cote runner, et le processus peut encore vivre.
+  [RUNNER_ERROR.CLAUDE_CANCEL_FAILED]: 500,
+
   [RUNNER_ERROR.INTERNAL_ERROR]: 500,
 };
 

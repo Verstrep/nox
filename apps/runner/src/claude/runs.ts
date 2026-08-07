@@ -24,11 +24,13 @@
  */
 
 import {
+  CLAUDE_RUN_EVENT_KIND,
   RUNNER_ERROR,
   RUN_STATUS,
   buildClaudeToolPolicy,
   isRunnerRunId,
   RUN_LIMITS,
+  type RunStatus,
   type RunnerErrorCode,
 } from "@nox/shared";
 
@@ -39,6 +41,7 @@ import { launchClaude, type ClaudeLauncher, type LaunchOutcome } from "./launche
 import { detectUsageLimit, parseClaudeOutput } from "./output.ts";
 import { runPreflight, type PreflightOptions } from "./preflight.ts";
 import type { ClaudeRunRegistry } from "./registry.ts";
+import { ClaudeStreamCollector } from "./stream/collector.ts";
 
 export type StartRunRequest = {
   runId: string;
@@ -147,6 +150,37 @@ export async function startClaudeRun(
   });
   registry.start(request.runId, startedAt);
 
+  // Le contexte reste interne au runner : il sert a finaliser une execution
+  // dont le processus refuserait de mourir, et un chemin absolu n'a rien a faire
+  // dans une reponse HTTP.
+  registry.attachContext(request.runId, {
+    repositoryRoot: repository.root,
+    headBefore: preflight.git.head,
+  });
+
+  // Un premier evenement immediat : sans lui, la timeline resterait vide
+  // pendant les quelques secondes que Claude Code met a demarrer, et un
+  // lancement qui echouerait tout de suite ne laisserait aucune trace.
+  registry.appendEvents(request.runId, [
+    {
+      kind: CLAUDE_RUN_EVENT_KIND.STATUS,
+      label: "Started",
+      detail: null,
+      toolName: null,
+      isError: false,
+    },
+  ]);
+
+  // Le collecteur est cree avec la racine reelle du repository : c'est elle qui
+  // permet de rendre les chemins relatifs plutot que de simplement les masquer.
+  const collector = new ClaudeStreamCollector({
+    repositoryRoot: repository.root,
+    allowedCommands: policy.policy.authorizedCommands,
+    onEvents: (events) => {
+      registry.appendEvents(request.runId, events);
+    },
+  });
+
   const launch = options.launch ?? launchClaude;
   const handle = launch({
     repositoryRoot: repository.root,
@@ -154,22 +188,66 @@ export async function startClaudeRun(
     allowedTools: policy.policy.allowed,
     disallowedTools: policy.policy.disallowed,
     claude,
+    onChunk: (chunk) => {
+      collector.push(chunk);
+    },
   });
 
   registry.attachKill(request.runId, handle.kill);
 
   // L'attente se poursuit en arriere-plan : la requete HTTP, elle, repond tout
   // de suite. `void` est explicite — rien n'attend cette promesse.
-  void finishRun(request, repository.root, registry, handle.completed, preflight.git.head, options);
+  void finishRun(
+    request,
+    repository.root,
+    registry,
+    handle.completed,
+    preflight.git.head,
+    collector,
+    options,
+  );
 
   return { ok: true, startedAt };
 }
+
+/** Libelle de l'evenement final, par statut. */
+const FINAL_EVENT_LABELS: Record<RunStatus, string> = {
+  [RUN_STATUS.QUEUED]: "Queued",
+  [RUN_STATUS.RUNNING]: "Running",
+  [RUN_STATUS.CANCELLING]: "Cancelling",
+  [RUN_STATUS.BLOCKED]: "Blocked",
+  [RUN_STATUS.FAILED]: "Failed",
+  [RUN_STATUS.CANCELLED]: "Cancelled",
+  [RUN_STATUS.COMPLETED]: "Completed",
+};
 
 /**
  * Conclut une execution : analyse, capture Git, statut final.
  *
  * Ne leve jamais : une exception ici laisserait une execution eternellement
  * active, et le web attendrait un resultat qui n'arriverait pas.
+ *
+ * ## L'ordre des diagnostics n'est pas arbitraire
+ *
+ * 1. **Le processus n'a pas demarre** : rien d'autre n'a de sens.
+ * 2. **Le delai maximal** : NOX a tue le processus, il sait pourquoi.
+ * 3. **Une limite d'utilisation** : appelle une action tres differente — attendre.
+ * 4. **Une violation Git** : prime sur tout le reste, y compris sur une
+ *    annulation demandee. Un commit interdit reste un commit interdit, et c'est
+ *    ce qu'il faut regarder en premier.
+ * 5. **Une annulation demandee** : mais seulement si l'execution n'a pas eu le
+ *    temps de reussir proprement. Voir ci-dessous.
+ * 6. Sortie illisible, code de retour, puis reussite.
+ *
+ * ## La course entre la fin et l'annulation
+ *
+ * Un clic sur « Cancel run » et une terminaison naturelle peuvent arriver dans
+ * la meme milliseconde. La regle est simple : **le premier etat final
+ * validement enregistre gagne**, et `CANCELLING` n'est pas un etat final. Si le
+ * processus a rendu un resultat complet, un code de sortie nul et aucune erreur,
+ * alors il a fini son travail — l'annulation est arrivee trop tard, et le run
+ * est `COMPLETED`. Dans tous les autres cas, l'annulation a bien interrompu
+ * quelque chose, et le run est `CANCELLED`.
  */
 async function finishRun(
   request: StartRunRequest,
@@ -177,13 +255,19 @@ async function finishRun(
   registry: ClaudeRunRegistry,
   completed: Promise<LaunchOutcome>,
   headBefore: string,
+  collector: ClaudeStreamCollector,
   options: GitStateOptions,
 ): Promise<void> {
   try {
     const outcome = await completed;
 
-    // L'etat Git est capture dans tous les cas, y compris apres un echec : c'est
-    // souvent la seule facon de savoir ce que l'execution a laisse derriere elle.
+    // La derniere ligne du flux n'a pas de retour a la ligne : sans ce `end`,
+    // c'est le resultat final lui-meme qui serait perdu.
+    collector.end();
+
+    // L'etat Git est capture dans tous les cas, y compris apres un echec ou une
+    // annulation : c'est souvent la seule facon de savoir ce que l'execution a
+    // laisse derriere elle. NOX constate, et ne restaure rien.
     const changes = await readGitChanges(repositoryRoot, options);
 
     const gitUpdate = {
@@ -197,8 +281,24 @@ async function finishRun(
       },
     };
 
+    const conclude = (status: RunStatus, update: Parameters<typeof registry.finish>[2]): void => {
+      registry.finish(request.runId, status, update);
+      // L'evenement final est ajoute apres la finalisation : le statut affiche
+      // et le dernier evenement de la timeline disent alors la meme chose.
+      // C'est un `STATUS`, donc il survit a une troncature.
+      registry.appendEvents(request.runId, [
+        {
+          kind: CLAUDE_RUN_EVENT_KIND.STATUS,
+          label: FINAL_EVENT_LABELS[status],
+          detail: null,
+          toolName: null,
+          isError: status === RUN_STATUS.FAILED,
+        },
+      ]);
+    };
+
     if (outcome.spawnError !== null) {
-      registry.finish(request.runId, RUN_STATUS.FAILED, {
+      conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         errorCode: RUNNER_ERROR.CLAUDE_START_FAILED,
         stderrTail: outcome.stderrTail,
@@ -208,7 +308,7 @@ async function finishRun(
     }
 
     if (outcome.timedOut) {
-      registry.finish(request.runId, RUN_STATUS.BLOCKED, {
+      conclude(RUN_STATUS.BLOCKED, {
         ...gitUpdate,
         errorCode: RUNNER_ERROR.CLAUDE_TIMEOUT,
         stderrTail: outcome.stderrTail,
@@ -217,7 +317,10 @@ async function finishRun(
       return;
     }
 
-    const parsed = parseClaudeOutput(outcome.stdout);
+    // Le resultat final vient de la ligne `result` mise de cote par le
+    // collecteur, relue par le parser de TASK-008 — inchange. La sortie
+    // accumulee reste le repli des tests qui n'utilisent pas le streaming.
+    const parsed = parseClaudeOutput(collector.finalResultLine ?? outcome.stdout);
     const report = parsed.ok ? parsed.result : null;
 
     const claudeFields = {
@@ -234,7 +337,7 @@ async function finishRun(
     // La limite d'utilisation est cherchee avant tout autre diagnostic : elle
     // appelle une action tres differente — attendre, plutot que corriger.
     if (detectUsageLimit({ parsed: report, stderrTail: outcome.stderrTail, exitCode: outcome.exitCode })) {
-      registry.finish(request.runId, RUN_STATUS.BLOCKED, {
+      conclude(RUN_STATUS.BLOCKED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_LIMIT_REACHED,
@@ -250,8 +353,11 @@ async function finishRun(
         registry.snapshot(request.runId)?.git.branch !== null &&
         changes.branch !== registry.snapshot(request.runId)?.git.branch);
 
+    // Une violation Git reste prioritaire, y compris apres une annulation :
+    // l'utilisateur doit apprendre d'abord qu'un commit interdit existe, et
+    // ensuite seulement que le processus a ete interrompu.
     if (violated) {
-      registry.finish(request.runId, RUN_STATUS.FAILED, {
+      conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.GIT_POLICY_VIOLATION,
@@ -259,8 +365,24 @@ async function finishRun(
       return;
     }
 
+    // Un processus tue rend presque toujours une sortie incomplete et un code
+    // non nul. Les diagnostics suivants n'ont donc de sens que si personne n'a
+    // demande l'arret — sans quoi NOX signalerait « sortie illisible » pour une
+    // interruption parfaitement volontaire.
+    const cleanSuccess = parsed.ok && outcome.exitCode === 0 && report?.isError !== true;
+    if (registry.isCancellationRequested(request.runId) && !cleanSuccess) {
+      conclude(RUN_STATUS.CANCELLED, {
+        ...gitUpdate,
+        ...claudeFields,
+        // Aucun code d'erreur : une annulation demandee et obtenue n'est pas un
+        // incident. Ce qu'il faut regarder, c'est l'etat du repository.
+        errorCode: null,
+      });
+      return;
+    }
+
     if (!parsed.ok) {
-      registry.finish(request.runId, RUN_STATUS.FAILED, {
+      conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_OUTPUT_INVALID,
@@ -269,7 +391,7 @@ async function finishRun(
     }
 
     if (outcome.exitCode !== 0 || report?.isError === true) {
-      registry.finish(request.runId, RUN_STATUS.FAILED, {
+      conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_PROCESS_FAILED,
@@ -277,7 +399,7 @@ async function finishRun(
       return;
     }
 
-    registry.finish(request.runId, RUN_STATUS.COMPLETED, {
+    conclude(RUN_STATUS.COMPLETED, {
       ...gitUpdate,
       ...claudeFields,
       errorCode: null,

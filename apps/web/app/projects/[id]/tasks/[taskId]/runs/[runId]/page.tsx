@@ -1,4 +1,4 @@
-import { isFinalRunStatus, type DevelopmentRunDetail } from "@nox/shared";
+import { RUN_STATUS, isFinalRunStatus, type DevelopmentRunDetail } from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -7,17 +7,23 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { formatIsoDateTime } from "@/lib/format";
 import { runStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
+import { CANCELLED_NOTICE } from "@/lib/run-cancel";
 import {
   formatDuration,
   formatReportedCost,
+  runEventsEndpoint,
   runStatusEndpoint,
   runStatusTone,
+  runUrl,
   shortSha,
 } from "@/lib/run-display";
+import { catchUpRunEvents, loadPersistedRunEvents } from "@/lib/run-events";
 import { loadRun, reconcileRun } from "@/lib/runs";
 import { loadTask } from "@/lib/tasks";
 
+import { CancelRunForm } from "./CancelRunForm";
 import { RunPoller } from "./RunPoller";
+import { RunTimeline } from "./RunTimeline";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -100,10 +106,13 @@ function GitSection({ run }: { run: DevelopmentRunDetail }) {
 
 export default async function RunPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string; taskId: string; runId: string }>;
+  searchParams: Promise<{ confirmCancel?: string }>;
 }) {
   const { id, taskId, runId } = await params;
+  const { confirmCancel } = await searchParams;
   const project = await loadProject(id);
 
   if (project === null) {
@@ -124,6 +133,19 @@ export default async function RunPage({
   // navigateur suffit a recuperer un resultat produit entre-temps.
   const run = await reconcileRun(stored);
   const active = !isFinalRunStatus(run.status);
+
+  // Rattrapage avant l'affichage : tout ce que le runner sait et que la base
+  // ignore est recupere maintenant. C'est ce qui rend la fermeture d'onglet sans
+  // consequence — les evenements produits pendant l'absence sont retrouves a la
+  // reouverture, y compris pour une execution deja terminee.
+  await catchUpRunEvents(run.id, run.runnerRunId);
+
+  // Les evenements persistes sont ensuite rendus cote serveur : la timeline est
+  // complete des le premier octet de HTML, y compris sans JavaScript et y
+  // compris pour une execution terminee depuis longtemps.
+  const events = await loadPersistedRunEvents(run.id);
+  const lastSequence = events.at(-1)?.sequence ?? 0;
+  const page = runUrl(project.id, task.id, run.id);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -166,6 +188,42 @@ export default async function RunPage({
             )}
           </div>
         )}
+
+        {run.status === RUN_STATUS.CANCELLED ? (
+          <div
+            role="alert"
+            className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-200"
+          >
+            <p>{CANCELLED_NOTICE}</p>
+            <p className="mt-2 text-amber-200/80">
+              NOX n&apos;a execute ni <code className="font-mono">git reset</code>, ni{" "}
+              <code className="font-mono">git restore</code>, et n&apos;a supprime aucun fichier.
+            </p>
+          </div>
+        ) : null}
+
+        <RunTimeline
+          endpoint={runEventsEndpoint(project.id, task.id, run.id, lastSequence)}
+          initialEvents={events}
+          active={active}
+        />
+
+        {active ? (
+          <SectionCard
+            title="Interrompre l'execution"
+            description="Arrete Claude Code et ses processus descendants. NOX ne restaure rien."
+          >
+            <CancelRunForm
+              projectId={project.id}
+              taskId={task.id}
+              runId={run.id}
+              status={run.status}
+              confirming={confirmCancel === "1"}
+              confirmHref={`${page}?confirmCancel=1`}
+              cancelHref={page}
+            />
+          </SectionCard>
+        ) : null}
 
         <SectionCard title="Execution">
           <dl className="grid gap-4 sm:grid-cols-2">

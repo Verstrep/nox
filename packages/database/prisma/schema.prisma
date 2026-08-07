@@ -150,6 +150,20 @@ model Run {
 
   startedAt  DateTime?
   finishedAt DateTime?
+
+  /// Date a laquelle un humain a demande l'arret de cette execution.
+  ///
+  /// Le seul des trois champs proposes par TASK-010 qui ait ete retenu. Il
+  /// enregistre un fait qu'aucune autre colonne ne porte : quelqu'un a decide
+  /// d'interrompre, et cette decision doit survivre a un redemarrage du runner.
+  ///
+  /// `cancelledAt` n'existe pas : `finishedAt` avec `status = CANCELLED` dit
+  /// exactement la meme chose. `lastEventSequence` non plus : il se derive du
+  /// `MAX(sequence)` des `RunEvent`, et un compteur denormalise finirait par
+  /// diverger des lignes qu'il pretend compter — l'inverse de l'idempotence
+  /// recherchee.
+  cancellationRequestedAt DateTime?
+
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
@@ -164,8 +178,61 @@ model Run {
   /// contrainte tient meme si quelqu'un l'ignore et appelle Prisma directement.
   task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
 
+  events RunEvent[]
+
   @@unique([taskId, sequence])
   @@index([taskId, status])
+}
+
+/// Un evenement public d'une execution, tel qu'il a ete affiche.
+///
+/// ## Ce qui est stocke ici a deja ete nettoye
+///
+/// Les lignes brutes de Claude Code n'atteignent jamais cette table. Ce qui y
+/// arrive a traverse le normaliseur puis le nettoyeur du runner : chemins rendus
+/// relatifs, secrets retires, raisonnement interne ecarte, tailles bornees. La
+/// base n'est pas une seconde barriere de securite — elle est *derriere* la
+/// barriere, et c'est pour cela qu'aucune sanitation n'est refaite a la lecture.
+///
+/// ## Pourquoi persister ce que le registre possede deja
+///
+/// Le registre du runner est en memoire : un redemarrage l'efface. Sans cette
+/// table, rouvrir la page d'une execution passee n'afficherait plus rien de ce
+/// qui s'est passe pendant qu'elle tournait. Les evenements sont la mémoire
+/// longue ; le registre n'est que la fenetre du direct.
+///
+/// `runId + sequence` est unique : c'est ce couple qui rend la persistance
+/// idempotente. Le flux SSE peut renvoyer deux fois le meme evenement — deux
+/// onglets, une reconnexion — sans jamais creer de doublon.
+model RunEvent {
+  id    String @id @default(cuid())
+  runId String
+
+  /// Numero attribue par le runner, strictement croissant dans l'execution.
+  sequence Int
+
+  /// Valeur de `ClaudeRunEventKind`, stockee en chaine comme les autres enums.
+  kind String
+
+  label   String
+  detail  String?
+  toolName String?
+  isError Boolean @default(false)
+
+  /// Date produite par le runner, jamais reprise de Claude Code.
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  /// `Cascade`, contrairement a la relation `Run` → `Task`.
+  ///
+  /// Un evenement n'a aucun sens sans son execution : il ne raconte rien tout
+  /// seul, et rien ne le referencera jamais. La regle qui protege l'historique
+  /// porte sur les executions elles-memes — et la suppression d'une execution
+  /// n'existe nulle part dans NOX.
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sequence])
+  @@index([runId, sequence])
 }
 
 /// Un critere d'acceptation, a la position ou l'utilisateur l'a saisi.

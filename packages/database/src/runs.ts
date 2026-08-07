@@ -15,6 +15,7 @@
  */
 
 import {
+  ACTIVE_RUN_STATUSES,
   RUN_LIMITS,
   RUN_STATUS,
   TASK_STATUS,
@@ -70,6 +71,7 @@ export type RunOutcomeInput = {
   durationApiMs?: number | null;
   numTurns?: number | null;
   reportedCostUsd?: number | null;
+  cancellationRequestedAt?: Date | null;
   git?: RunGitInput;
 };
 
@@ -114,6 +116,7 @@ type DetailRow = SummaryRow & {
   gitHeadAfter: string | null;
   gitDiffStat: string | null;
   changedFiles: string | null;
+  cancellationRequestedAt: Date | null;
   updatedAt: Date;
 };
 
@@ -186,6 +189,8 @@ function toDetail(row: DetailRow): DevelopmentRunDetail {
     errorCode: row.errorCode,
     errorMessage: row.errorMessage,
     stderrTail: row.stderrTail,
+    cancellationRequestedAt:
+      row.cancellationRequestedAt === null ? null : row.cancellationRequestedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -210,6 +215,9 @@ function toColumns(outcome: RunOutcomeInput): Record<string, unknown> {
     columns["reportedCostUsd"] = outcome.reportedCostUsd;
   }
   if (outcome.errorCode !== undefined) columns["errorCode"] = outcome.errorCode;
+  if (outcome.cancellationRequestedAt !== undefined) {
+    columns["cancellationRequestedAt"] = outcome.cancellationRequestedAt;
+  }
 
   if (outcome.errorMessage !== undefined) {
     columns["errorMessage"] =
@@ -428,6 +436,44 @@ export function blockRun(
 }
 
 /**
+ * Enregistre qu'un arret a ete demande.
+ *
+ * N'est **pas** une finalisation : le processus vit encore, et la tache reste
+ * `RUNNING`. Ce que cette fonction ecrit, c'est le fait qu'un humain a decide
+ * d'interrompre — un fait que rien d'autre ne porte, et qui doit survivre a un
+ * redemarrage du runner.
+ *
+ * Sans effet sur une execution deja terminee : une annulation arrivee trop tard
+ * ne doit pas rouvrir ce qui est clos, ni reecrire le statut qui l'a conclue.
+ */
+export async function markRunCancelling(
+  db: DatabaseClient,
+  runId: string,
+  requestedAt: Date,
+): Promise<DevelopmentRunDetail | null> {
+  return db.$transaction(async (tx) => {
+    const current = await tx.run.findUnique({ where: { id: runId } });
+    if (current === null) {
+      return null;
+    }
+    if (isFinalRunStatus(readStatus(current))) {
+      return toDetail(current);
+    }
+
+    const row = await tx.run.update({
+      where: { id: runId },
+      data: {
+        status: RUN_STATUS.CANCELLING,
+        // La premiere demande fait foi : un second clic ne redate pas la
+        // decision, il la repete.
+        cancellationRequestedAt: current.cancellationRequestedAt ?? requestedAt,
+      },
+    });
+    return toDetail(row);
+  });
+}
+
+/**
  * Etat rapporte par le runner, deja traduit en vocabulaire metier.
  *
  * Le web ne transmet pas la reponse HTTP brute : il en extrait ce qui a du sens
@@ -457,6 +503,10 @@ export function updateRunFromRunner(
     return markRunRunning(db, runId, outcome.startedAt ?? new Date(), outcome.git ?? {});
   }
 
+  if (status === RUN_STATUS.CANCELLING) {
+    return markRunCancelling(db, runId, outcome.cancellationRequestedAt ?? new Date());
+  }
+
   // `QUEUED` : le runner a accepte l'execution mais le processus n'a pas encore
   // demarre. Rien a ecrire — la ligne est deja dans cet etat.
   return getRunById(db, runId);
@@ -471,7 +521,9 @@ export function updateRunFromRunner(
  */
 export async function hasActiveRun(db: DatabaseClient, taskId: string): Promise<boolean> {
   const active = await db.run.findFirst({
-    where: { taskId, status: { in: [RUN_STATUS.QUEUED, RUN_STATUS.RUNNING] } },
+    // `CANCELLING` compte comme actif : le processus n'est pas mort, et rien ne
+    // doit pouvoir en lancer un second pendant qu'il ferme.
+    where: { taskId, status: { in: [...ACTIVE_RUN_STATUSES] } },
     select: { id: true },
   });
   return active !== null;
