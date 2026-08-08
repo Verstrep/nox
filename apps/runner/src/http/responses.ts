@@ -127,6 +127,13 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   // `500` : l'arret a echoue cote runner, et le processus peut encore vivre.
   [RUNNER_ERROR.CLAUDE_CANCEL_FAILED]: 500,
 
+  // `409` : la demande est valide, mais l'execution n'est pas encore dans l'etat
+  // qui permet d'y repondre. Elle le sera, sans que l'appelant ait rien a
+  // corriger.
+  [RUNNER_ERROR.CLAUDE_REVIEW_NOT_READY]: 409,
+  // `500` : la capture a bien ete tentee et a echoue cote runner.
+  [RUNNER_ERROR.CLAUDE_REVIEW_FAILED]: 500,
+
   [RUNNER_ERROR.INTERNAL_ERROR]: 500,
 };
 

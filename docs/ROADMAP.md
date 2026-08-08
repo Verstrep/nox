@@ -322,25 +322,87 @@ repository, diff complet, orchestration OpenAI, suppression ou archivage de run.
 
 ---
 
-## 🟢 11. Review Git intégrée et validations structurées — `TASK-011`
-
-**Étape active.**
+## ✅ 11. Review Git intégrée et validations structurées — `TASK-011`
 
 **Objectif** : afficher le diff détaillé d'un run, structurer les résultats des validations et
 aider à accepter ou rejeter le travail — sans jamais créer de commit automatiquement.
 
 - ~~`git status`, liste des fichiers modifiés~~ — fait à l'étape 8.
 - ~~Événements de validation dans la timeline~~ — fait à l'étape 10, à l'état près.
-- Diff complet consultable dans l'interface.
-- Résultat des commandes de validation, extrait de manière fiable.
-- Distinction explicite entre échec et commande non lancée.
+- Instantané de review capturé **à la fin** de l'exécution, jamais recalculé ensuite
+  ([D-145](DECISIONS.md#d-145--le-snapshot-de-review-est-pris-à-la-fin-de-lexécution),
+  [D-146](DECISIONS.md#d-146--le-point-de-comparaison-est-githeadbefore-pas-head)).
+- Un `RunFileChange` par fichier, fichiers non suivis compris, sans jamais `git add`
+  ([D-147](DECISIONS.md#d-147--un-stockage-par-fichier-jamais-un-diff-global),
+  [D-148](DECISIONS.md#d-148--les-fichiers-non-suivis-appartiennent-à-la-review)).
+- Bornes constantes, troncature explicite, exécution jamais requalifiée en échec
+  ([D-149](DECISIONS.md#d-149--les-bornes-du-diff-sont-des-constantes)).
+- Fichiers sensibles sans contenu, binaires sans blob, patches nettoyés de leurs secrets mais pas
+  de leurs chemins ([D-150](DECISIONS.md#d-150--un-fichier-sensible-montre-son-existence-jamais-son-contenu),
+  [D-151](DECISIONS.md#d-151--un-patch-est-nettoyé-de-ses-secrets-pas-de-ses-chemins),
+  [D-152](DECISIONS.md#d-152--un-blob-binaire-nentre-jamais-en-base)).
+- Aucune review reconstruite pour une exécution ancienne
+  ([D-153](DECISIONS.md#d-153--les-anciens-runs-ne-reçoivent-aucune-review-reconstruite)).
+- Commandes de validation recopiées au lancement, corrélées par `tool_use_id`, sans code de sortie
+  déduit ni sortie analysée
+  ([D-154](DECISIONS.md#d-154--les-commandes-de-validation-sont-recopiées-au-lancement),
+  [D-155](DECISIONS.md#d-155--la-corrélation-passe-par-tool_use_id-et-seulement-pour-une-commande-exacte),
+  [D-156](DECISIONS.md#d-156--aucun-code-de-sortie-nest-déduit-aucune-sortie-nest-analysée)).
+- Aucune commande relancée par NOX
+  ([D-158](DECISIONS.md#d-158--aucune-commande-nest-relancée-par-nox)).
+- Patch rendu comme du texte, fichier sélectionné parmi les lignes enregistrées
+  ([D-159](DECISIONS.md#d-159--un-patch-est-du-texte-et-rien-dautre),
+  [D-160](DECISIONS.md#d-160--le-fichier-affiché-est-choisi-parmi-les-lignes-enregistrées)).
+- Route de review attachée au run, transfert unique vers la base
+  ([D-161](DECISIONS.md#d-161--une-route-de-review-attachée-au-run-pas-un-explorateur-git),
+  [D-162](DECISIONS.md#d-162--le-transfert-vers-la-base-a-lieu-une-fois-et-la-base-fait-foi-ensuite)).
+- `Approve` et `Reopen` sans aucune action Git, indicateurs factuels sans score
+  ([D-163](DECISIONS.md#d-163--approve-et-reopen-ne-touchent-pas-à-git),
+  [D-164](DECISIONS.md#d-164--des-faits-jamais-un-score)).
+- Commande Bash lue par segments, liste de la tâche prioritaire sur la classification générique,
+  issue inconnue plutôt que verdict inventé — correction du premier run réel
+  ([D-165](DECISIONS.md#d-165--une-commande-bash-est-lue-par-segments-jamais-comme-un-bloc),
+  [D-166](DECISIONS.md#d-166--la-liste-de-la-tâche-prime-sur-la-classification-générique),
+  [D-167](DECISIONS.md#d-167--une-issue-inconnue-plutôt-quun-verdict-inventé),
+  [D-168](DECISIONS.md#d-168--le-comportement-observé-fait-autorité)).
 
-**Fin d'étape** : la review d'une tâche se fait entièrement dans NOX, et le commit reste une
-action humaine.
+**Fin d'étape atteinte** : la review d'une exécution se fait entièrement dans NOX — diff par
+fichier, validations structurées, décision humaine — et le commit reste une action humaine.
+Vérifié par un test fonctionnel avec un faux Claude Code, voir
+[PROJECT_STATE.md](PROJECT_STATE.md).
+
+> **Levée de réserve.** Le premier run réel a eu lieu, et il a révélé un défaut : Claude Code
+> préfixe ses commandes Bash de `cd "<répertoire>" &&`, si bien qu'une validation pourtant exécutée
+> restait « Not run ». La corrélation par `tool_use_id`, elle, fonctionnait. La correction et la
+> forme réellement observée sont consignées en
+> [D-165](DECISIONS.md#d-165--une-commande-bash-est-lue-par-segments-jamais-comme-un-bloc) à
+> [D-168](DECISIONS.md#d-168--le-comportement-observé-fait-autorité). Le comportement observé fait
+> désormais autorité sur le format documenté.
+
+Hors périmètre volontaire : commit, push et `git add` automatiques, génération d'un message de
+commit, `reset`, `restore`, `checkout`, nettoyage, modification d'un fichier depuis le diff,
+commentaires inline, review par IA, relance automatique d'une exécution, reprise de session,
+orchestration OpenAI, fusion de branches, pull request, plusieurs agents.
 
 ---
 
-## ⬜ 12. Orchestrateur OpenAI
+## 🟢 12. Feedback de review et reprise ciblée d'une session Claude — `TASK-012`
+
+**Étape active.**
+
+**Objectif** : permettre de rejeter une review avec un commentaire, puis reprendre la session
+Claude associée pour appliquer un correctif ciblé — sans orchestration OpenAI automatique.
+
+- Commentaire attaché à une review rejetée.
+- Reprise de la session Claude d'une exécution, à la demande explicite de l'utilisateur.
+- Correctif ciblé plutôt que relance depuis zéro.
+- Commit et push restent hors périmètre, comme depuis le début.
+
+**Fin d'étape** : un aller-retour de correction se fait dans NOX, sans recopier de contexte.
+
+---
+
+## ⬜ 13. Orchestrateur OpenAI
 
 **Objectif** : discuter du besoin dans NOX.
 
@@ -353,7 +415,7 @@ action humaine.
 
 ---
 
-## ⬜ 13. Test sur un petit projet réel
+## ⬜ 14. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -365,7 +427,7 @@ action humaine.
 
 ---
 
-## ⬜ 14. Fonctionnalités avancées
+## ⬜ 15. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 

@@ -29,17 +29,26 @@
  *
  * Un `tool_result` porte la sortie de l'outil : le fichier lu en entier, la
  * sortie de la commande. On n'en garde que l'issue — reussi, echoue.
+ *
+ * ## Une commande Bash n'arrive jamais nue
+ *
+ * Claude Code 2.1.223 prefixe ses commandes de son repertoire de travail :
+ * `cd "D:/…/depot" && git diff --check`. La lecture de cette ligne vit dans
+ * `bash-command.ts`, avec ses raisons ; ici, on se contente d'en utiliser le
+ * resultat — un texte affichable, et la liste des validations reconnues.
  */
 
 import {
-  CLAUDE_GIT_READ_ONLY_COMMANDS,
   CLAUDE_RUN_EVENT_KIND,
+  REVIEW_LIMITS,
   type ClaudeRunEventDraft,
 } from "@nox/shared";
 
+import { readBashCommand } from "./bash-command.ts";
 import {
   readArray,
   readBoolean,
+  readNumber,
   readRecord,
   readString,
   type ClaudeStreamMessage,
@@ -60,8 +69,57 @@ const MAX_PATTERN_LENGTH = 120;
 /** Ce qu'on retient d'un outil appele, en attendant son resultat. */
 type PendingTool = {
   name: string;
-  /** Vrai lorsque l'appel correspond a une commande de validation autorisee. */
-  isValidation: boolean;
+  /**
+   * Commandes de validation enregistrees reconnues dans cet appel.
+   *
+   * Renseignee uniquement par correspondance **exacte** d'un segment avec une
+   * commande enregistree. Une commande Git en lecture seule est affichable sans
+   * etre une validation : elle ne porte aucun verdict sur le code — sauf si la
+   * tache l'a justement enregistree comme validation, et c'est precisement le
+   * cas que TASK-011 corrective a rendu possible.
+   */
+  validationCommands: readonly string[];
+};
+
+/**
+ * Longueur brute conservee d'une sortie de validation avant nettoyage.
+ *
+ * Quatre fois la borne finale : le nettoyage retire des caracteres, et couper
+ * trop tot priverait le resume de sa fin — la partie qui porte generalement le
+ * verdict.
+ */
+const MAX_RAW_VALIDATION_OUTPUT = REVIEW_LIMITS.validationSummary * 4;
+
+/**
+ * Ce que le flux apprend d'une commande de validation.
+ *
+ * `output` est **brut** : le collecteur le nettoie et le borne avant qu'il
+ * n'aille plus loin. La sanitation vit a un seul endroit, et ce n'est pas ici.
+ */
+export type ValidationObservation =
+  | { kind: "started"; command: string }
+  | {
+      kind: "finished";
+      command: string;
+      outcome: ValidationOutcome;
+      exitCode: number | null;
+      output: string | null;
+    };
+
+/**
+ * Issue d'une commande de validation, telle que le flux permet de la connaitre.
+ *
+ * `unknown` n'est pas un echec : c'est l'aveu que le resultat unique d'un
+ * enchainement `a && b` ne dit pas **laquelle** des deux a echoue. Inventer un
+ * verdict serait pire que de ne pas en donner.
+ */
+export type ValidationOutcome = "passed" | "failed" | "unknown";
+
+/** Libelle de timeline, par issue. */
+const VALIDATION_LABELS: Record<ValidationOutcome, string> = {
+  passed: "Validation succeeded",
+  failed: "Validation failed",
+  unknown: "Validation result unclear",
 };
 
 /**
@@ -77,12 +135,34 @@ export type NormalizerOptions = {
   /**
    * Commandes de validation autorisees pour cette execution.
    *
-   * Une commande Bash n'est affichee que si elle correspond **exactement** a
-   * l'une d'elles, ou a une commande Git en lecture seule. Tout le reste devient
-   * « Running an allowed command » : le prompt peut contenir une valeur, un
-   * chemin ou un secret, et NOX ne cherche pas a distinguer les cas.
+   * Une commande Bash n'est affichee que si **chacun de ses segments**
+   * correspond exactement a l'une d'elles, ou a une commande Git en lecture
+   * seule. Tout le reste devient « Running an allowed command » : le prompt peut
+   * contenir une valeur, un chemin ou un secret, et NOX ne cherche pas a
+   * distinguer les cas.
+   *
+   * Ces memes commandes servent a reconnaitre les validations. Une commande Git
+   * en lecture seule n'est **pas** une validation par nature — mais elle le
+   * devient des lors que la tache l'a enregistree comme telle. La classification
+   * generique ne prime jamais sur la liste de la tache.
    */
   allowedCommands: readonly string[];
+  /**
+   * Recoit ce que le flux apprend des commandes de validation.
+   *
+   * ## Une exception etroite, et assumee
+   *
+   * TASK-010 pose que le contenu d'un `tool_result` n'est jamais transmis : seule
+   * son issue l'est. TASK-011 ouvre **une** breche, aussi etroite que possible :
+   * la sortie d'un `tool_result` peut etre resumee, mais uniquement lorsque son
+   * `tool_use` correspond **mot pour mot** a une commande de validation que
+   * l'utilisateur a lui-meme enregistree. Cette sortie ne devient jamais un
+   * evenement de timeline — elle n'existe que dans la review, ou l'utilisateur
+   * vient precisement chercher « pourquoi le test a echoue ».
+   *
+   * Tout autre `tool_result` reste ce qu'il etait : une issue, et rien de plus.
+   */
+  onValidation?: (observation: ValidationObservation) => void;
 };
 
 /**
@@ -95,9 +175,11 @@ export type NormalizerOptions = {
 export class ClaudeEventNormalizer {
   readonly #pending = new Map<string, PendingTool>();
   readonly #allowedCommands: readonly string[];
+  readonly #onValidation: ((observation: ValidationObservation) => void) | null;
 
   constructor(options: NormalizerOptions) {
     this.#allowedCommands = options.allowedCommands;
+    this.#onValidation = options.onValidation ?? null;
   }
 
   /**
@@ -198,16 +280,22 @@ export class ClaudeEventNormalizer {
     const input = readRecord(block, "input") ?? {};
     const id = readString(block, "id");
 
-    const command = name === "Bash" ? (readString(input, "command") ?? "") : "";
-    const isValidation = name === "Bash" && this.#isDisplayableCommand(command);
+    const reading =
+      name === "Bash"
+        ? readBashCommand(readString(input, "command") ?? "", this.#allowedCommands)
+        : { display: null, validations: [] as readonly string[] };
 
     if (id !== null) {
-      this.#remember(id, { name, isValidation });
+      this.#remember(id, { name, validationCommands: reading.validations });
+    }
+
+    for (const command of reading.validations) {
+      this.#onValidation?.({ kind: "started", command });
     }
 
     return {
       kind: CLAUDE_RUN_EVENT_KIND.TOOL_STARTED,
-      label: describeToolUse(name, input, this.#isDisplayableCommand.bind(this)),
+      label: describeToolUse(name, input, () => reading.display),
       detail: null,
       toolName: name,
       isError: false,
@@ -242,13 +330,35 @@ export class ClaudeEventNormalizer {
 
       // Une validation merite son propre type : c'est le seul evenement de la
       // timeline qui porte un verdict sur le code, et non sur l'agent.
-      if (pending?.isValidation === true) {
+      const validations = pending?.validationCommands ?? [];
+      if (validations.length > 0) {
+        // Avec un chainage `&&`, une reussite prouve que **tous** les segments
+        // ont tourne et reussi. Un echec, lui, ne dit pas lequel a echoue :
+        // quand la ligne portait plusieurs validations, l'issue reste inconnue.
+        const outcome: ValidationOutcome = !failed
+          ? "passed"
+          : validations.length === 1
+            ? "failed"
+            : "unknown";
+
+        for (const command of validations) {
+          this.#onValidation?.({
+            kind: "finished",
+            command,
+            outcome,
+            // Aucun code de sortie n'est deduit du booleen d'erreur : « echoue »
+            // ne veut pas dire « code 1 ». S'il n'est pas rapporte, il reste nul.
+            exitCode: readNumber(block, "exit_code") ?? readNumber(block, "exitCode"),
+            output: readToolResultText(block),
+          });
+        }
+
         drafts.push({
           kind: CLAUDE_RUN_EVENT_KIND.VALIDATION,
-          label: failed ? "Validation failed" : "Validation succeeded",
+          label: VALIDATION_LABELS[outcome],
           detail: null,
           toolName,
-          isError: failed,
+          isError: outcome === "failed",
         });
         continue;
       }
@@ -293,27 +403,56 @@ export class ClaudeEventNormalizer {
     this.#pending.set(id, tool);
   }
 
-  /**
-   * Une commande peut-elle etre affichee telle quelle ?
-   *
-   * Uniquement si elle correspond **exactement** a une commande de validation
-   * enregistree, ou a une commande Git en lecture seule autorisee. La
-   * correspondance est stricte : `npm run test -- --grep secret` n'est pas
-   * `npm run test`, et l'afficher exposerait un argument que personne n'a
-   * valide.
-   */
-  #isDisplayableCommand(command: string): boolean {
-    const trimmed = command.trim();
-    if (trimmed === "") {
-      return false;
-    }
-    if (this.#allowedCommands.includes(trimmed)) {
-      return true;
-    }
-    return CLAUDE_GIT_READ_ONLY_COMMANDS.some(
-      (git) => trimmed === git || trimmed.startsWith(`${git} `),
-    );
+}
+
+/**
+ * Extrait le texte d'un `tool_result`, sans jamais depasser une borne.
+ *
+ * Le champ `content` prend deux formes selon les versions : une chaine, ou une
+ * liste de blocs typés. Les deux sont lues ; tout le reste est ignore. Aucun
+ * bloc autre que `text` n'est regarde — une image ou un contenu inconnu n'a rien
+ * a faire dans un resume de validation.
+ */
+function readToolResultText(block: Record<string, unknown>): string | null {
+  const content: unknown = block["content"];
+
+  if (typeof content === "string") {
+    return bound(content);
   }
+
+  if (!Array.isArray(content)) {
+    return null;
+  }
+
+  const pieces: string[] = [];
+  let length = 0;
+
+  for (const raw of content) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      continue;
+    }
+    const piece = raw as Record<string, unknown>;
+    if (readString(piece, "type") !== "text") {
+      continue;
+    }
+    const text = readString(piece, "text");
+    if (text === null) {
+      continue;
+    }
+    pieces.push(text);
+    length += text.length;
+    if (length >= MAX_RAW_VALIDATION_OUTPUT) {
+      break;
+    }
+  }
+
+  return pieces.length === 0 ? null : bound(pieces.join("\n"));
+}
+
+function bound(value: string): string {
+  return value.length <= MAX_RAW_VALIDATION_OUTPUT
+    ? value
+    : value.slice(0, MAX_RAW_VALIDATION_OUTPUT);
 }
 
 /**
@@ -326,7 +465,7 @@ export class ClaudeEventNormalizer {
 export function describeToolUse(
   name: string,
   input: Record<string, unknown>,
-  isDisplayableCommand: (command: string) => boolean,
+  describeCommand: (command: string) => string | null,
 ): string {
   switch (name) {
     case "Read":
@@ -355,10 +494,12 @@ export function describeToolUse(
     }
 
     case "Bash": {
-      const command = (readString(input, "command") ?? "").trim();
-      // Le seul cas ou une commande est reproduite : elle a ete validee mot pour
-      // mot en amont, donc elle ne peut rien contenir que NOX n'ait deja accepte.
-      return isDisplayableCommand(command) ? `Running ${command}` : "Running an allowed command";
+      // Le seul cas ou une commande est reproduite : chacun de ses segments a
+      // ete valide mot pour mot en amont, donc elle ne peut rien contenir que
+      // NOX n'ait deja accepte. Le prefixe de navigation, lui, a disparu — il
+      // porte un chemin absolu de la machine.
+      const shown = describeCommand(readString(input, "command") ?? "");
+      return shown === null ? "Running an allowed command" : `Running ${shown}`;
     }
 
     default:

@@ -22,6 +22,7 @@ import { redirect } from "next/navigation";
 
 import { runUrl } from "@/lib/run-display";
 import { buildExecutionPrompt } from "@/lib/run-prompt";
+import { snapshotRunValidations } from "@/lib/run-review";
 import { startClaudeRun } from "@/lib/runner/client";
 import { describeRunnerFailure } from "@/lib/runner/errors";
 
@@ -125,6 +126,13 @@ export async function startRunAction(
     if (run === null) {
       return { error: UNKNOWN_TASK_MESSAGE };
     }
+
+    // Les commandes attendues sont recopiees maintenant, avec le prompt : la
+    // review de cette execution doit rester lisible meme si la specification de
+    // la tache change ensuite. Une commande que Claude Code ne lancera jamais
+    // apparaitra « Not run », ce qui est une information — et elle ne le
+    // pourrait pas si la table se remplissait au fil de l'execution.
+    await snapshotRunValidations(run.id, task.validationCommands);
 
     const started = await startClaudeRun({
       runId: runnerRunId,

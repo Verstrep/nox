@@ -2067,3 +2067,169 @@ describe("POST /claude/runs/cancel", () => {
     assert.equal(/[A-Za-z]:\\/.test(response.text), false);
   });
 });
+
+describe("POST /claude/runs/review", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const REVIEW_RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3501";
+  const ACTIVE_RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3502";
+  const FAILED_RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3503";
+
+  /** Termine ce qui tourne encore : le registre n'accepte qu'un run actif. */
+  function idle(except?: string): void {
+    const active = testRegistry.activeRunId();
+    if (active !== null && active !== except) {
+      testRegistry.finish(active, "COMPLETED");
+    }
+  }
+
+  function seedCaptured(): void {
+    idle();
+    if (testRegistry.has(REVIEW_RUN)) {
+      return;
+    }
+    testRegistry.register(REVIEW_RUN);
+    testRegistry.finish(REVIEW_RUN, "COMPLETED");
+    testRegistry.attachReview(REVIEW_RUN, {
+      ok: true,
+      snapshot: {
+        capturedAt: "2026-08-07T12:00:00.000Z",
+        headBefore: "a".repeat(40),
+        unreliable: false,
+        files: [
+          {
+            position: 0,
+            path: "README.md",
+            previousPath: null,
+            changeType: "MODIFIED",
+            additions: 2,
+            deletions: 1,
+            isBinary: false,
+            isSensitive: false,
+            isTruncated: false,
+            patch: "@@ -1 +1 @@\n-avant\n+apres\n",
+          },
+        ],
+        omittedFiles: 0,
+        validations: [
+          {
+            position: 0,
+            command: "npm run test",
+            status: "PASSED",
+            exitCode: 0,
+            summary: "tout passe",
+            startedAt: null,
+            finishedAt: null,
+          },
+        ],
+      },
+    });
+  }
+
+  it("retourne l'instantane capture", async () => {
+    seedCaptured();
+
+    const response = await call("/claude/runs/review", {
+      ...authorized,
+      body: JSON.stringify({ runId: REVIEW_RUN }),
+    });
+
+    assert.equal(response.status, 200);
+    const payload = response.json as {
+      review?: { files?: { path?: string }[]; validations?: unknown[] };
+    };
+    assert.equal(payload.review?.files?.length, 1);
+    assert.equal(payload.review?.files?.[0]?.path, "README.md");
+    assert.equal(payload.review?.validations?.length, 1);
+  });
+
+  it("refuse une execution qui n'a pas encore fini", async () => {
+    idle(ACTIVE_RUN);
+    if (!testRegistry.has(ACTIVE_RUN)) {
+      testRegistry.register(ACTIVE_RUN);
+      testRegistry.start(ACTIVE_RUN, new Date("2026-08-07T10:00:00.000Z"));
+    }
+
+    const response = await call("/claude/runs/review", {
+      ...authorized,
+      body: JSON.stringify({ runId: ACTIVE_RUN }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response.json), "CLAUDE_REVIEW_NOT_READY");
+  });
+
+  it("signale une capture ratee sans pretendre a une review vide", async () => {
+    testRegistry.finish(ACTIVE_RUN, "COMPLETED");
+    idle();
+    if (!testRegistry.has(FAILED_RUN)) {
+      testRegistry.register(FAILED_RUN);
+      testRegistry.finish(FAILED_RUN, "COMPLETED");
+      testRegistry.attachReview(FAILED_RUN, { ok: false, code: "CLAUDE_REVIEW_FAILED" });
+    }
+
+    const response = await call("/claude/runs/review", {
+      ...authorized,
+      body: JSON.stringify({ runId: FAILED_RUN }),
+    });
+
+    assert.equal(response.status, 500);
+    assert.equal(errorCode(response.json), "CLAUDE_REVIEW_FAILED");
+  });
+
+  it("retourne 404 pour une execution inconnue", async () => {
+    const response = await call("/claude/runs/review", {
+      ...authorized,
+      body: JSON.stringify({ runId: "3f2504e0-4f89-41d3-9a0c-999999999996" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response.json), "CLAUDE_RUN_NOT_FOUND");
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/claude/runs/review", {
+      method: "POST",
+      token: null,
+      body: JSON.stringify({ runId: REVIEW_RUN }),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("refuse GET", async () => {
+    const response = await call("/claude/runs/review", { method: "GET", token: `Bearer ${TOKEN}` });
+    assert.equal(response.status, 405);
+  });
+
+  it("ignore tout chemin transmis par l'appelant", async () => {
+    seedCaptured();
+
+    const response = await call("/claude/runs/review", {
+      ...authorized,
+      body: JSON.stringify({
+        runId: REVIEW_RUN,
+        repositoryPath: "D:\\ailleurs",
+        file: "../../etc/passwd",
+        expectedGitHead: "b".repeat(40),
+      }),
+    });
+
+    // Ces champs n'ont aucun chemin de code vers la suite : la route ne lit
+    // qu'un `runId`, et rend un instantane deja capture.
+    assert.equal(response.status, 200);
+    const payload = response.json as { review?: { files?: { path?: string }[] } };
+    assert.equal(payload.review?.files?.[0]?.path, "README.md");
+  });
+
+  it("ne divulgue ni jeton ni chemin absolu", async () => {
+    seedCaptured();
+
+    const response = await call("/claude/runs/review", {
+      ...authorized,
+      body: JSON.stringify({ runId: REVIEW_RUN }),
+    });
+
+    assert.equal(response.text.includes(TOKEN), false);
+    assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+  });
+});

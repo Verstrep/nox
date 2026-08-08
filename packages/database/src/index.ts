@@ -62,6 +62,16 @@ export {
 } from "./run-events.js";
 
 export {
+  InvalidRunReviewRecordError,
+  getRunReview,
+  hasRunReview,
+  markRunReviewFailed,
+  saveRunReview,
+  seedRunValidations,
+  type RunReview,
+} from "./run-review.js";
+
+export {
   DATABASE_URL_ENV_VAR,
   databaseFileExists,
   findRepositoryRoot,

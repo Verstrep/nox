@@ -15,6 +15,7 @@ import {
   isClaudePreflightSuccess,
   isClaudeRunCancelSuccess,
   isClaudeRunEventsSuccess,
+  isClaudeRunReviewSuccess,
   isClaudeRunStatusSuccess,
   isCreateProjectDocumentSuccess,
   isCreateTaskDocumentSuccess,
@@ -33,6 +34,8 @@ import {
   type ClaudeRunCancelSuccess,
   type ClaudeRunEventsRequest,
   type ClaudeRunEventsSuccess,
+  type ClaudeRunReviewRequest,
+  type ClaudeRunReviewSuccess,
   type ClaudeRunSnapshot,
   type ClaudeRunStatusRequest,
   type CreateProjectDocumentRequest,
@@ -47,6 +50,7 @@ import {
   type ProjectDocumentSummary,
   type ReadProjectDocumentRequest,
   type ResolveRepositoryRequest,
+  type RunReviewSnapshot,
   type RunnerHealthResponse,
   type UpdateProjectDocumentRequest,
 } from "@nox/shared";
@@ -519,6 +523,33 @@ export function cancelClaudeRun(
     (value) => (value as ClaudeRunCancelSuccess).run,
     options,
     202,
+  );
+}
+
+/**
+ * Relit l'instantane de review d'une execution terminee.
+ *
+ * Ne declenche aucun calcul : le runner a capture cet instantane au moment ou
+ * l'execution est devenue finale, et se contente de le rendre. Appelee **une
+ * seule fois** par execution, quand la base n'a pas encore de review — ensuite,
+ * c'est SQLite qui fait foi, et le runner n'est plus interroge.
+ *
+ * Le corps ne porte qu'un identifiant d'execution : ni chemin de repository, ni
+ * commit, ni chemin de fichier.
+ */
+export function fetchClaudeRunReview(
+  runId: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<RunReviewSnapshot>> {
+  const payload: ClaudeRunReviewRequest = { runId };
+
+  return postAuthenticated(
+    "/claude/runs/review",
+    "claude/runs/review",
+    payload,
+    isClaudeRunReviewSuccess,
+    (value) => (value as ClaudeRunReviewSuccess).review,
+    options,
   );
 }
 

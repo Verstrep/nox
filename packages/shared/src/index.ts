@@ -132,11 +132,13 @@ export {
   isClaudePreflightSuccess,
   isClaudeRunCancelSuccess,
   isClaudeRunEventsSuccess,
+  isClaudeRunReviewSuccess,
   isClaudeRunStatusSuccess,
   isStartClaudeRunSuccess,
   parseClaudePreflightRequest,
   parseClaudeRunCancelRequest,
   parseClaudeRunEventsRequest,
+  parseClaudeRunReviewRequest,
   parseClaudeRunStatusRequest,
   parseStartClaudeRunRequest,
 } from "./claude.js";
@@ -149,12 +151,41 @@ export type {
   ClaudeRunCancelSuccess,
   ClaudeRunEventsRequest,
   ClaudeRunEventsSuccess,
+  ClaudeRunReviewRequest,
+  ClaudeRunReviewSuccess,
   ClaudeRunSnapshot,
   ClaudeRunStatusRequest,
   ClaudeRunStatusSuccess,
   StartClaudeRunRequest,
   StartClaudeRunSuccess,
 } from "./claude.js";
+
+export {
+  PATCH_TRUNCATION_NOTICE,
+  REVIEW_LIMITS,
+  RUN_CHANGE_TYPE,
+  RUN_CHANGE_TYPES,
+  RUN_VALIDATION_STATUS,
+  RUN_VALIDATION_STATUSES,
+  RUN_VALIDATION_SUMMARY,
+  isAbsoluteLikePath,
+  isRunFileChange,
+  isRunReviewSnapshot,
+  isRunValidationResultView,
+  isSensitiveRepositoryPath,
+  summarizeRunValidations,
+  totalRunReview,
+} from "./review.js";
+
+export type {
+  RunChangeType,
+  RunFileChange,
+  RunReviewSnapshot,
+  RunReviewTotals,
+  RunValidationResultView,
+  RunValidationStatus,
+  RunValidationSummary,
+} from "./review.js";
 
 export {
   isCreateTaskDocumentSuccess,

@@ -6,6 +6,7 @@ import {
   claudePreflight,
   cancelClaudeRun,
   fetchClaudeRunEvents,
+  fetchClaudeRunReview,
   fetchClaudeRunStatus,
   startClaudeRun,
   createProjectDocument,
@@ -1521,6 +1522,159 @@ describe("cancelClaudeRun", () => {
     const result = await cancelClaudeRun(RUN_ID, {
       environment: ENVIRONMENT,
       fetch: () => Promise.reject(new Error("connexion refusee")),
+    });
+
+    assert.equal(failureOf(result).kind, "unreachable");
+  });
+});
+
+describe("fetchClaudeRunReview", () => {
+  const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3701";
+
+  const FILE = {
+    position: 0,
+    path: "apps/web/lib/runs.ts",
+    previousPath: null,
+    changeType: "MODIFIED",
+    additions: 2,
+    deletions: 1,
+    isBinary: false,
+    isSensitive: false,
+    isTruncated: false,
+    patch: "@@ -1 +1 @@\n-avant\n+apres\n",
+  };
+
+  const REVIEW = {
+    ok: true,
+    review: {
+      capturedAt: "2026-08-07T12:00:00.000Z",
+      headBefore: "a".repeat(40),
+      unreliable: false,
+      files: [FILE],
+      omittedFiles: 0,
+      validations: [
+        {
+          position: 0,
+          command: "npm run test",
+          status: "PASSED",
+          exitCode: 0,
+          summary: "tout passe",
+          startedAt: null,
+          finishedAt: null,
+        },
+      ],
+    },
+  };
+
+  it("retourne l'instantane du runner", async () => {
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(200, REVIEW),
+      environment: ENVIRONMENT,
+    });
+
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.value.files.length, 1);
+      assert.equal(result.value.files[0]?.path, "apps/web/lib/runs.ts");
+      assert.equal(result.value.validations.length, 1);
+    }
+  });
+
+  it("n'envoie qu'un identifiant d'execution", async () => {
+    const capture: { request?: Request } = {};
+    await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(200, REVIEW, capture),
+      environment: ENVIRONMENT,
+    });
+
+    const body = (await capture.request?.text()) ?? "";
+    assert.deepEqual(JSON.parse(body), { runId: RUN_ID });
+    // Ni chemin de repository, ni commit attendu, ni chemin de fichier : la
+    // route ne sait relire que ce qu'elle a elle-meme capture.
+    assert.equal(body.includes("repositoryPath"), false);
+    assert.equal(body.includes("expectedGitHead"), false);
+    assert.equal(body.includes("file"), false);
+  });
+
+  it("authentifie la requete sans exposer le jeton dans le resultat", async () => {
+    const capture: { request?: Request } = {};
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(200, REVIEW, capture),
+      environment: ENVIRONMENT,
+    });
+
+    assert.equal(capture.request?.headers.get("authorization"), `Bearer ${TOKEN}`);
+    assert.equal(JSON.stringify(result).includes(TOKEN), false);
+  });
+
+  it("accepte une review sans aucun changement", async () => {
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(200, {
+        ok: true,
+        review: { ...REVIEW.review, files: [], validations: [] },
+      }),
+      environment: ENVIRONMENT,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.files.length, 0);
+  });
+
+  it("rejette un instantane dont un fichier porte un chemin absolu", async () => {
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(200, {
+        ok: true,
+        review: {
+          ...REVIEW.review,
+          files: [FILE, { ...FILE, position: 1, path: "C:/Windows/win.ini" }],
+        },
+      }),
+      environment: ENVIRONMENT,
+    });
+
+    // Un seul element hors contrat fait rejeter l'instantane entier : c'est la
+    // derniere barriere avant que du contenu de repository n'entre en base.
+    assert.equal(result.ok, false);
+    assert.equal(failureOf(result).kind, "invalid_response");
+  });
+
+  it("rejette un type de changement inconnu", async () => {
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(200, {
+        ok: true,
+        review: { ...REVIEW.review, files: [{ ...FILE, changeType: "REWRITTEN" }] },
+      }),
+      environment: ENVIRONMENT,
+    });
+
+    assert.equal(result.ok, false);
+  });
+
+  it("traduit un refus du runner", async () => {
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(409, { ok: false, error: { code: "CLAUDE_REVIEW_NOT_READY" } }),
+      environment: ENVIRONMENT,
+    });
+
+    const failure = failureOf(result);
+    assert.equal(failure.kind, "runner_error");
+    assert.equal(failure.kind === "runner_error" ? failure.code : null, "CLAUDE_REVIEW_NOT_READY");
+  });
+
+  it("traduit une capture ratee", async () => {
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: stubFetch(500, { ok: false, error: { code: "CLAUDE_REVIEW_FAILED" } }),
+      environment: ENVIRONMENT,
+    });
+
+    const failure = failureOf(result);
+    assert.equal(failure.kind === "runner_error" ? failure.code : null, "CLAUDE_REVIEW_FAILED");
+  });
+
+  it("signale un runner injoignable sans rien conclure", async () => {
+    const result = await fetchClaudeRunReview(RUN_ID, {
+      fetch: () => Promise.reject(new Error("connexion refusee")),
+      environment: ENVIRONMENT,
     });
 
     assert.equal(failureOf(result).kind, "unreachable");

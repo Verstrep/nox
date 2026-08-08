@@ -224,6 +224,25 @@ export const RUNNER_ERROR = {
    */
   CLAUDE_CANCEL_FAILED: "CLAUDE_CANCEL_FAILED",
 
+  // --- Review d'une execution ------------------------------------------------
+
+  /**
+   * L'execution n'a pas encore atteint d'etat final : il n'y a rien a relire.
+   *
+   * La review est un instantane pris **au moment de la finalisation**. Tant que
+   * le processus tourne, le repository bouge encore, et capturer maintenant
+   * produirait une photo qui ne correspondrait a aucun etat conserve.
+   */
+  CLAUDE_REVIEW_NOT_READY: "CLAUDE_REVIEW_NOT_READY",
+  /**
+   * La capture detaillee a echoue : Git indisponible, delai depasse, sortie
+   * illisible.
+   *
+   * Distinct d'un echec d'execution : le resultat de Claude Code, lui, reste
+   * valide. Ce code dit seulement que le detail du diff manque.
+   */
+  CLAUDE_REVIEW_FAILED: "CLAUDE_REVIEW_FAILED",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

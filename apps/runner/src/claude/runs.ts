@@ -36,6 +36,10 @@ import {
 
 import type { ClaudeConfig } from "../config.ts";
 import { resolveRepositoryRoot } from "../repositories/documents/repository-root.ts";
+import {
+  captureRepositoryChanges,
+  type ReviewCaptureResult,
+} from "../repositories/git-review.ts";
 import { readGitChanges, type GitStateOptions } from "../repositories/git-state.ts";
 import { launchClaude, type ClaudeLauncher, type LaunchOutcome } from "./launcher.ts";
 import { detectUsageLimit, parseClaudeOutput } from "./output.ts";
@@ -171,6 +175,11 @@ export async function startClaudeRun(
     },
   ]);
 
+  // Les commandes attendues sont recopiees maintenant, avant que quoi que ce
+  // soit ne tourne : une commande jamais lancee doit apparaitre dans la review,
+  // et elle ne le pourrait pas si la table etait remplie au fil des executions.
+  registry.seedValidations(request.runId, request.validationCommands);
+
   // Le collecteur est cree avec la racine reelle du repository : c'est elle qui
   // permet de rendre les chemins relatifs plutot que de simplement les masquer.
   const collector = new ClaudeStreamCollector({
@@ -178,6 +187,9 @@ export async function startClaudeRun(
     allowedCommands: policy.policy.authorizedCommands,
     onEvents: (events) => {
       registry.appendEvents(request.runId, events);
+    },
+    onValidation: (signal) => {
+      registry.applyValidation(request.runId, signal);
     },
   });
 
@@ -281,8 +293,48 @@ async function finishRun(
       },
     };
 
-    const conclude = (status: RunStatus, update: Parameters<typeof registry.finish>[2]): void => {
+    /**
+     * Fige l'execution, puis capture sa review.
+     *
+     * L'ordre est celui de TASK-011 : etat Git final, puis instantane detaille,
+     * puis statut. La capture est **tentee** dans tous les cas finaux — reussite,
+     * echec, blocage, annulation — parce que c'est justement apres un echec ou
+     * une interruption qu'on a le plus besoin de voir ce qui a ete laisse sur le
+     * disque.
+     *
+     * Un echec de la capture ne change **jamais** le sort de l'execution : le
+     * compte rendu de Claude Code, ses durees et son etat Git restent ce qu'ils
+     * sont. Un diff que NOX n'a pas su lire n'est pas un travail rate.
+     */
+    const conclude = async (
+      status: RunStatus,
+      update: Parameters<typeof registry.finish>[2],
+      unreliable = false,
+    ): Promise<void> => {
+      const captured = await captureReview(repositoryRoot, headBefore, options);
+
+      // `finish` fige les validations en cours : elles doivent l'etre avant
+      // d'entrer dans l'instantane, sinon la review afficherait un « Running »
+      // eternel pour un processus deja mort.
       registry.finish(request.runId, status, update);
+
+      registry.attachReview(
+        request.runId,
+        captured.ok
+          ? {
+              ok: true,
+              snapshot: {
+                capturedAt: new Date().toISOString(),
+                headBefore,
+                unreliable,
+                files: captured.changes.files,
+                omittedFiles: captured.changes.omittedFiles,
+                validations: registry.validations(request.runId),
+              },
+            }
+          : { ok: false, code: captured.code },
+      );
+
       // L'evenement final est ajoute apres la finalisation : le statut affiche
       // et le dernier evenement de la timeline disent alors la meme chose.
       // C'est un `STATUS`, donc il survit a une troncature.
@@ -298,7 +350,7 @@ async function finishRun(
     };
 
     if (outcome.spawnError !== null) {
-      conclude(RUN_STATUS.FAILED, {
+      await conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         errorCode: RUNNER_ERROR.CLAUDE_START_FAILED,
         stderrTail: outcome.stderrTail,
@@ -308,7 +360,7 @@ async function finishRun(
     }
 
     if (outcome.timedOut) {
-      conclude(RUN_STATUS.BLOCKED, {
+      await conclude(RUN_STATUS.BLOCKED, {
         ...gitUpdate,
         errorCode: RUNNER_ERROR.CLAUDE_TIMEOUT,
         stderrTail: outcome.stderrTail,
@@ -337,7 +389,7 @@ async function finishRun(
     // La limite d'utilisation est cherchee avant tout autre diagnostic : elle
     // appelle une action tres differente — attendre, plutot que corriger.
     if (detectUsageLimit({ parsed: report, stderrTail: outcome.stderrTail, exitCode: outcome.exitCode })) {
-      conclude(RUN_STATUS.BLOCKED, {
+      await conclude(RUN_STATUS.BLOCKED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_LIMIT_REACHED,
@@ -357,11 +409,19 @@ async function finishRun(
     // l'utilisateur doit apprendre d'abord qu'un commit interdit existe, et
     // ensuite seulement que le processus a ete interrompu.
     if (violated) {
-      conclude(RUN_STATUS.FAILED, {
-        ...gitUpdate,
-        ...claudeFields,
-        errorCode: RUNNER_ERROR.GIT_POLICY_VIOLATION,
-      });
+      await conclude(
+        RUN_STATUS.FAILED,
+        {
+          ...gitUpdate,
+          ...claudeFields,
+          errorCode: RUNNER_ERROR.GIT_POLICY_VIOLATION,
+        },
+        // Le detail est capture quand meme — il reste la meilleure trace de ce
+        // qui s'est passe — mais il est marque comme non fiable : compare a
+        // `headBefore`, il melange le commit interdit et le travail en cours,
+        // et ne decrit plus « ce que l'agent a produit depuis un etat propre ».
+        true,
+      );
       return;
     }
 
@@ -371,7 +431,7 @@ async function finishRun(
     // interruption parfaitement volontaire.
     const cleanSuccess = parsed.ok && outcome.exitCode === 0 && report?.isError !== true;
     if (registry.isCancellationRequested(request.runId) && !cleanSuccess) {
-      conclude(RUN_STATUS.CANCELLED, {
+      await conclude(RUN_STATUS.CANCELLED, {
         ...gitUpdate,
         ...claudeFields,
         // Aucun code d'erreur : une annulation demandee et obtenue n'est pas un
@@ -382,7 +442,7 @@ async function finishRun(
     }
 
     if (!parsed.ok) {
-      conclude(RUN_STATUS.FAILED, {
+      await conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_OUTPUT_INVALID,
@@ -391,7 +451,7 @@ async function finishRun(
     }
 
     if (outcome.exitCode !== 0 || report?.isError === true) {
-      conclude(RUN_STATUS.FAILED, {
+      await conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_PROCESS_FAILED,
@@ -399,7 +459,7 @@ async function finishRun(
       return;
     }
 
-    conclude(RUN_STATUS.COMPLETED, {
+    await conclude(RUN_STATUS.COMPLETED, {
       ...gitUpdate,
       ...claudeFields,
       errorCode: null,
@@ -410,5 +470,27 @@ async function finishRun(
     registry.finish(request.runId, RUN_STATUS.FAILED, {
       errorCode: RUNNER_ERROR.CLAUDE_PROCESS_FAILED,
     });
+  }
+}
+
+/**
+ * Capture le detail des changements, sans jamais faire tomber la finalisation.
+ *
+ * Le `try` n'est pas decoratif : cette fonction lit le disque et lance des
+ * commandes, et une exception ici laisserait une execution eternellement active.
+ * Un echec devient un code d'erreur de review — le resultat de Claude Code, lui,
+ * reste intact.
+ */
+async function captureReview(
+  repositoryRoot: string,
+  headBefore: string,
+  options: GitStateOptions,
+): Promise<ReviewCaptureResult> {
+  try {
+    return await captureRepositoryChanges(repositoryRoot, headBefore, {
+      runGit: options.runGit,
+    });
+  } catch {
+    return { ok: false, code: RUNNER_ERROR.CLAUDE_REVIEW_FAILED };
   }
 }

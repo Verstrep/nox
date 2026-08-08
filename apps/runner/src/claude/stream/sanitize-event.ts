@@ -121,7 +121,9 @@ const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200
  * caracteres remplacerait des fragments de mots ordinaires partout dans le
  * texte, sans rien proteger.
  */
-function collectSecrets(environment: Record<string, string | undefined>): string[] {
+export function collectEnvironmentSecrets(
+  environment: Record<string, string | undefined>,
+): string[] {
   const secrets: string[] = [];
 
   for (const [name, value] of Object.entries(environment)) {
@@ -139,6 +141,19 @@ function collectSecrets(environment: Record<string, string | undefined>): string
 }
 
 /**
+ * Retire les caracteres qui permettent d'afficher autre chose que le texte reel.
+ *
+ * Isolee du nettoyeur complet parce qu'un patch de review en a besoin **sans**
+ * le reste : reecrire les chemins d'un diff ou en ecraser l'indentation
+ * produirait un diff faux, c'est-a-dire pire qu'aucun diff.
+ *
+ * `\t` et `\n` sont preserves : ils portent la structure d'un fichier.
+ */
+export function stripControlCharacters(value: string): string {
+  return value.replace(CONTROL_CHARACTERS, "");
+}
+
+/**
  * Construit le nettoyeur d'une execution donnee.
  *
  * Il est cree une fois par execution, avec la racine reelle du repository :
@@ -149,7 +164,7 @@ export function createEventSanitizer(options: SanitizerOptions): EventSanitizer 
   const environment = options.environment ?? process.env;
   const caseInsensitive = options.caseInsensitivePaths ?? process.platform === "win32";
   const rootPattern = buildRootPattern(options.repositoryRoot, caseInsensitive);
-  const secrets = collectSecrets(environment);
+  const secrets = collectEnvironmentSecrets(environment);
   const secretNames = /\bNOX_[A-Z0-9_]+\b/gu;
 
   return (value: string, maxLength: number): string => {

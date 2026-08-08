@@ -888,11 +888,194 @@ aucun commit.
 
 La page affiche le compte rendu de l'agent, la durée, le nombre de tours, le coût **rapporté par
 Claude Code** — « non fourni » quand l'outil ne le communique pas, jamais une estimation —, les
-fichiers modifiés, `git diff --stat`, et la confirmation que `HEAD` n'a pas bougé. Le diff
-complet n'est pas affiché : relisez-le dans votre éditeur.
+fichiers modifiés, `git diff --stat`, et la confirmation que `HEAD` n'a pas bougé.
 
 La timeline **complète** ce compte rendu, elle ne le remplace pas : elle dit ce que l'agent a
-fait, le compte rendu dit ce qu'il en pense.
+fait, le compte rendu dit ce qu'il en pense. Et pour voir ce qu'il a réellement **produit**, un
+bouton **`Review changes`** ouvre la review détaillée.
+
+## Relire le travail : `Review changes`
+
+Une fois l'exécution terminée, sa page propose **`Review changes`**. C'est là que se relit le
+travail, sans quitter NOX.
+
+### Un instantané, pas une vue du présent
+
+Le point le plus important de cette page tient en une phrase : **elle ne relit pas votre dossier
+de travail.** Le diff a été capturé au moment précis où l'exécution s'est terminée, et il ne
+bouge plus.
+
+C'est voulu, et c'est ce qui la rend utile. Vous allez relire, puis corriger — c'est le but. Si
+NOX recalculait le diff à chaque affichage, votre première correction changerait rétroactivement
+ce que l'agent est censé avoir produit, et rien ne vous le signalerait. Une review qui se réécrit
+toute seule est pire qu'aucune review.
+
+Concrètement : éditez un fichier dans votre éditeur, rechargez la page — la review est identique.
+Elle raconte le passé, `git status` raconte le présent, et les deux sont utiles.
+
+### Le résumé
+
+```text
+3 files changed
++42 / -11
+
+Validations: Passed
+
+1 sensitive file hidden
+1 truncated patch
+```
+
+Des faits, jamais une note. Vous ne verrez ni « Quality: 87 % » ni « Confidence: 94 % » : NOX ne
+sait pas juger votre code, et un score fabriqué serait lu comme une évaluation par la seule
+personne qui, elle, sait juger.
+
+### Les validations
+
+Une ligne par commande déclarée dans la tâche :
+
+```text
+Passed   npm run test      exit 0   12s
+Failed   npm run lint      exit 1
+Not run  npm run build
+```
+
+| État | Ce qu'il veut dire |
+| --- | --- |
+| `Passed` | lancée par Claude Code, sans erreur |
+| `Failed` | lancée, résultat en erreur |
+| `Not run` | **jamais lancée** — une information, pas un trou |
+| `Unknown` | lancée, mais sans issue propre exploitable |
+
+Une commande est reconnue même quand Claude Code la lance derrière son répertoire de travail —
+`cd "D:/mon/depot" && git diff --check` compte bien comme `git diff --check`. En revanche, la
+correspondance reste exacte : `git diff --check --cached` est une autre commande, et une ligne
+portant un tuyau, une redirection ou un point-virgule n'est pas reconnue du tout.
+
+Une commande peut parfaitement être à la fois une commande Git et une validation : c'est **votre**
+liste qui décide, jamais une classification automatique.
+
+**NOX ne relance aucune commande.** Ce tableau décrit ce que Claude Code a réellement exécuté
+pendant son run, pas ce qu'on obtiendrait en relançant maintenant. Relancer doublerait le temps de
+validation, ouvrirait une seconde surface d'exécution de commandes, et surtout testerait l'état du
+disque **d'aujourd'hui** — pas celui de la fin de l'exécution.
+
+`Not run` est donc une information de premier ordre : elle dit que la tâche n'a pas été validée
+comme elle devait l'être.
+
+Quand la commande a produit une sortie exploitable, un extrait borné est affiché sous elle. C'est
+la seule sortie d'outil que NOX conserve, et seulement pour une commande que **vous** avez
+enregistrée mot pour mot.
+
+### Les fichiers et leur diff
+
+Une liste à gauche, le diff à droite. Les marqueurs reprennent le vocabulaire de `git status` :
+
+```text
+M  apps/web/lib/runs.ts
+A  apps/web/lib/review.ts
+D  ancien-module.ts
+R  nouveau-nom.md
+?  brouillon.md
+```
+
+`?` désigne un fichier **non suivi** — créé par l'agent et pas encore ajouté à l'index. NOX ne
+lance jamais `git add` : ces fichiers apparaissent quand même, parce que ce sont souvent les plus
+intéressants à relire.
+
+Le fichier sélectionné est porté par l'URL (`?file=...`), donc partageable et rechargeable.
+
+### Ce qui n'est pas affiché, et pourquoi
+
+**Un fichier sensible** — `.env`, `.env.local`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`,
+`credentials.json`, `secrets.json` :
+
+```text
+Sensitive file — content hidden
+```
+
+Son chemin, son type de changement et ses statistiques restent visibles : savoir que `.env` a été
+modifié est exactement ce qu'il faut apprendre. Seul son contenu disparaît — il n'a rien à faire
+dans une page web, ni dans une capture d'écran. `.env.example` et `.env.sample` font exception :
+ils existent pour être lus.
+
+Ce n'est pas un détecteur de secrets. NOX n'analyse pas le contenu de vos fichiers pour deviner ce
+qu'ils cachent — un tel détecteur produirait surtout des faux positifs et donnerait l'illusion
+d'une protection qu'il ne peut pas tenir.
+
+**Un fichier binaire** :
+
+```text
+Binary file changed
+```
+
+Aucun contenu binaire n'entre en base. Un diff binaire n'est lisible par personne, et NOX n'a pas
+vocation à devenir une copie de votre repository.
+
+**Un diff trop volumineux** :
+
+```text
+Diff truncated
+```
+
+Les bornes : 200 fichiers, 256 Kio par patch, 4 Mio et 20 000 lignes par exécution. Une limite
+atteinte **ne fait jamais échouer l'exécution** : la liste complète des fichiers reste affichée,
+et `git diff --stat` reste disponible. Relisez le fichier concerné avec `git diff`.
+
+### Le diff est du texte, et rien d'autre
+
+Un patch vient de votre repository : il peut contenir une balise `<script>`, du Markdown, des
+séquences ANSI. NOX l'affiche **littéralement**, sans rien interpréter — pas de rendu HTML, pas de
+Markdown, pas de couleurs ANSI, pas de lien cliquable, pas d'image.
+
+Les signes `+` et `-` restent dans le texte, en plus de la couleur : celle-ci disparaît à
+l'impression, ne se prononce pas pour un lecteur d'écran, et ne se distingue pas pour tout le
+monde.
+
+### Les exécutions antérieures
+
+Les runs lancés avant l'arrivée de cette page n'ont pas d'instantané :
+
+```text
+Detailed review unavailable for this legacy run.
+```
+
+NOX **ne reconstruit pas** leur diff depuis votre repository actuel : il vous donnerait le diff
+d'aujourd'hui en le présentant comme celui d'une exécution passée. Leur compte rendu, leurs
+fichiers modifiés et leur `git diff --stat` restent consultables sur la page de l'exécution.
+
+Même message si le runner a redémarré avant que NOX ait pu récupérer l'instantané : ce qui n'a pas
+été observé ne sera pas inventé.
+
+### Une exécution annulée ou échouée
+
+La review fonctionne aussi pour elles, avec un avertissement :
+
+```text
+Partial changes
+```
+
+> Cette exécution a été interrompue. Les changements affichés peuvent être partiels : NOX n'a
+> restauré aucun fichier.
+
+C'est souvent le cas le plus utile : voir ce qu'un agent interrompu a laissé derrière lui.
+
+### Accepter ou rejeter : `Approve` / `Reopen`
+
+Quand la tâche est en `Review`, la page propose deux boutons.
+
+| Bouton | Effet sur la tâche |
+| --- | --- |
+| `Approve` | `Review` → `Done` |
+| `Reopen` | `Review` → `Ready` |
+
+**Ni l'un ni l'autre ne touche à Git.** Pas de commit, pas de `git add`, pas de push, pas de
+restauration, pas de relance. Accepter une review veut dire « j'ai relu, ça me convient » — pas
+« enregistre-le pour moi ». Le commit reste votre geste, dans votre terminal, avec le message que
+vous choisissez.
+
+Après `Reopen`, souvenez-vous que le repository devra redevenir propre et synchronisé avant un
+nouveau lancement. NOX ne le nettoie pas : la vérification préalable refusera de partir, ce qui
+est la bonne façon de l'apprendre.
 
 ### En cas de limite Claude
 
@@ -913,8 +1096,9 @@ passé.
 
 Aucun test automatisé de NOX ne lance le vrai Claude Code : la suite utilise un faux exécutable
 qui imite son contrat, y compris son flux `stream-json` — sessions complètes, flux abîmés,
-blocs de réflexion, secrets, sorties énormes, processus descendants. Elle ne consomme donc aucun
-quota et ne dépend d'aucun réseau.
+blocs de réflexion, secrets, sorties énormes, processus descendants, et un mode qui modifie
+réellement un repository temporaire pour éprouver la review. Elle ne consomme donc aucun quota et
+ne dépend d'aucun réseau.
 
 ## Lancer le runner
 
@@ -1071,6 +1255,8 @@ NOX/
 │   │   │   ├── run-display.ts      Tons, durées, URL des exécutions
 │   │   │   ├── run-cancel.ts       Règles d'annulation, pures et testables
 │   │   │   ├── run-events.ts       Jonction registre ↔ SQLite, rattrapage
+│   │   │   ├── run-review.ts       Transfert unique de l'instantané vers la base
+│   │   │   ├── review-display.ts   Sélection de fichier, lignes de diff, disponibilité
 │   │   │   ├── labels.ts           Seule couche de traduction des valeurs internes
 │   │   │   ├── runs.ts             Chargement et réconciliation des runs
 │   │   │   └── ...             Validation métier et lecture des données
@@ -1090,11 +1276,14 @@ NOX/
 │           │   ├── output.ts       Analyse JSON et détection de limite
 │           │   ├── registry.ts     Registre en mémoire : états et événements
 │           │   ├── cancel.ts       Annulation contrôlée, sans seconde logique d'arrêt
-│           │   ├── stream/         Parser NDJSON, normalisation, sanitation
+│           │   ├── validations.ts  Suivi des commandes réellement exécutées
+│           │   ├── stream/         Parser NDJSON, lecture des commandes Bash,
+│           │   │                   normalisation, sanitation
 │           │   └── runs.ts         Cycle de vie complet d'une exécution
 │           └── repositories/
 │               ├── resolve-repository.ts   Résolution Git (execFile, sans shell)
 │               ├── git-state.ts            État Git en lecture seule
+│               ├── git-review.ts           Capture détaillée du diff, à la finalisation
 │               ├── documents/              Inventaire, lecture, écriture, création, confinement
 │               └── tasks/                  Document de tâche et dossier `tasks/`
 │
@@ -1110,11 +1299,13 @@ NOX/
 │   │   ├── src/claude-prompt.ts    Prompt d'exécution pur et déterministe
 │   │   ├── src/claude-commands.ts  Validation des commandes et permissions
 │   │   ├── src/claude-events.ts    Événements publics, types fermés et bornes
+│   │   ├── src/review.ts           Changements, validations, bornes, fichiers sensibles
 │   │   └── src/claude.ts           Contrat des routes Claude Code
 │   │
 │   └── database/               Accès aux données (@nox/database)
 │       ├── prisma/             Schéma et migrations versionnées
-│       ├── src/                Client, chemins, requêtes sur Project, Task, Run, RunEvent
+│       ├── src/                Client, chemins, requêtes sur Project, Task, Run,
+│       │                       RunEvent, RunFileChange, RunValidationResult
 │       └── prisma.config.ts    Configuration du CLI Prisma
 │
 ├── data/                       Base SQLite locale (contenu non versionné)

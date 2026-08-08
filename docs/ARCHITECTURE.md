@@ -110,6 +110,10 @@ modules dédiés décident.
   appels.
 - `POST /claude/runs/cancel` — authentifiée, enregistre une demande d'arrêt, passe l'exécution
   en `CANCELLING` et répond `202`. Le corps ne porte qu'un identifiant d'exécution.
+- `POST /claude/runs/review` — authentifiée, relit l'instantané de review capturé à la fin de
+  l'exécution. Ne calcule rien, et le corps ne porte qu'un identifiant d'exécution : ni chemin de
+  repository, ni commit, ni chemin de fichier. C'est ce qui l'empêche de devenir un explorateur
+  Git générique.
 - Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
 - Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
 - Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
@@ -777,3 +781,166 @@ et ensuite seulement que le processus a été interrompu.
 Un run annulé fait passer la tâche à `BLOCKED`, jamais à `READY`. Passer directement à `READY`
 masquerait l'état partiel du repository ; `BLOCKED → READY` reste une décision humaine, prise
 après avoir regardé `git status` et `git diff`.
+
+### 5.13 Review intégrée d'une exécution
+
+```text
+Run final
+    ↓
+Git final
+    ↓
+Review snapshot
+    ├── RunFileChange
+    └── RunValidationResult
+            ↓
+        Review UI
+            ↓
+      Approve / Reopen
+```
+
+TASK-008 capturait déjà `git diff --stat` et la liste des fichiers modifiés. C'est utile et
+insuffisant : cela dit *combien* de lignes ont bougé, jamais *lesquelles*. TASK-011 capture le
+détail — un patch par fichier — et structure les validations réellement exécutées.
+
+#### Pourquoi le snapshot est capturé immédiatement
+
+Au moment précis où l'exécution devient finale : après la capture Git, avant que le statut ne soit
+annoncé. La capture est **tentée dans tous les cas finaux** — `COMPLETED`, `FAILED`, `BLOCKED`,
+`CANCELLED` —, parce que c'est justement après un échec ou une interruption qu'on a le plus besoin
+de voir ce qui a été laissé sur le disque.
+
+La comparaison se fait contre `gitHeadBefore`, pas contre `HEAD`. Le repository était
+obligatoirement propre au démarrage : « `headBefore` + arbre final » décrit donc exactement ce que
+l'exécution a produit. Comparer à `HEAD` donnerait la même réponse partout **sauf** dans le seul cas
+où la question compte — celui où l'agent a créé un commit interdit. Le snapshot est alors conservé
+mais marqué non fiable.
+
+#### Pourquoi il est immuable, et pourquoi la review ne lit pas le disque
+
+Une review et un `git diff` répondent à deux questions différentes. Le second dit ce que le dossier
+de travail contient **maintenant** ; la première doit dire ce que l'agent avait produit.
+
+Or NOX invite explicitement l'utilisateur à relire puis à corriger. Dès sa première édition dans
+l'éditeur, un diff recalculé raconterait une autre histoire — et personne ne s'en apercevrait. Un
+témoignage qui se réécrit tout seul est pire qu'aucun témoignage.
+
+L'immuabilité ne repose donc pas sur une convention d'appel :
+
+- `saveRunReview` refuse d'écrire si `reviewCapturedAt` est déjà renseigné ;
+- le registre du runner refuse un second `attachReview` ;
+- le web n'interroge la route de review **qu'une fois**, quand la base n'a rien ;
+- ensuite, la base fait foi, et le runner n'est plus jamais appelé pour cette exécution.
+
+Une review **vide** — capture réussie, zéro fichier — et une review **absente** disent deux choses
+très différentes : « l'agent n'a rien modifié » contre « NOX ne sait pas ». C'est pourquoi
+`reviewCapturedAt` existe comme colonne distincte plutôt que d'être déduite d'un `COUNT(*)`.
+
+#### Ce que la capture lit, et ce qu'elle ne fera jamais
+
+| Commande | Ce qu'elle apporte |
+| --- | --- |
+| `git diff --name-status -z -M -C <head>` | statuts, renommages, copies |
+| `git diff --numstat -z -M -C <head>` | additions, suppressions, détection binaire |
+| `git ls-files --others --exclude-standard -z` | fichiers **créés**, invisibles pour `git diff` |
+| `git diff --no-color -M -C <head> -- :(literal)<path>` | le patch d'un fichier suivi |
+
+Le format `-z` n'est pas un détail : la sortie « humaine » sépare les champs par des espaces et des
+tabulations, que les noms de fichiers ont parfaitement le droit de contenir. Un parseur fondé sur
+les espaces se trompe dès le premier fichier nommé « notes de version.md ».
+
+Les fichiers non suivis n'apparaissent dans aucun `git diff`. Leur patch est **fabriqué** par NOX à
+partir de leur contenu, lu de façon bornée dès l'appel système. La seule alternative aurait été
+`git add`, et NOX ne modifie pas l'index d'un repository : la review est une lecture.
+
+Aucune commande d'écriture, aucun accès réseau, aucun fichier temporaire.
+
+#### Bornes, masquage et binaires
+
+| Borne | Valeur |
+| --- | --- |
+| Fichiers décrits | 200 |
+| Patch par fichier | 256 Kio |
+| Patches par exécution | 4 Mio |
+| Lignes de diff par exécution | 20 000 |
+| Résumé d'une validation | 8 Kio |
+
+Constantes, comme les bornes d'événements. Une limite atteinte ne fait **jamais** échouer
+l'exécution : la liste des fichiers reste complète, les patches concernés sont marqués tronqués, et
+`git diff --stat` reste disponible.
+
+Un fichier sensible — `.env` et ses variantes, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`,
+`credentials.json`, `secrets.json` — montre son chemin, son type de changement et ses statistiques,
+jamais son contenu. La règle est appliquée deux fois : à la capture, où le patch n'est même pas
+demandé à Git, et à l'écriture en base, qui met `patch` à `null` quoi qu'en dise l'appelant. Seuls
+`.env.example` et `.env.sample` sont exclus, nommément.
+
+Un fichier binaire est reconnu et stocké sans contenu : SQLite n'a pas à devenir une copie du
+repository.
+
+Un patch traverse un nettoyage **restreint** — caractères de contrôle retirés, valeurs `NOX_*`
+masquées — et non le nettoyeur d'événements de TASK-010. Celui-ci réécrit les chemins et écrase les
+espaces multiples : parfait pour une ligne de timeline, destructeur pour un diff. Un patch dont on
+a réécrit les chemins ne décrit plus le fichier qu'il prétend décrire.
+
+#### Pourquoi les validations sont celles réellement exécutées
+
+Les commandes de la tâche sont **recopiées** dans `RunValidationResult` au lancement, au statut
+`NOT_RUN`. Une spécification évolue ; la review d'une exécution passée, non.
+
+Pendant l'exécution, un `tool_use` Bash dont la commande correspond **mot pour mot** à l'une d'elles
+la fait passer en `RUNNING` ; le `tool_result` portant le même `tool_use_id` la conclut en `PASSED`
+ou `FAILED`. À la fin, une commande jamais lancée reste `NOT_RUN`, une commande lancée sans
+résultat exploitable devient `UNKNOWN`.
+
+Aucun code de sortie n'est déduit : « échoué » ne veut pas dire « code 1 », et une valeur plausible
+mais fausse est la pire espèce de donnée. Aucune sortie n'est analysée pour en extraire un nombre
+de tests ou un taux de couverture : il faudrait un analyseur par outil, dont chacun casserait au
+premier changement de format.
+
+#### Pourquoi aucune commande n'est relancée
+
+NOX ne lance jamais `npm run test` pour compléter le tableau. Le temps d'abord — relancer doublerait
+la durée de validation pour un résultat déjà connu. La sécurité ensuite — ce serait une seconde
+surface d'exécution de commandes, hors du cadre de permissions construit pour l'agent. La vérité
+surtout : une commande relancée après coup teste l'état du disque **maintenant**, pas celui de la
+fin de l'exécution, et les deux divergent dès la première correction manuelle.
+
+Une commande `NOT_RUN` n'est pas un trou à combler. C'est une information : la tâche n'a pas été
+validée comme elle devait l'être.
+
+#### La page de review
+
+Elle lit SQLite, jamais le repository. Le paramètre `?file=` **sélectionne une ligne enregistrée**
+par égalité de chemin ; une valeur inconnue ne sélectionne rien, n'est ni corrigée ni approchée, et
+produit un état parfaitement ordinaire. La protection n'est pas un filtre — un filtre se contourne —
+mais une absence de chemin de code entre ce paramètre et un système de fichiers.
+
+Le diff est rendu ligne par ligne par React, qui échappe tout : pas de `dangerouslySetInnerHTML`,
+pas de Markdown, pas d'ANSI, pas de lien automatique, pas d'image, pas de coloration syntaxique. Un
+patch est du contenu de repository, donc potentiellement hostile. Les signes `+` et `-` restent
+**dans le texte** : la couleur disparaît à l'impression, ne se prononce pas, et ne se distingue pas
+pour un daltonien.
+
+Les indicateurs sont des faits — fichiers changés, additions, suppressions, fichiers masqués,
+patches tronqués, état des validations. Aucun score de qualité : « Quality: 87 % » serait une
+opinion déguisée en mesure, lue comme une évaluation par la seule personne qui, elle, sait juger.
+
+#### Approve et Reopen ne touchent pas à Git
+
+`Approve` fait `REVIEW → COMPLETED`, `Reopen` fait `REVIEW → READY`. Ni commit, ni `git add`, ni
+push, ni restauration, ni relance. Accepter une review veut dire « j'ai relu, le travail me
+convient » — pas « enregistre-le pour moi ».
+
+Les deux réutilisent `updateTaskStatus` et sa table de transitions manuelles : une tâche qui aurait
+quitté `REVIEW` entre l'affichage et le clic est refusée plutôt qu'écrasée. Le navigateur n'envoie
+pas un statut, il envoie une intention parmi deux valeurs fermées.
+
+`Reopen` rappelle que le repository devra redevenir propre avant un nouveau lancement. NOX ne le
+nettoie pas : le préflight le refusera, ce qui est la bonne façon de l'apprendre.
+
+#### Les exécutions antérieures
+
+Un run sans instantané affiche « Detailed review unavailable for this legacy run. ». NOX ne
+reconstruit pas son diff depuis le repository actuel : ce serait donner le diff d'aujourd'hui en le
+présentant comme celui d'une exécution passée. Le compte rendu, les fichiers modifiés et
+`git diff --stat` historiques restent consultables.

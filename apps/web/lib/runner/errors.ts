@@ -179,6 +179,12 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
     "L'arret est deja engage. Laissez le processus se terminer : NOX affichera le resultat des qu'il aura ferme.",
   [RUNNER_ERROR.CLAUDE_CANCEL_FAILED]:
     "NOX a demande l'arret mais n'a pas pu constater la fin du processus. Celui-ci peut encore modifier le repository : verifiez-le vous-meme, et au besoin terminez-le depuis le gestionnaire de taches.",
+  // La review est un confort de relecture, pas un resultat : ces deux messages
+  // disent ce qui manque sans laisser croire que l'execution est compromise.
+  [RUNNER_ERROR.CLAUDE_REVIEW_NOT_READY]:
+    "Cette execution n'est pas encore terminee : sa review sera capturee au moment ou elle le sera.",
+  [RUNNER_ERROR.CLAUDE_REVIEW_FAILED]:
+    "NOX n'a pas pu capturer le detail des changements de cette execution. Son compte rendu et son etat Git restent valides ; pour le diff, utilisez « git status » et « git diff ».",
   [RUNNER_ERROR.CLAUDE_PROCESS_FAILED]:
     "L'execution s'est terminee sur une erreur. Consultez le compte rendu et la sortie d'erreur ci-dessous.",
   [RUNNER_ERROR.CLAUDE_OUTPUT_INVALID]:

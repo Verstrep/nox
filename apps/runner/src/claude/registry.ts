@@ -38,8 +38,13 @@ import type {
   ClaudeRunEvent,
   ClaudeRunEventDraft,
   ClaudeRunSnapshot,
+  RunReviewSnapshot,
   RunStatus,
+  RunValidationResultView,
+  RunnerErrorCode,
 } from "@nox/shared";
+
+import { ValidationTracker, type ValidationSignal } from "./validations.ts";
 
 /** Nombre maximal d'executions terminees conservees. */
 export const MAX_RETAINED_RUNS = 20;
@@ -90,9 +95,24 @@ type RegistryEntry = {
   eventCharacters: number;
   eventsTruncated: boolean;
   context: RunContext | null;
+  /** Table des commandes de validation attendues, si l'execution en a. */
+  validations: ValidationTracker | null;
+  /** Instantane de review, produit une seule fois a la finalisation. */
+  review: ReviewState | null;
   /** Permet de terminer le processus au depassement du delai. */
   kill: (() => void) | null;
 };
+
+/**
+ * Etat de la capture de review d'une execution.
+ *
+ * Deux issues seulement, et un echec **n'est pas** une absence : un run dont la
+ * capture a echoue doit pouvoir le dire, sinon il serait confondu avec un run
+ * d'avant TASK-011 qui n'en a jamais eu.
+ */
+export type ReviewState =
+  | { ok: true; snapshot: RunReviewSnapshot }
+  | { ok: false; code: RunnerErrorCode };
 
 export type RegisterResult =
   | { ok: true }
@@ -110,6 +130,8 @@ export type RunUpdate = Partial<
     | "eventCharacters"
     | "eventsTruncated"
     | "context"
+    | "validations"
+    | "review"
   >
 >;
 
@@ -156,6 +178,8 @@ function emptyEntry(runId: string): RegistryEntry {
     eventCharacters: 0,
     eventsTruncated: false,
     context: null,
+    validations: null,
+    review: null,
     kill: null,
   };
 }
@@ -288,6 +312,48 @@ export class ClaudeRunRegistry {
   /** Vrai si un arret a ete demande pour cette execution. */
   isCancellationRequested(runId: string): boolean {
     return this.#entries.get(runId)?.cancellationRequestedAt != null;
+  }
+
+  /**
+   * Recopie les commandes de validation attendues par la tache.
+   *
+   * Une **copie**, pas une reference : la review d'une execution passee doit
+   * rester lisible meme si la specification de la tache change ensuite.
+   */
+  seedValidations(runId: string, commands: readonly string[]): void {
+    const entry = this.#entries.get(runId);
+    if (entry !== undefined) {
+      entry.validations = new ValidationTracker(commands, this.#now);
+    }
+  }
+
+  /** Applique ce que le flux vient d'apprendre d'une commande de validation. */
+  applyValidation(runId: string, signal: ValidationSignal): void {
+    this.#entries.get(runId)?.validations?.apply(signal);
+  }
+
+  /** Etat courant des validations, vide si l'execution n'en attendait aucune. */
+  validations(runId: string): RunValidationResultView[] {
+    return this.#entries.get(runId)?.validations?.snapshot() ?? [];
+  }
+
+  /**
+   * Enregistre l'instantane de review d'une execution.
+   *
+   * Ecrit **une seule fois** : un second appel est ignore. C'est ce qui rend
+   * l'instantane immuable des sa creation, sans dependre de la discipline de
+   * l'appelant.
+   */
+  attachReview(runId: string, review: ReviewState): void {
+    const entry = this.#entries.get(runId);
+    if (entry !== undefined && entry.review === null) {
+      entry.review = review;
+    }
+  }
+
+  /** Instantane de review, ou `null` s'il n'a pas encore ete capture. */
+  review(runId: string): ReviewState | null {
+    return this.#entries.get(runId)?.review ?? null;
   }
 
   /**
@@ -445,6 +511,11 @@ export class ClaudeRunRegistry {
     entry.status = status;
     entry.finishedAt = update.finishedAt ?? this.#now();
     entry.kill = null;
+
+    // Une commande encore « en cours » a la fin du processus ne le sera plus
+    // jamais : son resultat n'arrivera pas, et l'afficher comme actif
+    // annoncerait un travail qui n'existe plus.
+    entry.validations?.seal();
 
     if (entry.resultText !== null) {
       entry.resultText = boundText(entry.resultText, RUN_LIMITS.resultText);

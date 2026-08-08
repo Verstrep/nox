@@ -164,6 +164,31 @@ model Run {
   /// recherchee.
   cancellationRequestedAt DateTime?
 
+  /// Moment ou l'instantane de review a ete enregistre.
+  ///
+  /// Non nul signifie « la capture a eu lieu », y compris lorsqu'elle n'a trouve
+  /// aucun changement. Une review vide et une review absente sont deux choses
+  /// differentes : la premiere dit « l'agent n'a rien modifie », la seconde dit
+  /// « NOX ne sait pas ». Les confondre inventerait une precision qui n'existe
+  /// pas, et c'est exactement ce qui distingue un run d'avant TASK-011 d'un run
+  /// sans changement.
+  reviewCapturedAt DateTime?
+
+  /// Code d'erreur de la capture detaillee, lorsqu'elle a echoue.
+  ///
+  /// Distinct de `errorCode` : celui-ci porte l'echec de l'execution, celui-la
+  /// l'echec de sa relecture. Un diff que NOX n'a pas su capturer ne transforme
+  /// jamais un succes de Claude Code en echec.
+  reviewErrorCode String?
+
+  /// Fichiers changes mais non decrits, faute de place.
+  ///
+  /// Le seul compteur stocke de la review, parce qu'il est le seul a ne pas etre
+  /// derivable : les lignes absentes ne peuvent pas se compter elles-memes. Tout
+  /// le reste — additions, suppressions, fichiers sensibles, patches tronques —
+  /// se calcule a partir des `RunFileChange`.
+  reviewOmittedFiles Int @default(0)
+
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
@@ -178,10 +203,115 @@ model Run {
   /// contrainte tient meme si quelqu'un l'ignore et appelle Prisma directement.
   task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
 
-  events RunEvent[]
+  events      RunEvent[]
+  fileChanges RunFileChange[]
+  validations RunValidationResult[]
 
   @@unique([taskId, sequence])
   @@index([taskId, status])
+}
+
+/// Un fichier change par une execution, tel qu'il l'etait a la fin de celle-ci.
+///
+/// ## Un instantane, pas une vue
+///
+/// Ces lignes sont ecrites **une fois**, au moment ou l'execution devient
+/// finale, et ne sont plus jamais recalculees. C'est toute la difference entre
+/// une review et un `git diff` : le second raconte le present du disque, la
+/// premiere raconte ce que l'agent avait produit. Si l'utilisateur edite un
+/// fichier apres coup — ce qui est exactement ce qu'on attend de lui —, la
+/// review historique doit continuer de dire la verite sur le passe.
+///
+/// ## Ce qui n'entre jamais ici
+///
+/// Aucun blob binaire : pour un fichier binaire, `patch` vaut `null` et
+/// `isBinary` porte l'information. Aucun contenu de fichier sensible : un `.env`
+/// apparait par son chemin et ses statistiques, jamais par son texte. Aucun
+/// fichier entier hors d'un patch borne : au-dela des limites de `REVIEW_LIMITS`,
+/// `isTruncated` le dit explicitement plutot que de couper en silence.
+///
+/// `path` est **toujours** relatif au repository, separateurs `/`. Un chemin
+/// absolu est refuse par le contrat partage avant d'arriver jusqu'ici.
+model RunFileChange {
+  id    String @id @default(cuid())
+  runId String
+
+  /// Rang stable dans la review, attribue a la capture.
+  ///
+  /// L'ordre n'est pas cosmetique : c'est lui qui rend deux affichages de la
+  /// meme review identiques, et une navigation par `?file=` reproductible.
+  position Int
+
+  path String
+  /// Renseigne uniquement pour un renommage ou une copie.
+  previousPath String?
+
+  /// Valeur de `RunChangeType`, stockee en chaine comme les autres enums.
+  changeType String
+
+  /// Comptes rapportes par Git ; `null` lorsqu'il n'en fournit pas (binaire).
+  additions Int?
+  deletions Int?
+
+  isBinary    Boolean @default(false)
+  isSensitive Boolean @default(false)
+  isTruncated Boolean @default(false)
+
+  /// Diff unifie, ou `null` : binaire, sensible, ou au-dela des bornes.
+  patch String?
+
+  createdAt DateTime @default(now())
+
+  /// `Cascade`, comme `RunEvent` : un changement de fichier ne raconte rien sans
+  /// son execution, et rien d'autre ne le referencera jamais.
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, position])
+  @@index([runId, position])
+}
+
+/// Une commande de validation attendue par la tache, et ce qu'elle est devenue.
+///
+/// ## Pourquoi la commande est recopiee
+///
+/// Le texte de la commande est **copie** depuis la tache a la creation de
+/// l'execution, jamais simplement reference. Une specification evolue ; la review
+/// d'une execution passee, non. Sans cette copie, corriger `npm run test` en
+/// `npm test` dans la tache reecrirait l'histoire de tous les runs precedents.
+///
+/// ## Ce que le statut represente
+///
+/// Uniquement ce que Claude Code a **reellement** execute pendant le run. NOX ne
+/// relance aucune commande pour completer le tableau : une commande `NOT_RUN`
+/// est une information, pas un trou a combler.
+model RunValidationResult {
+  id    String @id @default(cuid())
+  runId String
+
+  /// Rang dans la tache, recopie a la creation de l'execution.
+  position Int
+
+  /// Texte exact, tel qu'il etait au lancement.
+  command String
+
+  /// Valeur de `RunValidationStatus`, stockee en chaine.
+  status String
+
+  /// Code de sortie **rapporte** par l'outil ; jamais deduit ni invente.
+  exitCode Int?
+  /// Resume borne et nettoye de la sortie, lorsqu'il y en a un.
+  summary  String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, position])
+  @@index([runId, position])
 }
 
 /// Un evenement public d'une execution, tel qu'il a ete affiche.

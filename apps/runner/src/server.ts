@@ -24,6 +24,7 @@ import {
   parseClaudePreflightRequest,
   parseClaudeRunCancelRequest,
   parseClaudeRunEventsRequest,
+  parseClaudeRunReviewRequest,
   parseClaudeRunStatusRequest,
   parseCreateProjectDocumentRequest,
   parseCreateTaskDocumentRequest,
@@ -37,6 +38,7 @@ import {
   type ClaudePreflightSuccess,
   type ClaudeRunCancelSuccess,
   type ClaudeRunEventsSuccess,
+  type ClaudeRunReviewSuccess,
   type ClaudeRunStatusSuccess,
   type CreateProjectDocumentSuccess,
   type CreateTaskDocumentSuccess,
@@ -141,6 +143,7 @@ const CLAUDE_RUNS_START_ROUTE = "/claude/runs/start";
 const CLAUDE_RUNS_STATUS_ROUTE = "/claude/runs/status";
 const CLAUDE_RUNS_EVENTS_ROUTE = "/claude/runs/events";
 const CLAUDE_RUNS_CANCEL_ROUTE = "/claude/runs/cancel";
+const CLAUDE_RUNS_REVIEW_ROUTE = "/claude/runs/review";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -682,6 +685,50 @@ export function createRunnerServer(
           },
         };
         sendJson(response, 202, payload, requestId);
+        return;
+      }
+
+      if (pathname === CLAUDE_RUNS_REVIEW_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, CLAUDE_RUNS_REVIEW_ROUTE, log,
+          parseClaudeRunReviewRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Cette route ne calcule rien : elle relit un instantane deja capture au
+        // moment ou l'execution s'est terminee. C'est ce qui l'empeche de
+        // devenir un explorateur Git — aucun chemin, aucun commit et aucun
+        // repository ne peuvent lui etre demandes, seulement une execution
+        // qu'elle connait deja.
+        const review = registry.review(parsed.runId);
+
+        if (review === null) {
+          // Deux causes possibles, un seul comportement : l'execution est
+          // inconnue, ou elle n'a pas encore fini. La distinction se lit dans
+          // l'instantane d'etat, deja disponible par ailleurs.
+          const code = registry.has(parsed.runId)
+            ? RUNNER_ERROR.CLAUDE_REVIEW_NOT_READY
+            : RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND;
+          logRefusal(requestId, CLAUDE_RUNS_REVIEW_ROUTE, code);
+          sendRunnerError(response, code, requestId);
+          return;
+        }
+
+        if (!review.ok) {
+          logRefusal(requestId, CLAUDE_RUNS_REVIEW_ROUTE, review.code);
+          sendRunnerError(response, review.code, requestId);
+          return;
+        }
+
+        const payload: ClaudeRunReviewSuccess = { ok: true, review: review.snapshot };
+        sendJson(response, 200, payload, requestId);
         return;
       }
 

@@ -18,6 +18,12 @@ import {
   shortSha,
 } from "@/lib/run-display";
 import { catchUpRunEvents, loadPersistedRunEvents } from "@/lib/run-events";
+import {
+  reviewAvailability,
+  reviewUnavailableMessage,
+  reviewUrl,
+} from "@/lib/review-display";
+import { loadRunReview, syncRunReview } from "@/lib/run-review";
 import { loadRun, reconcileRun } from "@/lib/runs";
 import { loadTask } from "@/lib/tasks";
 
@@ -140,6 +146,16 @@ export default async function RunPage({
   // reouverture, y compris pour une execution deja terminee.
   await catchUpRunEvents(run.id, run.runnerRunId);
 
+  // La review est transferee du runner vers la base a la premiere ouverture qui
+  // suit la fin de l'execution, et une seule fois. Ensuite la base fait foi.
+  await syncRunReview(run.id, run.runnerRunId, run.status);
+  const review = await loadRunReview(run.id);
+  const availability = reviewAvailability(
+    run.status,
+    review?.capturedAt ?? null,
+    review?.errorCode ?? null,
+  );
+
   // Les evenements persistes sont ensuite rendus cote serveur : la timeline est
   // complete des le premier octet de HTML, y compris sans JavaScript et y
   // compris pour une execution terminee depuis longtemps.
@@ -201,6 +217,31 @@ export default async function RunPage({
             </p>
           </div>
         ) : null}
+
+        {active ? null : (
+          <SectionCard
+            title="Review des changements"
+            description="Ce que cette execution a laisse dans le repository, tel qu'il etait a sa fin."
+          >
+            {availability === "available" ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <Link
+                  href={reviewUrl(project.id, task.id, run.id)}
+                  className="rounded-md border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-600 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+                >
+                  Review changes
+                </Link>
+                <span className="text-xs text-zinc-600">
+                  {review?.files.length ?? 0} fichier(s) · diff detaille, validations, decision.
+                </span>
+              </div>
+            ) : (
+              <p className="text-sm leading-relaxed text-zinc-500">
+                {reviewUnavailableMessage(availability)}
+              </p>
+            )}
+          </SectionCard>
+        )}
 
         <RunTimeline
           endpoint={runEventsEndpoint(project.id, task.id, run.id, lastSequence)}

@@ -234,7 +234,22 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   retirées — valeur et nom —, caractères de contrôle supprimés, taille bornée.
 - **Une commande n'est affichée que si elle est exactement autorisée.** Correspondance stricte
   avec une commande de validation enregistrée ou une commande Git en lecture seule ; sinon
-  « Running an allowed command ». Un `tool_result` n'est jamais transmis : seule son issue l'est.
+  « Running an allowed command ». Depuis TASK-011 corrective, la correspondance s'évalue **segment
+  par segment** : la ligne est découpée sur `&&`, son préfixe `cd <chemin>` est retiré — jamais
+  affiché —, et **chaque** segment restant doit être exactement autorisé. Toute autre construction
+  — `;`, `|`, `>`, `<`, `` ` ``, `$(`, `&` isolé, guillemet hors navigation — fait renoncer à la
+  lecture. Un `tool_result` n'est jamais transmis : seule son issue l'est.
+- **La liste de validations de la tâche prime sur toute classification générique.** Un segment
+  correspondant mot pour mot à une commande enregistrée **est** une validation, même s'il s'agit
+  par ailleurs d'une commande Git en lecture seule. La classification générique ne décide que de
+  l'affichage. Un `git status` non enregistré reste affichable sans porter aucun verdict.
+- **Une issue ambiguë n'est jamais tranchée.** Une ligne enchaînant plusieurs validations qui
+  échoue les laisse `UNKNOWN` : le résultat unique ne dit pas laquelle a échoué. Une commande
+  relancée est représentée par son dernier résultat terminal, et ne redevient jamais `NOT_RUN`.
+  **Une seule exception, ouverte par TASK-011** : la sortie d'un `tool_result` peut être résumée
+  dans la review lorsque son `tool_use` correspond mot pour mot à une commande de validation
+  enregistrée. Ce résumé traverse la sanitation complète, est borné, et n'apparaît jamais dans un
+  événement de timeline.
 - **Les événements sont bornés, et la troncature est explicite.** Les bornes sont des constantes,
   jamais des variables d'environnement : une limite de sécurité qu'on peut desserrer n'en est plus
   une. Après troncature, le runner **continue de lire `stdout`** — cesser de lire figerait Claude
@@ -250,6 +265,42 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   `COMPLETED` ne devient jamais `CANCELLED`, ni l'inverse. Une violation Git prime sur tout.
 - **Un run annulé bloque la tâche jusqu'à review humaine.** `CANCELLED` mène à `BLOCKED`, jamais à
   `READY` : l'utilisateur doit regarder le repository avant de relancer.
+- **Une review historique ne lit jamais le dossier de travail actuel.** Elle se lit entièrement en
+  base. Recalculer un diff à l'affichage raconterait le présent en le présentant comme le passé,
+  et une modification faite après l'exécution — ce que NOX encourage — suffirait à le rendre faux.
+- **Un instantané de review finalisé est immuable.** `saveRunReview` refuse d'écrire si
+  `reviewCapturedAt` est déjà renseigné, et le registre du runner refuse un second `attachReview`.
+  La garantie vit dans la couche d'écriture, jamais dans la discipline de l'appelant.
+- **Aucun contenu sensible dans un patch.** `.env` et ses variantes, `*.pem`, `*.key`, `id_rsa`,
+  `id_ed25519`, `credentials.json`, `secrets.json` : chemin, type et statistiques visibles, `patch`
+  toujours `null`. La règle est appliquée deux fois — à la capture et à l'écriture en base — et la
+  seconde ne fait pas confiance à la première. Seuls `.env.example` et `.env.sample` sont exclus,
+  nommément.
+- **Aucun blob binaire en SQLite.** Un fichier binaire est reconnu et stocké sans contenu.
+- **Les patches sont bornés, et la troncature est explicite.** 200 fichiers, 256 Kio par patch,
+  4 Mio et 20 000 lignes par exécution — des constantes, comme les bornes d'événements. Une limite
+  atteinte ne fait jamais échouer une exécution : la liste des fichiers reste complète et
+  « Diff truncated » s'affiche.
+- **Un patch est nettoyé de ses secrets, pas de ses chemins.** Caractères de contrôle retirés,
+  valeurs `NOX_*` masquées ; ni chemins réécrits, ni espaces écrasés. Réécrire un chemin dans un
+  diff produirait un diff faux.
+- **Un patch est du texte, jamais du HTML.** Pas de `dangerouslySetInnerHTML`, pas de Markdown, pas
+  d'ANSI, pas de lien automatique, pas d'image. Les signes `+` et `-` restent dans le texte : la
+  couleur ne se prononce pas.
+- **Le fichier affiché est choisi parmi les lignes enregistrées.** `?file=` n'est jamais résolu sur
+  le disque : une valeur inconnue ne sélectionne rien. Il n'existe aucun chemin de code entre ce
+  paramètre et un système de fichiers.
+- **Les validations représentent uniquement ce qui a réellement été exécuté.** Les commandes sont
+  recopiées au lancement, jamais référencées ; une commande jamais lancée reste `NOT_RUN`, ce qui
+  est une information. Un code de sortie absent reste nul : « échoué » ne veut pas dire « code 1 ».
+- **Aucune validation n'est relancée automatiquement.** NOX ne lance jamais `npm run test` ni aucune
+  autre commande : ce serait une seconde surface d'exécution, et le résultat décrirait l'état du
+  disque d'aujourd'hui plutôt que celui de la fin de l'exécution.
+- **Aucune review reconstruite pour une exécution ancienne.** Un run sans instantané affiche
+  « Detailed review unavailable for this legacy run. » ; son diff n'est jamais recalculé depuis le
+  repository actuel. Une review **vide** et une review **absente** sont deux états distincts.
+- **Aucun commit n'est créé lors d'une review.** `Approve` et `Reopen` changent le statut de la
+  tâche, et rien d'autre : ni commit, ni `git add`, ni push, ni restauration, ni relance.
 - **Les tests automatisés utilisent uniquement le faux Claude.** Aucun ne consomme de quota, ne
   dépend du réseau, ni ne lance le vrai binaire.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux

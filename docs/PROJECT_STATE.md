@@ -3,34 +3,41 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 7 août 2026, à l'issue de `TASK-010`.
+**Dernière mise à jour** : 8 août 2026, à l'issue de `TASK-011 corrective`.
 
 ---
 
 ## 1. Phase actuelle
 
-**NOX montre ce que Claude Code fait, pendant qu'il le fait.** Jusqu'ici, une exécution de deux
-minutes affichait « Exécution en cours » et rien d'autre : l'utilisateur découvrait le travail une
-fois terminé. La page d'un run affiche désormais une timeline — lectures, recherches,
-modifications, validations, messages publics — qui se remplit en direct.
+**NOX montre maintenant ce que l'agent a produit, et pas seulement ce qu'il a fait.** TASK-010
+avait donné la timeline — les actions, en direct. TASK-011 donne la review : le diff détaillé
+fichier par fichier, l'état réel de chaque commande de validation, et deux boutons pour trancher.
 
-Ce que cette étape ajoute vraiment, c'est une **frontière de plus**. Le flux `stream-json` de
-Claude Code contient tout ce qu'il manipule : fichiers lus en entier, sorties d'outils,
-raisonnements intermédiaires, chemins absolus de la machine. Rien de tout cela ne quitte le
-runner. Ce qui circule est un événement court dont NOX décide chaque champ, et le raisonnement
-interne n'a même pas de forme dans laquelle être représenté.
+Ce que cette étape apporte de structurant, c'est une notion de **temps**. Jusqu'ici tout ce que
+NOX affichait décrivait le présent du disque. Une review, non : elle est capturée au moment précis
+où l'exécution se termine, et ne bouge plus. L'utilisateur peut relire, corriger, éditer — la
+review continue de dire ce que l'agent avait produit ce jour-là. Un `git diff` recalculé à
+l'affichage aurait été plus simple à écrire, et faux dès la deuxième lecture.
 
-Second apport : **`Cancel run`**. Une exécution active s'interrompt, le processus et ses
-descendants s'arrêtent, l'état Git est constaté — et rien n'est restauré. Un run annulé bloque la
-tâche : c'est à l'utilisateur de regarder ce que l'agent a laissé avant de relancer.
+Second apport : les **validations structurées**. `npm run test` passé, `npm run lint` jamais
+lancé — ce sont deux informations différentes, et la seconde compte autant que la première. NOX ne
+relance aucune commande pour combler le tableau : ce serait remplacer l'histoire réelle du run par
+une reconstitution.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 10 — streaming et annulation
-(terminée)**. L'étape 11 (review Git intégrée et validations structurées) devient l'étape active.
+Enfin, `Approve` et `Reopen` : la décision revient à l'humain, et aucun des deux ne touche à Git.
+
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 11 — review Git intégrée et
+validations structurées (terminée)**. L'étape 12 (feedback de review et reprise ciblée d'une
+session Claude) devient l'étape active.
 
 ## 2. Tâche active
 
-`TASK-010 — Streaming des événements et annulation d'une exécution Claude` : **terminée**, en
-attente de review humaine.
+`TASK-011 — Review Git intégrée et validations structurées` : **terminée**, en attente de review
+humaine, **corrective incluse**.
+
+Le premier run réel a révélé un défaut de corrélation : une validation exécutée restait `NOT_RUN`
+parce que Claude Code préfixe ses commandes Bash de `cd "<répertoire>" &&`. Corrigé, testé, et
+consigné au § 3.29 bis.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
@@ -454,6 +461,194 @@ sur `Cancel run`. Vérifier : `Cancelling` apparaît immédiatement ; le process
 passe `Cancelled` ; la tâche passe `Blocked` ; `git status` et `git diff` montrent l'état laissé ;
 aucun commit n'a été créé ; aucun fichier n'a été restauré.
 
+### 3.26 Capture de review — `apps/runner/src/repositories/git-review.ts`
+
+Capture détaillée déclenchée **à la finalisation** d'une exécution, dans tous les cas finaux —
+`COMPLETED`, `FAILED`, `BLOCKED`, `CANCELLED`.
+
+| Commande | Ce qu'elle apporte |
+| --- | --- |
+| `git diff --name-status -z -M -C <headBefore>` | statuts, renommages, copies |
+| `git diff --numstat -z -M -C <headBefore>` | additions, suppressions, détection binaire |
+| `git ls-files --others --exclude-standard -z` | fichiers **créés**, invisibles pour `git diff` |
+| `git diff --no-color -M -C <headBefore> -- :(literal)<path>` | patch d'un fichier suivi |
+
+Toutes en lecture seule, par `execFile` sans shell, sans réseau, sans fichier temporaire. Le
+format `-z` est indispensable : les noms de fichiers ont le droit de contenir espaces et
+tabulations, qu'une sortie « humaine » utilise comme séparateurs.
+
+Le patch d'un fichier non suivi est **fabriqué** par NOX à partir de son contenu, lu de façon
+bornée dès l'appel système. La seule alternative aurait été `git add`, et la review est une
+lecture.
+
+Un échec de capture n'altère **jamais** le résultat de Claude Code : le compte rendu, les durées
+et l'état Git restent ce qu'ils sont, et seul `reviewErrorCode` est renseigné.
+
+### 3.27 Modèles de review — `RunFileChange` et `RunValidationResult`
+
+Migration `20260807133453_add_run_review`, purement additive : trois `ALTER TABLE ADD COLUMN` sur
+`Run` et deux `CREATE TABLE`. Prisma proposait de **reconstruire** `Run` (`DROP` puis `RENAME`) ;
+le bloc a été remplacé à la main — cette table porte l'historique réel des exécutions.
+
+`Run` gagne trois colonnes, et seulement trois : `reviewCapturedAt`, `reviewErrorCode`,
+`reviewOmittedFiles`. Tout le reste — additions, suppressions, fichiers masqués, patches tronqués —
+se dérive des lignes, et un compteur dénormalisé finirait par diverger de ce qu'il prétend décrire.
+
+`reviewCapturedAt` distingue une review **vide** d'une review **absente** : « l'agent n'a rien
+modifié » et « NOX ne sait pas » sont deux réponses différentes.
+
+### 3.28 Bornes et masquage
+
+| Borne | Valeur |
+| --- | --- |
+| Fichiers décrits | 200 |
+| Patch par fichier | 256 Kio |
+| Patches par exécution | 4 Mio |
+| Lignes de diff par exécution | 20 000 |
+| Résumé d'une validation | 8 Kio |
+
+Constantes, comme les bornes d'événements de TASK-010. Une limite atteinte ne fait jamais échouer
+l'exécution.
+
+Fichiers sensibles : `.env` et ses variantes, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`,
+`credentials.json`, `secrets.json` — chemin, type et statistiques visibles, contenu jamais.
+`.env.example` et `.env.sample` sont exclus nommément. La règle est appliquée **deux fois** : à la
+capture, où le patch n'est pas demandé à Git, et à l'écriture en base, qui ne fait pas confiance à
+la capture.
+
+Un patch traverse un nettoyage restreint — caractères de contrôle, valeurs `NOX_*` — et **non** le
+nettoyeur d'événements : celui-ci réécrit les chemins et écrase les espaces, ce qui produirait un
+diff faux.
+
+### 3.29 Validations structurées
+
+Les commandes de la tâche sont **recopiées** dans `RunValidationResult` au lancement, au statut
+`NOT_RUN`. Pendant l'exécution, un `tool_use` Bash dont un **segment** correspond mot pour mot à
+l'une d'elles la passe en `RUNNING` ; le `tool_result` de même `tool_use_id` la conclut.
+
+| État final | Signification |
+| --- | --- |
+| `PASSED` | lancée, résultat sans erreur |
+| `FAILED` | lancée, résultat en erreur |
+| `NOT_RUN` | jamais lancée — une information, pas un trou |
+| `UNKNOWN` | lancée, sans issue propre exploitable |
+
+Aucun code de sortie n'est déduit ; aucune sortie n'est analysée pour en extraire un nombre de
+tests. NOX ne relance **aucune** commande.
+
+Correctif au passage : `git status` était compté comme une validation par TASK-010. Une commande
+Git en lecture seule reste affichable, mais ne porte aucun verdict sur le code — **sauf** si la
+tâche l'a justement enregistrée comme validation, voir ci-dessous.
+
+### 3.29 bis Lecture d'une commande Bash — correction du premier run réel
+
+Le premier run réel de TASK-011 a montré que Claude Code 2.1.223 n'envoie jamais une commande nue :
+
+```text
+enregistré par la tâche : git diff --check
+émis par Claude Code    : cd "D:/Projets/Dev/nox-claude-test" && git diff --check
+```
+
+NOX comparait la ligne entière. Résultat : une validation pourtant exécutée restait `NOT_RUN`, et
+la timeline affichait « Running an allowed command » jusque pour un simple `git status`.
+
+`apps/runner/src/claude/stream/bash-command.ts` lit désormais la ligne **par segments** : découpage
+sur `&&`, retrait du préfixe `cd <chemin>` — jamais affiché —, puis chaque segment restant doit
+être exactement autorisé. Toute autre construction (`;`, `|`, `>`, `<`, `` ` ``, `$(`, `&` isolé,
+guillemet hors navigation) fait renoncer à la lecture : rien n'est affiché, rien n'est corrélé.
+
+Deux règles en découlent :
+
+- **La liste de la tâche prime sur la classification générique.** `git diff --check` est une
+  commande Git en lecture seule *et* une validation, dès lors que l'utilisateur l'a inscrite.
+- **Une issue ambiguë n'est pas tranchée.** Une ligne enchaînant deux validations qui échoue les
+  laisse `UNKNOWN` ; réussie, elle les marque toutes `PASSED` — avec `&&`, une réussite prouve que
+  chacune a tourné. Une commande relancée est représentée par son dernier résultat terminal.
+
+**Forme réelle confirmée** (voir [D-168](DECISIONS.md#d-168--le-comportement-observé-fait-autorité)) :
+`tool_use` porte `id`, `name` et `input.command` ; `tool_result` porte `tool_use_id`, `content`,
+`is_error`, et **aucun** `exit_code` — le code figure dans le texte (« Exit code 2 »), et NOX ne le
+lit pas. Un type `rate_limit_event`, inconnu de TASK-010, existe et reste ignoré.
+
+### 3.30 Page de review — `/projects/[id]/tasks/[taskId]/runs/[runId]/review`
+
+En-tête, résumé factuel, validations, liste de fichiers navigable, diff. Elle lit **SQLite,
+jamais le repository**.
+
+`?file=` sélectionne une ligne enregistrée par égalité de chemin ; une valeur inconnue ne
+sélectionne rien. La protection n'est pas un filtre mais une absence de chemin de code entre ce
+paramètre et un système de fichiers.
+
+Le diff est rendu ligne par ligne par React : pas de `dangerouslySetInnerHTML`, pas de Markdown,
+pas d'ANSI, pas de lien automatique, pas d'image, pas de coloration syntaxique. Les signes `+` et
+`-` restent dans le texte — la couleur ne se prononce pas.
+
+`Approve` (`REVIEW → COMPLETED`) et `Reopen` (`REVIEW → READY`) ne créent ni commit, ni `git add`,
+ni push, et ne restaurent rien.
+
+### 3.31 Validations exécutées — `TASK-011`
+
+| Commande | Résultat |
+| --- | --- |
+| `npm install` | ✅ aucune dépendance ajoutée |
+| `npm run db:generate` | ✅ client régénéré |
+| `npm run db:migrate` | ✅ `20260807133453_add_run_review` appliquée, données intactes |
+| `npm run test` | ✅ **1 488 tests, 264 suites, 1 484 succès, 0 échec, 4 ignorés** |
+| `npm run lint` | ✅ |
+| `npm run typecheck` | ✅ 4 workspaces |
+| `npm run build` | ✅ 14 routes |
+
+### 3.32 Test fonctionnel de TASK-011
+
+Repository Git temporaire avec remote `bare` local, base SQLite **isolée**, runner réel sur le
+port 4321, web en **mode production** sur le port 3011, Claude Code remplacé par la fixture
+`fake-claude.mjs` (mode `stream-review`, qui modifie réellement le repository). **Aucune requête
+Claude réelle.**
+
+**93 vérifications, toutes passées**, en sept sections :
+
+1. Exécution réussie : fichier modifié, fichier créé, fichier supprimé, binaire et fichier
+   sensible tous présents dans la review, avec les bons types de changement et les bons patches.
+2. Sécurité du stockage : aucun contenu binaire, aucun contenu sensible, aucun chemin absolu,
+   aucun jeton — ni en base, ni dans le HTML.
+3. Validations : `npm run test` = `Passed` avec son code de sortie rapporté, `npm run lint` =
+   `Not run`, les deux affichées et nommées.
+4. Page de review : résumé, patch du nouveau fichier, `<script>alert(1)</script>` **échappé**,
+   « Binary file changed », « Sensitive file — content hidden ».
+5. Décision : la tâche passe en `REVIEW`, la page propose `Approve` et `Reopen`, `Approve` la
+   passe à `Done` **sans créer de commit et sans rien restaurer**, `Reopen` la remet à `Ready`,
+   et un statut réservé reste refusé.
+6. Immuabilité : après édition manuelle du `README.md` et création d'un fichier, la review
+   rechargée est **identique octet pour octet**, et ne mentionne ni l'édition ni le nouveau
+   fichier.
+7. Robustesse : quatre valeurs `?file=` falsifiées — remontées `..`, chemin absolu Windows,
+   chemin absolu du repository, encodage double — toutes refusées proprement, sans lecture disque
+   et sans erreur ; `?file=.env` reste masqué.
+
+Plus : une exécution **annulée** dont la review montre le travail partiel et annonce « Partial
+changes », et une exécution **legacy** sans instantané qui affiche « Detailed review unavailable
+for this legacy run. » sans qu'aucun diff ne soit reconstruit. État final : un seul commit.
+
+> **Réserve de méthode, inchangée depuis TASK-010.** Les Server Actions de Next.js ne sont pas
+> rejouables depuis ce harnais. Le script appelle donc **les mêmes fonctions serveur** qu'elles
+> appellent — `updateTaskStatus` pour `Approve` et `Reopen`, `seedRunValidations` au lancement —
+> dans le même ordre et avec les mêmes garde-fous. Sont réellement exercés de bout en bout : le
+> runner, la capture Git sur un vrai repository, le registre, la persistance, le transfert vers la
+> base et le rendu des pages.
+
+### 3.33 Procédure de vérification manuelle de TASK-011 — à exécuter par l'utilisateur
+
+Non exécutée : elle consomme du quota Claude. Utiliser le repository `nox-claude-test`.
+
+1. Créer une petite tâche réelle demandant deux ou trois modifications de fichiers.
+2. Y ajouter au moins une commande de validation.
+3. Lancer Claude Code, laisser l'exécution se terminer.
+4. Ouvrir `Review changes`.
+5. Comparer la review de NOX avec `git status` et `git diff` dans un terminal.
+6. Vérifier que les deux racontent la même chose — mêmes fichiers, mêmes lignes.
+7. Vérifier les validations structurées : celle qui a tourné, celle qui n'a pas tourné.
+8. Choisir `Approve` ou `Reopen`, puis vérifier que `git log` n'a pas bougé.
+
 ## 4. Éléments non commencés
 
 - Reprise d'une session Claude (`--resume`), continuation (`--continue`), message envoyé à une
@@ -472,14 +667,15 @@ aucun commit n'a été créé ; aucun fichier n'a été restauré.
 
 **Aucun blocage.** Toutes les validations passent.
 
-⚠️ **Une réserve à connaître** : la forme réelle des messages `stream-json` de Claude Code
-`2.1.223` n'est que **partiellement** observée. Le sont désormais : le message `system/init`, dont
-la forme correspond à celle attendue par le normaliseur, et un sous-type `system/api_retry` qui
-n'était pas prévu — il est ignoré, comme tout type inconnu. Le message `result` avait été confirmé
-par le premier run réel de TASK-008. Les messages `assistant` et `user` — donc les blocs `text`,
-`tool_use` et `tool_result` — n'ont **pas** encore été vus en conditions réelles ; le normaliseur
-suit pour eux le format documenté. Un écart produirait une timeline appauvrie, jamais une erreur.
-La procédure de vérification manuelle du § 3.25 tranchera.
+✅ **Réserve levée.** La forme réelle des messages `stream-json` de Claude Code `2.1.223` est
+désormais **entièrement observée** : `system/init`, `system/api_retry`, `assistant` (blocs `text`
+et `tool_use`), `user` (bloc `tool_result`), `result`, plus un `rate_limit_event` inconnu de
+TASK-010 et ignoré comme tout type inattendu.
+
+Elle a été établie de deux façons indépendantes, sans consommer de quota : la transcription de
+session du premier run réel, et un rejeu du vrai binaire contre un serveur Messages **local**. La
+supposition de TASK-010 était juste sur la structure et fausse sur le contenu : une commande Bash
+arrive préfixée de `cd "<répertoire>" &&`. Voir le § 3.29 bis pour la correction.
 
 ## 6. Dette technique et limites
 
@@ -488,70 +684,76 @@ La procédure de vérification manuelle du § 3.25 tranchera.
 2. **Les événements ne survivent pas à un redémarrage du runner** au-delà de ce qui a déjà été
    persisté. Ce qui a été observé est acquis ; ce qui ne l'avait pas encore été est perdu, et NOX
    ne prétend pas le connaître.
-3. **La forme réelle des messages `assistant` et `user` de `stream-json` n'a pas été observée**
-   (voir § 5). `system/init` et `result` l'ont été.
+3. **La lecture d'une commande Bash ne comprend qu'une construction : le chainage `&&`.** Tout le
+   reste — tuyau, redirection, substitution, point-virgule — fait renoncer à la lecture. Une
+   validation lancée derrière une telle ligne restera donc `NOT_RUN`, ce qui est prudent mais
+   incomplet. Élargir demanderait un analyseur de shell, et un analyseur approximatif finirait par
+   autoriser ce qu'il n'a pas compris
+   ([D-165](DECISIONS.md#d-165--une-commande-bash-est-lue-par-segments-jamais-comme-un-bloc)).
 4. **Un arrêt peut échouer.** Si le processus ne ferme pas, le run est `BLOCKED` avec
    `CLAUDE_CANCEL_FAILED` et le message dit que le processus peut encore écrire. NOX ne le tue pas
    par son nom, et ne cherche pas ses descendants réattachés ailleurs.
 5. **Aucune reprise de session** : un run annulé se relance depuis le début.
 6. **Une seule exécution active**, tous projets confondus.
-7. **Le résultat des commandes de validation n'est pas extrait** : la timeline dit `Validation
-   succeeded` ou `Validation failed`, sans code de sortie ni nombre de tests. Aucun parser
-   spécifique n'a été écrit — c'est le sujet de `TASK-011`.
-8. **Le diff complet n'est pas affiché** — seuls les fichiers modifiés et `git diff --stat`.
-9. **La détection de limite d'utilisation est heuristique.** Prudente par construction : en cas
+7. **Le résultat des commandes de validation n'est pas analysé** : ni nombre de tests, ni
+   couverture, ni diagnostics. Un extrait borné de la sortie est conservé pour la review, et rien
+   n'en est déduit. Le code de sortie reste nul dans les faits — le vrai binaire n'en fournit
+   aucun ([D-156](DECISIONS.md#d-156--aucun-code-de-sortie-nest-déduit-aucune-sortie-nest-analysée)).
+8. **La détection de limite d'utilisation est heuristique.** Prudente par construction : en cas
    de doute elle retourne une erreur générique
    ([D-106](DECISIONS.md#d-106--détection-prudente-des-limites-dutilisation)).
-10. **La modification manuelle d'un `tasks/TASK-xxx.md` ne met pas à jour la tâche.**
-11. **Une spécification ne se modifie pas après création.** Seul le statut change.
-12. **Une tâche possédant un historique d'exécution ne peut pas être supprimée**, et aucun
+9. **La modification manuelle d'un `tasks/TASK-xxx.md` ne met pas à jour la tâche.**
+10. **Une spécification ne se modifie pas après création.** Seul le statut change.
+11. **Une tâche possédant un historique d'exécution ne peut pas être supprimée**, et aucun
     archivage n'existe encore
     ([D-115](DECISIONS.md#d-115--une-tâche-possédant-un-historique-nest-pas-supprimable)).
-13. **La suppression n'est pas atomique entre le disque et SQLite.** Un échec en base après
+12. **La suppression n'est pas atomique entre le disque et SQLite.** Un échec en base après
     suppression réussie du fichier laisse une tâche sans document — état visible, signalé, et
     reprenable d'un second clic
     ([D-118](DECISIONS.md#d-118--le-fichier-est-supprimé-avant-la-tâche-en-base)).
-14. **Une fenêtre de concurrence résiduelle subsiste** entre le dernier contrôle de nature et
+13. **Une fenêtre de concurrence résiduelle subsiste** entre le dernier contrôle de nature et
     l'`unlink` : Node n'expose pas de suppression conditionnée à un descripteur déjà ouvert. Elle
     est bornée dans ses conséquences — `unlink` ne suit jamais un lien, donc un lien apparu
     entre-temps serait retiré à la place du document, jamais sa cible — et n'est pas couverte par
     un test, faute de pouvoir provoquer la course de façon déterministe.
-15. **Aucune suppression de projet, ni d'exécution.** Aucun forçage, aucune suppression
+14. **Aucune suppression de projet, ni d'exécution.** Aucun forçage, aucune suppression
     récursive, aucune corbeille, aucune restauration.
-16. **Un trou dans la numérotation** des tâches et des exécutions est possible après un échec
+15. **Un trou dans la numérotation** des tâches et des exécutions est possible après un échec
     survenu entre la réservation et l'enregistrement — et désormais aussi après une suppression,
     ce qui est voulu ([D-117](DECISIONS.md#d-117--le-numéro-dune-tâche-supprimée-reste-réservé)).
-17. **Aucun dossier ne peut être créé ni supprimé depuis NOX**, à l'exception de la création de
+16. **Aucun dossier ne peut être créé ni supprimé depuis NOX**, à l'exception de la création de
     `tasks/`.
-18. **`beforeunload` ne couvre pas la navigation interne de Next.js.**
-19. **Le périmètre d'inspection des documents est figé** ; 500 documents maximum.
-20. **Pas de test de rendu React.** Couverture assurée par les tests unitaires, le test
+17. **`beforeunload` ne couvre pas la navigation interne de Next.js.**
+18. **Le périmètre d'inspection des documents est figé** ; 500 documents maximum.
+19. **Pas de test de rendu React.** Couverture assurée par les tests unitaires, le test
     d'intégration réel et les tests fonctionnels HTTP en mode production.
-21. **Quatre tests ignorés sous Windows** : liens symboliques de fichier (privilège requis). Les
+20. **Quatre tests ignorés sous Windows** : liens symboliques de fichier (privilège requis). Les
     cas d'évasion correspondants restent couverts par des jonctions.
-22. **Les Server Actions ne sont pas couvertes par un test fonctionnel HTTP** (voir la réserve
+21. **Les Server Actions ne sont pas couvertes par un test fonctionnel HTTP** (voir la réserve
     de méthode du § 3.24). Leurs règles le sont par des tests unitaires, leur câblage par le
     build.
-23. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+22. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
     clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-011` — Review Git intégrée et validations structurées.**
+**`TASK-012` — Feedback de review et reprise ciblée d'une session Claude.**
 
-Objectif : afficher le diff détaillé d'un run, structurer les résultats des validations et aider
-l'utilisateur à accepter ou rejeter le travail sans créer automatiquement de commit.
+Objectif : permettre à l'utilisateur de rejeter une review avec un commentaire, puis de reprendre
+la session Claude associée pour appliquer un correctif ciblé, sans orchestration OpenAI
+automatique.
 
-C'est la suite naturelle : NOX sait maintenant montrer ce que l'agent **fait**, il lui reste à
-montrer ce que l'agent **a produit**, de façon relisible.
+C'est la suite naturelle : NOX sait montrer ce que l'agent a fait, puis ce qu'il a produit. Il lui
+reste à permettre de **répondre** — sans recopier le contexte à la main, ce qui est exactement le
+problème que NOX existe pour supprimer.
 
 ## 8. État Git
 
 - Aucun commit créé par Claude Code.
 - Aucun push effectué.
 - Historique Git non modifié.
-- Commit de départ : `ee1fa80` (`feat: add safe deletion and English status labels`), contenant
-  bien `TASK-009`.
-- **Répertoire de travail propre** au démarrage de `TASK-010`, branche `main` alignée sur
+- Commit de départ : `625be85` (`feat: add Claude event streaming and cancellation`), contenant
+  bien `TASK-010`.
+- **Répertoire de travail propre** au démarrage de `TASK-011`, branche `main` alignée sur
   `origin/main`.
-- Les modifications de `TASK-010` sont locales, non indexées, disponibles pour review.
+- Les modifications de `TASK-011` sont locales, non indexées, disponibles pour review.

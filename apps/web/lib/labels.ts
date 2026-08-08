@@ -27,12 +27,18 @@
 
 import {
   CLAUDE_RUN_EVENT_KIND,
+  RUN_CHANGE_TYPE,
   RUN_STATUS,
+  RUN_VALIDATION_STATUS,
+  RUN_VALIDATION_SUMMARY,
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_PRIORITY,
   TASK_STATUS,
   type ClaudeRunEventKind,
+  type RunChangeType,
   type RunStatus,
+  type RunValidationStatus,
+  type RunValidationSummary,
   type TaskDocumentSyncStatus,
   type TaskPriority,
   type TaskStatus,
@@ -90,6 +96,64 @@ const RUN_EVENT_KIND_LABELS: Record<ClaudeRunEventKind, string> = {
   [CLAUDE_RUN_EVENT_KIND.ERROR]: "Error",
   [CLAUDE_RUN_EVENT_KIND.RESULT]: "Result",
   [CLAUDE_RUN_EVENT_KIND.TRUNCATED]: "Truncated",
+};
+
+/**
+ * Nature d'un changement de fichier.
+ *
+ * `Untracked` reste distinct d'`Added` : Git ne les traite pas pareil, et
+ * l'utilisateur non plus — le second est deja dans l'index, le premier attend
+ * encore qu'on decide de son sort.
+ */
+const RUN_CHANGE_TYPE_LABELS: Record<RunChangeType, string> = {
+  [RUN_CHANGE_TYPE.ADDED]: "Added",
+  [RUN_CHANGE_TYPE.MODIFIED]: "Modified",
+  [RUN_CHANGE_TYPE.DELETED]: "Deleted",
+  [RUN_CHANGE_TYPE.RENAMED]: "Renamed",
+  [RUN_CHANGE_TYPE.COPIED]: "Copied",
+  [RUN_CHANGE_TYPE.TYPE_CHANGED]: "Type changed",
+  [RUN_CHANGE_TYPE.UNTRACKED]: "Untracked",
+};
+
+/**
+ * Marqueur d'une ligne de la liste de fichiers.
+ *
+ * Les memes lettres que `git status`, parce que c'est le vocabulaire que
+ * l'utilisateur a deja dans son terminal. Il est **double** d'un libelle complet
+ * lu par les lecteurs d'ecran : une lettre seule ne se prononce pas.
+ */
+const RUN_CHANGE_TYPE_MARKS: Record<RunChangeType, string> = {
+  [RUN_CHANGE_TYPE.ADDED]: "A",
+  [RUN_CHANGE_TYPE.MODIFIED]: "M",
+  [RUN_CHANGE_TYPE.DELETED]: "D",
+  [RUN_CHANGE_TYPE.RENAMED]: "R",
+  [RUN_CHANGE_TYPE.COPIED]: "C",
+  [RUN_CHANGE_TYPE.TYPE_CHANGED]: "T",
+  [RUN_CHANGE_TYPE.UNTRACKED]: "?",
+};
+
+/**
+ * Etat d'une commande de validation.
+ *
+ * `Not run` est un libelle a part entiere, pas un tiret : une commande jamais
+ * lancee est une information, et l'afficher comme une donnee manquante la ferait
+ * passer pour un defaut d'affichage.
+ */
+const RUN_VALIDATION_STATUS_LABELS: Record<RunValidationStatus, string> = {
+  [RUN_VALIDATION_STATUS.NOT_RUN]: "Not run",
+  [RUN_VALIDATION_STATUS.RUNNING]: "Running",
+  [RUN_VALIDATION_STATUS.PASSED]: "Passed",
+  [RUN_VALIDATION_STATUS.FAILED]: "Failed",
+  [RUN_VALIDATION_STATUS.UNKNOWN]: "Unknown",
+};
+
+/** Etat global des validations d'une execution. */
+const RUN_VALIDATION_SUMMARY_LABELS: Record<RunValidationSummary, string> = {
+  [RUN_VALIDATION_SUMMARY.NONE]: "None expected",
+  [RUN_VALIDATION_SUMMARY.PASSED]: "Passed",
+  [RUN_VALIDATION_SUMMARY.FAILED]: "Failed",
+  [RUN_VALIDATION_SUMMARY.INCOMPLETE]: "Incomplete",
+  [RUN_VALIDATION_SUMMARY.UNKNOWN]: "Unknown",
 };
 
 const DOCUMENT_SYNC_LABELS: Record<TaskDocumentSyncStatus, string> = {
@@ -164,6 +228,22 @@ export function runStatusLabel(status: RunStatus): string {
 
 export function runEventKindLabel(kind: ClaudeRunEventKind): string {
   return RUN_EVENT_KIND_LABELS[kind];
+}
+
+export function runChangeTypeLabel(changeType: RunChangeType): string {
+  return RUN_CHANGE_TYPE_LABELS[changeType];
+}
+
+export function runChangeTypeMark(changeType: RunChangeType): string {
+  return RUN_CHANGE_TYPE_MARKS[changeType];
+}
+
+export function runValidationStatusLabel(status: RunValidationStatus): string {
+  return RUN_VALIDATION_STATUS_LABELS[status];
+}
+
+export function runValidationSummaryLabel(summary: RunValidationSummary): string {
+  return RUN_VALIDATION_SUMMARY_LABELS[summary];
 }
 
 export function documentSyncStatusLabel(status: TaskDocumentSyncStatus): string {

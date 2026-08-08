@@ -36,12 +36,25 @@
  *   stream-huge     plus de 2 000 evenements, suivis du resultat final
  *   stream-nothing  aucun resultat final : le flux s'arrete sans conclure
  *
+ * Mode ajoute par TASK-011 :
+ *
+ *   stream-review   modifie reellement le repository — fichier edite, fichier
+ *                   cree, fichier supprime, binaire, fichier sensible — puis
+ *                   lance la premiere commande de validation et pas la seconde
+ *
+ * Mode ajoute par TASK-011 corrective :
+ *
+ *   stream-validation  emet des commandes Bash a la forme **reelle** de Claude
+ *                      Code 2.1.223, prefixees de `cd "<repertoire>" &&` : une
+ *                      commande Git non enregistree, une ligne composee refusee,
+ *                      puis la validation enregistree
+ *
  * Ces modes n'existent que pour les tests. Aucun n'est atteignable en
  * production : le mode par defaut reste `success`.
  */
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -206,6 +219,124 @@ switch (mode) {
     break;
   }
 
+  case "stream-review-slow": {
+    // Ecrit un travail **partiel**, puis traine : c'est l'etat qu'une annulation
+    // doit laisser, et que la review doit savoir montrer.
+    writeFileSync(
+      path.join(process.cwd(), "partiel.md"),
+      "# Travail partiel\n\nInterrompu au milieu.\n",
+      "utf8",
+    );
+    process.stdout.write(
+      `${JSON.stringify({ type: "system", subtype: "init", session_id: "fake-partiel" })}\n`,
+    );
+    await pause(Number(process.env.FAKE_CLAUDE_SLEEP_MS ?? "30000"));
+    process.stdout.write(JSON.stringify(success));
+    process.exit(0);
+    break;
+  }
+
+  case "stream-review": {
+    // Le seul mode qui **modifie reellement** le repository : la review se
+    // capture sur le disque, pas sur le flux, et un flux seul ne prouverait
+    // rien. Chaque ecriture ci-dessous couvre un cas de la capture.
+    const root = process.cwd();
+
+    // 1. Un fichier suivi, modifie.
+    writeFileSync(
+      path.join(root, "README.md"),
+      "# Depot de test\n\nLigne ajoutee par l'agent.\n",
+      "utf8",
+    );
+    // 2. Un fichier cree — donc non suivi, invisible pour `git diff`.
+    writeFileSync(
+      path.join(root, "nouveau.md"),
+      "# Nouveau\n\n<script>alert(1)</script>\n\nDu texte apres la balise.\n",
+      "utf8",
+    );
+    // 3. Un fichier suivi, supprime.
+    rmSync(path.join(root, "a-supprimer.md"), { force: true });
+    // 4. Un binaire : son contenu ne doit jamais entrer en base.
+    writeFileSync(path.join(root, "donnees.bin"), Buffer.from([0, 1, 2, 0, 255, 0, 42]));
+    // 5. Un fichier sensible : son existence est visible, son contenu non.
+    writeFileSync(path.join(root, ".env"), "SECRET=valeur-ultra-confidentielle\n", "utf8");
+
+    const validation = process.env.FAKE_CLAUDE_VALIDATION ?? "npm run test";
+    const lines = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "fake-session-review" }),
+      JSON.stringify(toolUse("rv-1", "Edit", { file_path: "README.md" })),
+      JSON.stringify(toolResult("rv-1")),
+      JSON.stringify(toolUse("rv-2", "Write", { file_path: "nouveau.md" })),
+      JSON.stringify(toolResult("rv-2")),
+      // La premiere validation tourne et reussit ; la seconde n'est jamais
+      // lancee, et doit rester « Not run » dans la review.
+      JSON.stringify(toolUse("rv-3", "Bash", { command: validation })),
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "rv-3",
+              content: "Test suite: 12 passed, 0 failed.",
+              is_error: false,
+              exit_code: 0,
+            },
+          ],
+        },
+      }),
+      JSON.stringify(assistantText("J'ai modifie le README et cree un fichier.")),
+    ];
+
+    for (const line of lines) {
+      process.stdout.write(`${line}\n`);
+    }
+    process.stdout.write(JSON.stringify(success));
+    process.exit(0);
+    break;
+  }
+
+  case "stream-validation": {
+    // Reproduit la forme **reelle** observee avec Claude Code 2.1.223 : chaque
+    // commande Bash est prefixee du repertoire de travail. C'est ce prefixe qui
+    // faisait rester une validation pourtant executee a « Not run ».
+    const root = process.cwd();
+    const cd = `cd "${root.replaceAll("\\", "/")}"`;
+    const validation = process.env.FAKE_CLAUDE_VALIDATION ?? "git diff --check";
+
+    writeFileSync(
+      path.join(root, "README.md"),
+      "# Depot de test\n\nSection ajoutee pendant la validation.\n",
+      "utf8",
+    );
+
+    const lines = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "fake-session-validation" }),
+      // 1. Une commande Git en lecture seule, **non** enregistree comme
+      //    validation : affichable, mais sans verdict sur le code.
+      JSON.stringify(toolUse("fv-1", "Bash", { command: `${cd} && git status --short` })),
+      JSON.stringify(realToolResult("fv-1", " M README.md", false)),
+      // 2. Une ligne composee que Claude Code refuse lui-meme, faute d'une
+      //    autorisation couvrant toutes ses parties.
+      JSON.stringify(toolUse("fv-2", "Bash", { command: `${cd} && ${validation}; echo "exit=$?"` })),
+      JSON.stringify(
+        realToolResult("fv-2", "This Bash command contains multiple operations.", true),
+      ),
+      // 3. La validation enregistree, cette fois seule derriere son `cd`.
+      JSON.stringify(toolUse("fv-3", "Bash", { command: `${cd} && ${validation}` })),
+      JSON.stringify(realToolResult("fv-3", "Aucune erreur d'espaces ni de conflit.", false)),
+      JSON.stringify(assistantText("## Validations executees\n\n- " + validation + " : ok.")),
+    ];
+
+    for (const line of lines) {
+      process.stdout.write(`${line}\n`);
+    }
+    process.stdout.write(JSON.stringify(success));
+    process.exit(0);
+    break;
+  }
+
   case "stream-hostile": {
     for (const line of hostileSession()) {
       process.stdout.write(`${line}\n`);
@@ -274,6 +405,27 @@ function toolUse(id, name, input) {
   return {
     type: "assistant",
     message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] },
+  };
+}
+
+/**
+ * `tool_result` a la forme reelle de Claude Code 2.1.223.
+ *
+ * Deux differences avec `toolResult` : le contenu est court et choisi, et
+ * **aucun `exit_code` n'est fourni** — le vrai binaire n'en emet pas, il ecrit
+ * « Exit code 2 » dans le texte. NOX ne le lit pas : ce serait fabriquer une
+ * precision a partir d'un format instable.
+ */
+function realToolResult(id, content, isError) {
+  return {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", content, is_error: isError, tool_use_id: id }],
+    },
+    parent_tool_use_id: null,
+    session_id: "fake-session-validation",
+    tool_use_result: content,
   };
 }
 

@@ -1757,3 +1757,396 @@ descend bien l'arbre, ce qu'un test sur le seul parent ne montrerait pas.
 La course entre la fin et l'annulation est testée avec un lanceur **contrôlable** — les tests
 décident quand les morceaux de `stdout` arrivent et quand le processus ferme. Avec un vrai
 processus, cette course ne serait jamais déterministe.
+
+### D-145 — Le snapshot de review est pris à la fin de l'exécution
+
+**Décision.** Les changements détaillés sont capturés au moment précis où l'exécution devient
+finale — après la capture Git, avant que le statut ne soit annoncé — et persistés tels quels. La
+page de review ne recalcule jamais rien.
+
+**Justification.** Une review et un `git diff` répondent à deux questions différentes. Le second
+dit ce que le dossier de travail contient **maintenant** ; la première doit dire ce que l'agent
+avait produit. Or NOX invite explicitement l'utilisateur à relire puis à corriger : dès la
+première édition faite dans l'éditeur, un diff recalculé raconterait une autre histoire, et
+personne ne s'en apercevrait. Un témoignage qui se réécrit tout seul est pire qu'aucun témoignage.
+
+La capture est **tentée dans tous les cas finaux** — réussite, échec, blocage, annulation. C'est
+justement après un échec ou une interruption qu'on a le plus besoin de voir ce qui a été laissé
+sur le disque.
+
+**Ce que cela écarte.** Une page de review qui lirait le repository à chaque affichage. Elle
+aurait été plus simple à écrire, et fausse dès le deuxième chargement.
+
+### D-146 — Le point de comparaison est `gitHeadBefore`, pas `HEAD`
+
+**Décision.** La capture compare le dossier de travail au commit enregistré au lancement, pas à
+`HEAD`.
+
+**Justification.** Le repository était obligatoirement propre au démarrage : `headBefore` plus
+l'arbre final décrit donc exactement ce que l'exécution a produit. Comparer à `HEAD` donnerait la
+même réponse dans tous les cas **sauf un** — celui où l'agent a créé un commit interdit, c'est-à-dire
+le seul cas où la question compte vraiment. Dans cette situation le snapshot est conservé mais
+marqué `unreliable` : il mélange ce qui a été commité et ce qui ne l'a pas été, et l'interface le
+dit plutôt que de laisser croire à une lecture propre.
+
+### D-147 — Un stockage par fichier, jamais un diff global
+
+**Décision.** `RunFileChange` porte une ligne par fichier, avec son patch, plutôt qu'un seul champ
+contenant le diff entier.
+
+**Justification.** Trois raisons, dans cet ordre. La navigation d'abord : un relecteur ouvre un
+fichier, pas un mur de texte, et `?file=` doit désigner une ligne existante. Les bornes ensuite :
+un patch par fichier se coupe individuellement, alors qu'un diff global tronqué perd tout ce qui
+suit la coupure — y compris des fichiers entiers dont on ne saurait même plus le nom. La
+granularité du masquage enfin : un `.env` se prive de son patch sans priver les autres du leur, ce
+qu'un champ unique rendrait impossible.
+
+### D-148 — Les fichiers non suivis appartiennent à la review
+
+**Décision.** `git ls-files --others --exclude-standard` complète `git diff`, et le patch d'un
+fichier non suivi est **fabriqué** par NOX à partir de son contenu, borné dès la lecture.
+
+**Justification.** `git diff` ignore les fichiers non suivis. Sans cette commande, tout ce que
+l'agent aura **créé** serait invisible dans la review — c'est-à-dire précisément ce qu'on veut
+relire en premier. La seule autre façon de les faire apparaître serait `git add`, et NOX ne
+modifie pas l'index d'un repository : la review est une lecture.
+
+La lecture est bornée dès l'appel système plutôt qu'après coup : un fichier de 500 Mio déposé par
+mégarde ne doit pas transiter par la mémoire du runner avant d'être écarté.
+
+**Ce que cela écarte.** `git add -N`, `git stash`, un index temporaire : trois façons d'obtenir un
+diff plus élégant en écrivant dans le repository de l'utilisateur.
+
+### D-149 — Les bornes du diff sont des constantes
+
+**Décision.** 200 fichiers, 256 Kio par patch, 4 Mio par exécution, 20 000 lignes. Ces valeurs
+sont des constantes de `@nox/shared`, pas des variables d'environnement. Une limite atteinte ne
+fait jamais échouer l'exécution : la liste des fichiers reste complète, les patches concernés sont
+marqués `isTruncated`, et l'interface affiche « Diff truncated ».
+
+**Justification.** Même raison qu'en TASK-010 : une limite de sécurité qu'on peut desserrer par
+configuration n'en est plus une. Et une exécution parfaitement réussie ne doit pas être requalifiée
+en échec parce que son diff était volumineux — le travail est bon, c'est seulement sa relecture qui
+est partielle. Le résumé Git de TASK-008 reste disponible dans tous les cas.
+
+### D-150 — Un fichier sensible montre son existence, jamais son contenu
+
+**Décision.** Une liste fermée de noms et d'extensions — `.env` et ses variantes, `*.pem`, `*.key`,
+`id_rsa`, `id_ed25519`, `credentials.json`, `secrets.json` — force `patch = null`, avec `.env.example`
+et `.env.sample` en exceptions **nommées**. Le chemin, le type de changement et les statistiques
+restent visibles.
+
+**Justification.** Le fait qu'un `.env` ait été modifié est exactement ce qu'un relecteur doit
+apprendre : le cacher entièrement serait plus dangereux que de l'afficher. C'est son contenu qui
+n'a rien à faire dans une page web, une capture d'écran ou une base.
+
+Ce n'est **pas** un scanner de secrets, et NOX n'analyse pas le contenu des fichiers pour deviner
+ce qu'ils cachent. Un tel scanner produirait surtout des faux positifs et donnerait l'illusion
+d'une protection qu'il ne peut pas tenir. L'objectif est d'éviter la fuite évidente.
+
+La règle est appliquée **deux fois** : à la capture, où le patch n'est même pas demandé à Git, et
+à l'écriture en base, qui met `patch` à `null` quoi qu'en dise l'appelant. La seconde ne fait pas
+confiance à la première.
+
+### D-151 — Un patch est nettoyé de ses secrets, pas de ses chemins
+
+**Décision.** Un patch traverse un nettoyage **restreint** : caractères de contrôle retirés,
+valeurs des variables `NOX_*` masquées. Il ne passe **pas** par le nettoyeur d'événements de
+TASK-010.
+
+**Justification.** Le nettoyeur complet rend les chemins relatifs, masque les chemins extérieurs et
+écrase les espaces multiples. Parfait pour une ligne de timeline ; destructeur pour un diff. Un
+patch dont on a réécrit les chemins ou réindenté les lignes ne décrit plus le fichier qu'il
+prétend décrire — et une review qui ment est pire qu'une review absente.
+
+Le risque réel est d'ailleurs faible : Git n'émet que des chemins relatifs, et un chemin absolu qui
+apparaîtrait dans un patch est du **contenu de code**, que l'utilisateur a écrit et veut relire tel
+quel.
+
+### D-152 — Un blob binaire n'entre jamais en base
+
+**Décision.** Un fichier binaire est reconnu — absence de compteurs dans `git --numstat`, octet nul
+dans les premiers 8 000 octets d'un fichier non suivi — et stocké sans contenu : `isBinary = true`,
+`patch = null`, affichage « Binary file changed ».
+
+**Justification.** Un diff binaire n'est lisible par personne, et SQLite n'a pas à devenir une
+copie du repository. Le repository, lui, est déjà sur le disque de l'utilisateur.
+
+### D-153 — Les anciens runs ne reçoivent aucune review reconstruite
+
+**Décision.** Une exécution antérieure à TASK-011 affiche « Detailed review unavailable for this
+legacy run. ». NOX ne reconstruit pas son diff depuis le repository actuel. Une exécution que le
+runner ne connaît plus — redémarrage, purge après vingt-quatre heures — est traitée de la même
+façon.
+
+**Justification.** Reconstruire donnerait le diff d'**aujourd'hui** en le présentant comme celui
+d'une exécution passée. Ce serait fabriquer une précision qui n'existe pas, et sur exactement le
+sujet où NOX promet le contraire. Le compte rendu, les fichiers modifiés et `git diff --stat`
+historiques restent consultables : ce qui a été observé est acquis, le reste ne l'a jamais été.
+
+C'est aussi pourquoi `reviewCapturedAt` existe comme colonne distincte : une review **vide** — la
+capture a eu lieu, l'agent n'a rien modifié — et une review **absente** disent deux choses très
+différentes, et les confondre serait le seul vrai défaut d'affichage possible ici.
+
+### D-154 — Les commandes de validation sont recopiées au lancement
+
+**Décision.** À la création d'une exécution, les commandes de la tâche sont **copiées** dans
+`RunValidationResult`, au statut `NOT_RUN`. La review ne référence jamais la ligne mutable de la
+tâche.
+
+**Justification.** Une spécification évolue ; la review d'une exécution passée, non. Sans cette
+copie, corriger `npm run test` en `npm test` dans la tâche réécrirait l'histoire de toutes les
+exécutions précédentes — et une commande supprimée de la tâche ferait disparaître le fait qu'elle
+avait échoué.
+
+La copie a lieu **avant** le démarrage, et non au fil de l'eau : une commande que l'agent ne
+lancera jamais doit apparaître dans la review, et elle ne le pourrait pas si la table se
+remplissait à mesure des exécutions.
+
+### D-155 — La corrélation passe par `tool_use_id`, et seulement pour une commande exacte
+
+**Décision.** Un `tool_use` Bash dont la commande correspond **mot pour mot** à une commande de
+validation enregistrée fait passer celle-ci en `RUNNING` ; le `tool_result` portant le même
+`tool_use_id` la conclut. Une commande Git en lecture seule n'est **pas** une validation.
+
+**Justification.** La correspondance exacte est la même règle qu'en TASK-010 pour l'affichage :
+`npm run test -- --grep MOT_DE_PASSE` n'est pas `npm run test`. La corrélation par identifiant,
+elle, est la seule fiable — l'ordre des messages ne garantit rien, et deux commandes peuvent être
+en vol simultanément.
+
+`git status` était compté comme une validation par TASK-010, faute d'avoir distingué « affichable »
+de « porteur d'un verdict ». C'est corrigé : une commande Git en lecture seule reste affichable
+telle quelle, mais ne dit rien de la qualité du code, et l'annoncer « Validation succeeded »
+apprendrait au relecteur quelque chose de faux.
+
+**Commande répétée.** Une tâche peut déclarer deux fois la même commande. La règle de
+correspondance est explicite et déterministe — première entrée en attente, sinon la dernière
+portant ce texte — plutôt que « la première trouvée », qui ferait qu'un second passage écraserait
+le résultat du premier.
+
+### D-156 — Aucun code de sortie n'est déduit, aucune sortie n'est analysée
+
+**Décision.** `exitCode` est stocké **uniquement** si le flux le fournit explicitement ; sinon il
+reste nul. `summary` est la sortie brute, nettoyée et bornée à 8 Kio — jamais un nombre de tests,
+un taux de couverture ou un compte d'erreurs extrait par un analyseur.
+
+**Justification.** « Échoué » ne veut pas dire « code 1 » : le déduire produirait une valeur
+plausible et fausse, ce qui est la pire espèce de donnée. Quant à l'extraction structurée, elle
+demanderait un analyseur par outil — Jest, Vitest, pytest, ESLint, `tsc` — dont chacun casserait
+au premier changement de format. Un résumé brut et borné vieillit mieux qu'un analyseur fragile.
+
+**Ce que cela écarte pour l'instant.** Un tableau « 128 tests, 3 échecs, 87 % de couverture ». Il
+viendra si le besoin se confirme, avec un analyseur par outil assumé comme tel.
+
+### D-157 — Une sortie de validation est la seule exception à la règle des `tool_result`
+
+**Décision.** TASK-010 pose qu'un `tool_result` n'est jamais transmis : seule son issue l'est.
+TASK-011 ouvre **une** brèche, aussi étroite que possible — la sortie d'un `tool_result` peut être
+résumée si, et seulement si, son `tool_use` correspond mot pour mot à une commande de validation
+que l'utilisateur a lui-même enregistrée. Ce résumé traverse le nettoyeur complet de TASK-010,
+est borné à 8 Kio, et n'apparaît **jamais** dans un événement de timeline.
+
+**Justification.** « Validation failed » sans rien d'autre oblige à relancer la commande dans un
+terminal pour savoir ce qui a cassé — c'est-à-dire à faire à la main ce que NOX est censé éviter.
+La sortie d'une commande que l'utilisateur a lui-même autorisée, et dont il connaît le texte
+exact, est le seul contenu d'outil qu'il ait explicitement demandé à voir.
+
+La brèche est bornée par construction : elle ne s'ouvre que sur une correspondance exacte, elle ne
+concerne que la page de review, et la timeline continue de ne porter que le verdict.
+
+### D-158 — Aucune commande n'est relancée par NOX
+
+**Décision.** NOX ne lance jamais `npm run test` ni aucune autre commande de validation. La review
+structure ce que Claude Code a réellement exécuté, et rien d'autre.
+
+**Justification.** Trois raisons qui vont dans le même sens. Le temps : relancer doublerait la
+durée de validation pour un résultat déjà connu. La sécurité : ce serait une seconde surface
+d'exécution de commandes, hors du cadre de permissions construit pour l'agent. La vérité surtout :
+une commande relancée après coup teste l'état du disque **maintenant**, pas celui de la fin de
+l'exécution — deux choses qui divergent dès la première correction manuelle.
+
+Une commande jamais lancée reste `NOT_RUN`. Ce n'est pas un trou à combler, c'est une information :
+elle dit que la tâche n'a pas été validée comme elle devait l'être.
+
+### D-159 — Un patch est du texte, et rien d'autre
+
+**Décision.** Le diff est rendu ligne par ligne par React, qui échappe tout. Pas de
+`dangerouslySetInnerHTML`, pas de rendu Markdown, pas d'interprétation ANSI, pas de lien
+automatique, pas d'image, pas de coloration syntaxique. Le `+` et le `-` restent **dans le texte**.
+
+**Justification.** Un patch est du contenu de repository, donc potentiellement hostile : il peut
+contenir une balise `<script>`, une séquence d'échappement, une URL piégée. Le traiter comme du
+texte est la seule posture qui ne demande à faire confiance à personne.
+
+Les signes restent dans le texte parce que la couleur ne suffit pas : elle disparaît à
+l'impression, ne se prononce pas pour un lecteur d'écran, et ne se distingue pas pour un
+daltonien. La coloration syntaxique, elle, demanderait une dépendance lourde et un analyseur de
+plus à qui faire confiance pour ce même contenu hostile.
+
+### D-160 — Le fichier affiché est choisi parmi les lignes enregistrées
+
+**Décision.** `?file=` sélectionne une ligne de `RunFileChange` par égalité de chemin. Une valeur
+inconnue ne sélectionne rien, n'est ni corrigée ni approchée, et produit un état contrôlé.
+
+**Justification.** C'est le point le plus exposé de la page : ce paramètre vient d'une URL, donc de
+n'importe où. La protection n'est pas un filtre — un filtre se contourne — mais une **absence de
+chemin de code** : la review lit SQLite, jamais le disque, et il n'existe aucune fonction entre ce
+paramètre et un système de fichiers. Une valeur falsifiée produit donc l'état le plus ordinaire qui
+soit : « ce fichier ne fait pas partie de cette review ».
+
+Corollaire : demander explicitement `?file=.env` ne révèle rien, puisque la ligne enregistrée n'a
+pas de patch.
+
+### D-161 — Une route de review attachée au run, pas un explorateur Git
+
+**Décision.** `POST /claude/runs/review` ne porte qu'un `runId`. Ni chemin de repository, ni commit
+attendu, ni chemin de fichier. Elle ne calcule rien : elle relit un instantané déjà capturé en
+mémoire par le runner.
+
+**Justification.** Le prompt de la tâche proposait `POST /repositories/git/review-snapshot` avec un
+`expectedGitHead` obligatoire. Une route nommée d'après un repository et paramétrée par un commit
+est un explorateur Git en puissance : la prochaine tâche lui ajoutera un chemin, puis une plage de
+révisions, et la surface aura grandi sans que personne ne l'ait décidé.
+
+En l'attachant à une exécution que le runner connaît déjà, il n'y a **rien** à valider : le
+repository et le commit viennent du contexte interne du run, et aucun champ du corps ne peut les
+influencer. C'est plus strict que l'exigence d'origine, pas moins.
+
+**Pourquoi une route HTTP malgré tout.** Le runner n'écrit dans aucune base — règle d'architecture
+depuis TASK-003 — et le web ne lit aucun fichier. L'instantané doit donc traverser HTTP. L'inclure
+dans la réponse de `/claude/runs/status` aurait chargé jusqu'à 4 Mio de patches à chaque
+interrogation, plusieurs fois par minute.
+
+### D-162 — Le transfert vers la base a lieu une fois, et la base fait foi ensuite
+
+**Décision.** Le web interroge la route de review **une seule fois** par exécution, quand la base
+n'en a pas encore. `saveRunReview` refuse d'écrire si `reviewCapturedAt` est déjà renseigné.
+
+**Justification.** Ce n'est pas une économie de requêtes : c'est la définition de l'immuabilité. Un
+second transfert ne pourrait qu'écraser l'original par quelque chose de plus récent, donc de faux.
+La garantie vit dans la couche d'écriture, pas dans la discipline de l'appelant — le contrôle
+préalable côté web évite seulement un aller-retour inutile.
+
+Un runner injoignable ne conclut rien : la page affiche ce que la base contient, et le transfert
+sera retenté à la prochaine ouverture. Seul un refus **explicite** est enregistré.
+
+### D-163 — Approve et Reopen ne touchent pas à Git
+
+**Décision.** `Approve` fait `REVIEW → COMPLETED`, `Reopen` fait `REVIEW → READY`. Aucun commit,
+aucun `git add`, aucun push, aucune restauration, aucun nouveau lancement.
+
+**Justification.** Accepter une review, dans NOX, veut dire « j'ai relu, le travail me convient » —
+pas « enregistre-le pour moi ». Le commit reste une action humaine, faite dans le terminal, avec le
+message que l'utilisateur choisit. C'est écrit sous les boutons et non seulement dans la
+documentation : c'est exactement le moment où l'on se demande si NOX vient de commiter à sa place.
+
+Les deux boutons réutilisent `updateTaskStatus` et sa table de transitions manuelles : une tâche
+qui aurait quitté `REVIEW` entre l'affichage et le clic est refusée plutôt qu'écrasée. Le
+navigateur n'envoie pas un statut, il envoie une intention parmi deux valeurs fermées.
+
+`Reopen` rappelle que le repository devra redevenir propre avant un nouveau lancement. NOX ne le
+nettoie pas : le préflight le refusera, ce qui est la bonne façon de l'apprendre.
+
+### D-164 — Des faits, jamais un score
+
+**Décision.** La review affiche des nombres constatés — fichiers changés, additions, suppressions,
+fichiers masqués, patches tronqués, état des validations. Aucun pourcentage de qualité, aucun
+indice de confiance.
+
+**Justification.** « Quality: 87 % » serait une opinion déguisée en mesure. NOX ne sait pas juger
+du code, et une note fabriquée serait lue comme une évaluation par la seule personne qui, elle,
+sait juger. Les faits se vérifient ; un score se croit.
+
+### D-165 — Une commande Bash est lue par segments, jamais comme un bloc
+
+**Décision.** Une commande Bash observée dans le flux est découpée sur `&&`, débarrassée de son
+préfixe `cd <chemin>`, puis chacun de ses segments est confronté aux commandes autorisées. Toute
+autre construction — `;`, `|`, `>`, `<`, `` ` ``, `$(`, `&` isolé, guillemet hors navigation, retour
+à la ligne — fait renoncer à la lecture : rien n'est affiché, rien n'est corrélé.
+
+**Justification.** Le premier run réel de TASK-011 a montré que Claude Code 2.1.223 n'envoie jamais
+une commande nue. Il la préfixe de son répertoire de travail :
+
+```text
+enregistré par la tâche : git diff --check
+émis par Claude Code    : cd "D:/Projets/Dev/nox-claude-test" && git diff --check
+```
+
+NOX comparait la ligne entière au texte enregistré. Les deux chaînes différaient, donc plus rien ne
+correspondait : la validation restait `NOT_RUN` alors qu'elle avait tourné, et la timeline affichait
+« Running an allowed command » jusque pour un simple `git status`.
+
+Claude Code, lui, avait bien autorisé cette ligne — son moteur de permissions **décompose** la
+commande et reconnaît `git diff --check` parmi ses parties. L'asymétrie était là : un côté
+décomposait, l'autre comparait un bloc opaque. Décomposer des deux côtés est donc la correction
+juste, et non un assouplissement.
+
+La correspondance reste exacte, simplement à l'échelle du segment. `git diff --check --cached` reste
+distinct de `git diff --check`, et `git diff --check 2>&1` est refusé d'emblée : il porte une
+redirection. Le préfixe de navigation est **retiré**, jamais affiché — c'est un chemin absolu de la
+machine, et il n'a rien à faire dans le navigateur.
+
+Ce module n'interprète pas un shell, et ne le fera pas. Un analyseur approximatif finirait par
+autoriser ce qu'il n'a pas compris ; ici, ce qui n'est pas compris est refusé.
+
+### D-166 — La liste de la tâche prime sur la classification générique
+
+**Décision.** Un segment qui correspond mot pour mot à une commande de validation enregistrée **est**
+une validation, quelle que soit sa nature par ailleurs. La classification « commande Git en lecture
+seule » ne sert qu'à décider de l'affichage, jamais à disqualifier une validation.
+
+**Justification.** TASK-011 avait rendu la reconnaissance des validations plus stricte que celle de
+l'affichage, pour empêcher qu'un `git status` spontané ne soit annoncé « Validation succeeded ».
+L'intention reste juste : une commande Git en lecture seule ne porte aucun verdict sur le code.
+
+Mais une commande peut appartenir aux deux catégories. `git diff --check` est une commande Git en
+lecture seule **et** une validation, dès lors que l'utilisateur l'a inscrite dans sa tâche. Une
+règle générique qui l'emporterait sur une liste nominative reviendrait à décider à la place de
+l'utilisateur ce que ses propres validations ont le droit d'être.
+
+L'ordre est donc explicite : correspondance exacte avec la liste de la tâche d'abord ; classification
+générique ensuite, et pour le seul affichage. Un `git status` non enregistré reste une commande
+affichable sans verdict — ce qu'il était censé rester.
+
+### D-167 — Une issue inconnue plutôt qu'un verdict inventé
+
+**Décision.** Quand une seule ligne enchaîne plusieurs validations enregistrées, une réussite les
+marque toutes `PASSED` ; un échec les marque toutes `UNKNOWN`. Une commande relancée est représentée
+par son **dernier** résultat terminal, et un nouveau départ efface le résumé du précédent.
+
+**Justification.** Avec `&&`, une réussite prouve que chaque segment a tourné et réussi : l'information
+est complète. Un échec, lui, ne dit pas lequel a échoué — le seul `tool_result` disponible porte un
+verdict global. Marquer les deux `FAILED` accuserait une commande qui n'a peut-être jamais tourné ;
+les laisser `NOT_RUN` nierait une exécution qui a bien eu lieu. `UNKNOWN` dit exactement ce qui est
+su : elle a tourné, son issue propre n'est pas connue.
+
+Le dernier résultat gagne pour la même raison : un agent qui échoue, corrige, puis relance décrit
+l'état dans lequel l'exécution s'est réellement achevée. Le fait qu'elle ait tourné, lui, ne se perd
+jamais — elle ne redevient pas `NOT_RUN`. Et un départ sans conclusion efface le résumé précédent :
+afficher « 3 échecs » à côté d'un statut inconnu raconterait deux exécutions comme si elles n'en
+formaient qu'une.
+
+### D-168 — Le comportement observé fait autorité
+
+**Décision.** La forme des messages `assistant` et `user` de Claude Code 2.1.223 est désormais
+consignée, et les tests la reproduisent champ pour champ. Elle a été établie de deux façons
+indépendantes : la transcription de session du run réel, et un rejeu du vrai binaire contre un
+serveur Messages **local**, sans requête vers Anthropic ni consommation de quota.
+
+**Justification.** TASK-011 supposait cette forme d'après la documentation. La supposition était
+juste sur la structure — `tool_use` porte bien `id`, `name` et `input.command` ; `tool_result` porte
+bien `tool_use_id` — et fausse sur le contenu, qui seul importait. Une hypothèse structurellement
+correcte peut donc parfaitement produire un défaut fonctionnel, et aucun test écrit contre elle ne
+l'aurait révélé.
+
+Trois faits sont désormais acquis plutôt que supposés :
+
+- une commande Bash arrive préfixée de `cd "<répertoire>" &&` ;
+- un `tool_result` ne porte **aucun** champ `exit_code` : le code figure dans le texte de la sortie,
+  sous la forme « Exit code 2 ». NOX ne le lit pas — ce serait fabriquer une précision à partir d'un
+  format instable, et un code de sortie absent reste nul ;
+- un type `rate_limit_event` existe, inconnu de TASK-010. Il ne produit rien, ce qui est exactement
+  ce qu'une liste fermée doit faire d'un type inattendu.
+
+La méthode du rejeu local est conservée : c'est le seul moyen d'observer le vrai binaire sans quota,
+et elle a déjà servi une fois pour établir que `stream-json` exige `--verbose`.

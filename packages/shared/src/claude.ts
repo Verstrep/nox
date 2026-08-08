@@ -1,14 +1,15 @@
 /**
  * Contrat HTTP des routes Claude Code du runner.
  *
- * Cinq routes, cinq responsabilites :
+ * Six routes, six responsabilites :
  *
  * - `POST /claude/preflight`      — verifier, en lecture seule, qu'un lancement
  *                                   est possible ;
  * - `POST /claude/runs/start`     — lancer, et repondre sans attendre la fin ;
  * - `POST /claude/runs/status`    — consulter l'etat d'une execution ;
  * - `POST /claude/runs/events`    — lire les evenements publics apres un curseur ;
- * - `POST /claude/runs/cancel`    — demander l'arret d'une execution active.
+ * - `POST /claude/runs/cancel`    — demander l'arret d'une execution active ;
+ * - `POST /claude/runs/review`    — relire l'instantane capture a la fin.
  *
  * Regle structurante, comme partout ailleurs : **aucun chemin absolu ne remonte
  * au navigateur**. Le preflight renvoie une branche, un upstream et un `HEAD`,
@@ -21,6 +22,7 @@ import {
   isClaudeRunEvent,
   type ClaudeRunEvent,
 } from "./claude-events.js";
+import { isRunReviewSnapshot, type RunReviewSnapshot } from "./review.js";
 import { isRunnerRunId } from "./runs.js";
 import { RUN_STATUS, type RunStatus } from "./statuses.js";
 
@@ -166,6 +168,25 @@ export type ClaudeRunEventsSuccess = {
   truncated: boolean;
 };
 
+/**
+ * Corps de `POST /claude/runs/review`.
+ *
+ * Un identifiant d'execution, et rien d'autre. Ni chemin de repository, ni
+ * commit attendu, ni chemin de fichier : le runner connait deja tout cela pour
+ * l'execution demandee, et ne l'accepterait de personne. C'est ce qui empeche
+ * cette route de devenir un explorateur Git generique — elle ne sait relire que
+ * ce qu'elle a elle-meme capture.
+ */
+export type ClaudeRunReviewRequest = {
+  runId: string;
+};
+
+/** Reponse de `POST /claude/runs/review`. */
+export type ClaudeRunReviewSuccess = {
+  ok: true;
+  review: RunReviewSnapshot;
+};
+
 /** Corps de `POST /claude/runs/cancel`. */
 export type ClaudeRunCancelRequest = {
   runId: string;
@@ -282,6 +303,20 @@ export function parseClaudeRunCancelRequest(value: unknown): ClaudeRunCancelRequ
   return { runId: value["runId"] };
 }
 
+/**
+ * Valide le corps recu par `POST /claude/runs/review`.
+ *
+ * Retourne exactement un `runId`, quelle que soit la richesse du corps envoye :
+ * un champ `path`, `repositoryPath` ou `head` glisse dans la requete n'a aucune
+ * facon d'atteindre la suite du programme.
+ */
+export function parseClaudeRunReviewRequest(value: unknown): ClaudeRunReviewRequest | null {
+  if (!isRecord(value) || typeof value["runId"] !== "string") {
+    return null;
+  }
+  return { runId: value["runId"] };
+}
+
 /** Verifie qu'une reponse JSON est un preflight reussi. */
 export function isClaudePreflightSuccess(value: unknown): value is ClaudePreflightSuccess {
   if (!isRecord(value) || value["ok"] !== true) {
@@ -360,6 +395,21 @@ export function isClaudeRunCancelSuccess(value: unknown): value is ClaudeRunCanc
     run["status"] === RUN_STATUS.CANCELLING &&
     typeof run["cancellationRequestedAt"] === "string"
   );
+}
+
+/**
+ * Verifie qu'une reponse JSON est un instantane de review valide.
+ *
+ * Aussi severe que le garde des evenements, et pour la meme raison : un patch
+ * est du contenu de repository, et le contrat est la derniere barriere avant
+ * qu'il n'entre en base. Un seul fichier hors contrat — chemin absolu, type de
+ * changement inconnu — fait rejeter l'instantane entier.
+ */
+export function isClaudeRunReviewSuccess(value: unknown): value is ClaudeRunReviewSuccess {
+  if (!isRecord(value) || value["ok"] !== true) {
+    return false;
+  }
+  return isRunReviewSnapshot(value["review"]);
 }
 
 function isNullableString(value: unknown): boolean {
