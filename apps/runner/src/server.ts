@@ -21,6 +21,7 @@ import {
   RUNNER_ERROR,
   RUNNER_SERVICE_NAME,
   RUN_STATUS,
+  parseClaudeCorrectionPreflightRequest,
   parseClaudePreflightRequest,
   parseClaudeRunCancelRequest,
   parseClaudeRunEventsRequest,
@@ -35,6 +36,7 @@ import {
   parseResolveRepositoryRequest,
   parseStartClaudeRunRequest,
   parseUpdateProjectDocumentRequest,
+  type ClaudeCorrectionPreflightSuccess,
   type ClaudePreflightSuccess,
   type ClaudeRunCancelSuccess,
   type ClaudeRunEventsSuccess,
@@ -80,9 +82,15 @@ import {
   type DeleteTaskDocumentResult,
 } from "./repositories/tasks/delete-task-document.ts";
 import { cancelClaudeRun, type CancelRunResult } from "./claude/cancel.ts";
+import {
+  runCorrectionPreflight,
+  type CorrectionPreflightRequest,
+  type CorrectionPreflightResult,
+} from "./claude/correction-preflight.ts";
 import { runPreflight, type PreflightResult } from "./claude/preflight.ts";
 import { ClaudeRunRegistry } from "./claude/registry.ts";
 import { startClaudeRun, type StartRunRequest, type StartRunResult } from "./claude/runs.ts";
+import { deriveFingerprintKey } from "./repositories/workspace-fingerprint.ts";
 
 /** Fonctions remplacables dans les tests. */
 export type RunnerDependencies = {
@@ -116,6 +124,9 @@ export type RunnerDependencies = {
     expectedRevision: string | null,
   ) => Promise<DeleteTaskDocumentResult>;
   claudePreflight?: (repositoryPath: string) => Promise<PreflightResult>;
+  claudeCorrectionPreflight?: (
+    request: CorrectionPreflightRequest,
+  ) => Promise<CorrectionPreflightResult>;
   startClaudeRun?: (request: StartRunRequest) => Promise<StartRunResult>;
   cancelClaudeRun?: (runId: string) => CancelRunResult;
   /**
@@ -144,6 +155,7 @@ const CLAUDE_RUNS_STATUS_ROUTE = "/claude/runs/status";
 const CLAUDE_RUNS_EVENTS_ROUTE = "/claude/runs/events";
 const CLAUDE_RUNS_CANCEL_ROUTE = "/claude/runs/cancel";
 const CLAUDE_RUNS_REVIEW_ROUTE = "/claude/runs/review";
+const CLAUDE_CORRECTION_PREFLIGHT_ROUTE = "/claude/corrections/preflight";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -246,9 +258,17 @@ export function createRunnerServer(
   const preflight =
     dependencies.claudePreflight ??
     ((repositoryPath: string) => runPreflight(repositoryPath, config.claude));
+  // La cle est derivee **une fois**, au demarrage : le jeton lui-meme ne circule
+  // ensuite plus nulle part, et aucun module de calcul d'empreinte ne le voit.
+  const fingerprintKey = deriveFingerprintKey(config.token);
+  const correctionPreflight =
+    dependencies.claudeCorrectionPreflight ??
+    ((request: CorrectionPreflightRequest) =>
+      runCorrectionPreflight(request, config.claude, { fingerprintKey }));
   const startRun =
     dependencies.startClaudeRun ??
-    ((request: StartRunRequest) => startClaudeRun(request, config.claude, registry));
+    ((request: StartRunRequest) =>
+      startClaudeRun(request, config.claude, registry, { fingerprintKey }));
   const cancelRun =
     dependencies.cancelClaudeRun ?? ((runId: string) => cancelClaudeRun(runId, registry));
   const log = dependencies.log ?? ((message: string) => { console.log(message); });
@@ -545,6 +565,39 @@ export function createRunnerServer(
         // Aucun chemin absolu dans la reponse : branche, upstream et `HEAD`
         // suffisent a l'affichage, et le chemin est deja connu de l'appelant.
         const payload: ClaudePreflightSuccess = {
+          ok: true,
+          claude: { available: true, version: result.claudeVersion },
+          git: result.git,
+        };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === CLAUDE_CORRECTION_PREFLIGHT_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, CLAUDE_CORRECTION_PREFLIGHT_ROUTE, log,
+          parseClaudeCorrectionPreflightRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await correctionPreflight(parsed);
+        if (!result.ok) {
+          logRefusal(requestId, CLAUDE_CORRECTION_PREFLIGHT_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        // Comme le preflight initial : ni chemin absolu, ni empreinte dans la
+        // reponse. L'appelant apprend que l'etat correspond, pas a quoi il
+        // correspond.
+        const payload: ClaudeCorrectionPreflightSuccess = {
           ok: true,
           claude: { available: true, version: result.claudeVersion },
           git: result.git,

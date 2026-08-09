@@ -201,6 +201,13 @@ export const RUNNER_ERROR = {
   CLAUDE_LIMIT_REACHED: "CLAUDE_LIMIT_REACHED",
   /** `HEAD` a change entre le preflight et le lancement. */
   GIT_HEAD_CHANGED: "GIT_HEAD_CHANGED",
+  /**
+   * La branche courante n'est plus celle de l'execution relue.
+   *
+   * Distinct de `GIT_HEAD_CHANGED` : un changement de branche se corrige d'un
+   * `git switch`, un commit non. Deux causes, deux messages.
+   */
+  GIT_BRANCH_CHANGED: "GIT_BRANCH_CHANGED",
   /** L'execution a viole les regles Git : commit, changement de branche, sortie du perimetre. */
   GIT_POLICY_VIOLATION: "GIT_POLICY_VIOLATION",
 
@@ -242,6 +249,47 @@ export const RUNNER_ERROR = {
    * valide. Ce code dit seulement que le detail du diff manque.
    */
   CLAUDE_REVIEW_FAILED: "CLAUDE_REVIEW_FAILED",
+
+  // --- Correction ciblee -----------------------------------------------------
+
+  /**
+   * Le texte du feedback ne peut pas etre accepte : vide, blanc, trop long, ou
+   * porteur d'un octet nul.
+   */
+  REVIEW_FEEDBACK_INVALID: "REVIEW_FEEDBACK_INVALID",
+  /**
+   * Ce feedback a deja servi a lancer une correction.
+   *
+   * Un feedback vaut pour **une** reprise : c'est ce qui rend l'historique
+   * lisible — un texte, une correction — et ce qui empeche un double clic de
+   * lancer deux fois la meme session.
+   */
+  REVIEW_FEEDBACK_ALREADY_USED: "REVIEW_FEEDBACK_ALREADY_USED",
+  /**
+   * Cette execution ne peut pas etre reprise.
+   *
+   * Statut non final, echec, annulation, absence de session Claude, absence de
+   * review, violation Git : autant de raisons, un seul code. Le message affiche
+   * precise laquelle.
+   */
+  REVIEW_NOT_RESUMABLE: "REVIEW_NOT_RESUMABLE",
+  /**
+   * Le dossier de travail n'est plus celui qui a ete relu.
+   *
+   * Le refus est volontairement sans echappatoire : reprendre une session sur un
+   * etat different attribuerait a la correction des changements dont l'origine
+   * serait devenue indeterminable.
+   */
+  REVIEW_WORKTREE_CHANGED: "REVIEW_WORKTREE_CHANGED",
+  /**
+   * L'empreinte du dossier de travail n'a pas pu etre calculee ou verifiee.
+   *
+   * Trop de fichiers, trop d'octets, une entree que NOX ne sait pas representer
+   * surement, ou un jeton de runner qui a change depuis la capture. Dans tous
+   * les cas, NOX prefere dire qu'il ne sait pas plutot que d'accepter une
+   * comparaison partielle.
+   */
+  WORKSPACE_FINGERPRINT_UNAVAILABLE: "WORKSPACE_FINGERPRINT_UNAVAILABLE",
 
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",

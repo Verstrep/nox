@@ -27,10 +27,12 @@ import {
   CLAUDE_RUN_EVENT_KIND,
   RUNNER_ERROR,
   RUN_STATUS,
+  WORKSPACE_FINGERPRINT_VERSION,
   buildClaudeToolPolicy,
   isRunnerRunId,
   RUN_LIMITS,
   type RunStatus,
+  type RunWorkspaceFingerprint,
   type RunnerErrorCode,
 } from "@nox/shared";
 
@@ -41,6 +43,8 @@ import {
   type ReviewCaptureResult,
 } from "../repositories/git-review.ts";
 import { readGitChanges, type GitStateOptions } from "../repositories/git-state.ts";
+import { computeWorkspaceFingerprint } from "../repositories/workspace-fingerprint.ts";
+import { runCorrectionPreflight } from "./correction-preflight.ts";
 import { launchClaude, type ClaudeLauncher, type LaunchOutcome } from "./launcher.ts";
 import { detectUsageLimit, parseClaudeOutput } from "./output.ts";
 import { runPreflight, type PreflightOptions } from "./preflight.ts";
@@ -53,6 +57,12 @@ export type StartRunRequest = {
   prompt: string;
   expectedGitHead: string;
   validationCommands: readonly string[];
+  /** Correction ciblee : session a reprendre et etat de depart attendu. */
+  correction?: {
+    sessionId: string;
+    expectedBranch: string;
+    expectedWorkspaceFingerprint: string;
+  };
 };
 
 export type StartRunResult =
@@ -62,6 +72,15 @@ export type StartRunResult =
 export type StartRunOptions = PreflightOptions &
   GitStateOptions & {
     launch?: ClaudeLauncher;
+    /**
+     * Cle d'empreinte du dossier de travail, derivee du jeton du runner.
+     *
+     * Facultative : sans elle, les executions restent possibles mais ne
+     * produisent aucune empreinte, donc ne sont pas reprenables. C'est le
+     * comportement voulu pour un runner mal configure — refuser une reprise
+     * qu'on ne saurait pas verifier plutot que l'accorder a l'aveugle.
+     */
+    fingerprintKey?: Buffer;
   };
 
 /**
@@ -119,13 +138,50 @@ export async function startClaudeRun(
     return repository;
   }
 
-  const preflight = await runPreflight(request.repositoryPath, claude, options);
+  const correction = request.correction;
+
+  /**
+   * Deux preflights, un seul point de decision.
+   *
+   * Une correction ne peut pas exiger un repository propre — elle part du travail
+   * relu, qui est encore la. Elle exige a la place que le dossier de travail soit
+   * **exactement** celui qui a ete relu, empreinte a l'appui.
+   *
+   * Ce controle est refait **ici**, juste avant le lancement, et pas seulement au
+   * moment ou la page de preparation s'est affichee. Entre l'affichage vert et le
+   * clic, l'utilisateur a eu tout le temps d'enregistrer un fichier dans son
+   * editeur ; sans cette seconde verification, la course lui donnerait raison.
+   */
+  const fingerprintKey = options.fingerprintKey;
+
+  if (correction !== undefined && fingerprintKey === undefined) {
+    // Sans cle, l'empreinte actuelle ne peut pas etre calculee, donc la
+    // comparaison ne peut pas avoir lieu. NOX refuse plutot que de reprendre une
+    // session sur un etat qu'il n'a pas su verifier.
+    return { ok: false, code: RUNNER_ERROR.WORKSPACE_FINGERPRINT_UNAVAILABLE };
+  }
+
+  const preflight =
+    correction === undefined || fingerprintKey === undefined
+      ? await runPreflight(request.repositoryPath, claude, options)
+      : await runCorrectionPreflight(
+          {
+            repositoryPath: request.repositoryPath,
+            expectedGitHead: request.expectedGitHead,
+            expectedBranch: correction.expectedBranch,
+            expectedWorkspaceFingerprint: correction.expectedWorkspaceFingerprint,
+          },
+          claude,
+          { ...options, fingerprintKey },
+        );
+
   if (!preflight.ok) {
     return preflight;
   }
 
   // Le controle qui justifie tout le reste : l'etat de depart doit etre celui
-  // que l'utilisateur a vu.
+  // que l'utilisateur a vu. Le preflight de correction l'a deja fait ; le refaire
+  // ne coute rien et garde les deux chemins symetriques.
   if (preflight.git.head !== request.expectedGitHead) {
     return { ok: false, code: RUNNER_ERROR.GIT_HEAD_CHANGED };
   }
@@ -200,6 +256,10 @@ export async function startClaudeRun(
     allowedTools: policy.policy.allowed,
     disallowedTools: policy.policy.disallowed,
     claude,
+    // La session vient du contexte interne de la requete, deja relu en base par
+    // le serveur web. Les regles d'outils, elles, sont recalculees a l'identique :
+    // une correction n'a pas plus de droits qu'un run initial.
+    resumeSessionId: correction?.sessionId ?? null,
     onChunk: (chunk) => {
       collector.push(chunk);
     },
@@ -268,7 +328,7 @@ async function finishRun(
   completed: Promise<LaunchOutcome>,
   headBefore: string,
   collector: ClaudeStreamCollector,
-  options: GitStateOptions,
+  options: StartRunOptions,
 ): Promise<void> {
   try {
     const outcome = await completed;
@@ -312,6 +372,11 @@ async function finishRun(
       unreliable = false,
     ): Promise<void> => {
       const captured = await captureReview(repositoryRoot, headBefore, options);
+      // L'empreinte est prise **au meme instant** que la review, et pour la meme
+      // raison : les deux decrivent l'etat que l'utilisateur va relire. Un echec
+      // ici ne change rien au sort de l'execution — il rend seulement la reprise
+      // ciblee impossible, et l'interface le dira.
+      const workspace = await captureFingerprint(repositoryRoot, options);
 
       // `finish` fige les validations en cours : elles doivent l'etre avant
       // d'entrer dans l'instantane, sinon la review afficherait un « Running »
@@ -330,6 +395,7 @@ async function finishRun(
                 files: captured.changes.files,
                 omittedFiles: captured.changes.omittedFiles,
                 validations: registry.validations(request.runId),
+                workspace,
               },
             }
           : { ok: false, code: captured.code },
@@ -492,5 +558,40 @@ async function captureReview(
     });
   } catch {
     return { ok: false, code: RUNNER_ERROR.CLAUDE_REVIEW_FAILED };
+  }
+}
+
+/**
+ * Calcule l'empreinte du dossier de travail, sans jamais faire tomber la fin.
+ *
+ * Un echec n'est pas une erreur d'execution : il produit une empreinte `null`
+ * assortie de son code, ce qui rendra simplement la reprise ciblee indisponible.
+ * L'interface l'expliquera plutot que de proposer un bouton qui echouerait.
+ */
+async function captureFingerprint(
+  repositoryRoot: string,
+  options: StartRunOptions,
+): Promise<RunWorkspaceFingerprint> {
+  if (options.fingerprintKey === undefined) {
+    return {
+      value: null,
+      version: WORKSPACE_FINGERPRINT_VERSION,
+      errorCode: RUNNER_ERROR.WORKSPACE_FINGERPRINT_UNAVAILABLE,
+    };
+  }
+
+  try {
+    const result = await computeWorkspaceFingerprint(repositoryRoot, options.fingerprintKey, {
+      runGit: options.runGit,
+    });
+    return result.ok
+      ? { value: result.value, version: WORKSPACE_FINGERPRINT_VERSION, errorCode: null }
+      : { value: null, version: WORKSPACE_FINGERPRINT_VERSION, errorCode: result.code };
+  } catch {
+    return {
+      value: null,
+      version: WORKSPACE_FINGERPRINT_VERSION,
+      errorCode: RUNNER_ERROR.WORKSPACE_FINGERPRINT_UNAVAILABLE,
+    };
   }
 }

@@ -96,6 +96,7 @@ model Task {
   documentReferences TaskDocumentReference[]
   validationCommands TaskValidationCommand[]
   runs               Run[]
+  reviewFeedbacks    ReviewFeedback[]
 
   @@unique([projectId, sequence])
   @@index([projectId, status])
@@ -119,6 +120,29 @@ model Run {
   sequence Int
 
   status String
+
+  /// Valeur de `RunKind` : `INITIAL` ou `CORRECTION`.
+  ///
+  /// Une correction n'est pas une execution un peu differente : c'est une
+  /// execution qui part d'un dossier de travail volontairement sale, celui-la
+  /// meme qui vient d'etre relu. La distinguer explicitement evite qu'un futur
+  /// changement de preflight ne s'applique par erreur aux deux.
+  kind String @default("INITIAL")
+
+  /// Execution relue dont cette correction reprend la session.
+  ///
+  /// `null` pour un run initial. `Restrict` en cascade : le parent est un fait
+  /// historique, et une correction qui le referencerait dans le vide raconterait
+  /// une reprise dont on aurait perdu le point de depart.
+  parentRunId String?
+
+  /// Session Claude **demandee** au lancement d'une correction.
+  ///
+  /// Distincte de `claudeSessionId`, qui porte celle que l'execution a
+  /// **rapportee**. Les deux coincident en pratique — le binaire conserve
+  /// l'identifiant a la reprise —, mais les confondre reviendrait a supposer un
+  /// comportement plutot qu'a l'enregistrer.
+  resumedFromSessionId String?
 
   prompt       String
   promptSha256 String
@@ -189,6 +213,28 @@ model Run {
   /// se calcule a partir des `RunFileChange`.
   reviewOmittedFiles Int @default(0)
 
+  /// Empreinte opaque du dossier de travail a la fin de l'execution.
+  ///
+  /// Un HMAC hexadecimal, dont la cle est derivee du jeton du runner et n'est
+  /// jamais stockee ici. Elle n'est **jamais** rendue au navigateur : elle ne sert
+  /// qu'a repondre a une question, cote serveur — « le dossier de travail est-il
+  /// encore exactement celui qui a ete relu ? ».
+  ///
+  /// `null` pour toute execution anterieure a TASK-012, qui n'est donc pas
+  /// reprenable. C'est voulu : une empreinte reconstituee apres coup decrirait le
+  /// present en pretendant decrire le passe.
+  workspaceFingerprint String?
+
+  /// Version de l'algorithme d'empreinte, pour qu'un changement soit detectable.
+  workspaceFingerprintVersion String?
+
+  /// Code d'erreur du calcul d'empreinte, lorsqu'il a echoue.
+  ///
+  /// Distinct de `reviewErrorCode` : une review peut parfaitement aboutir alors
+  /// que l'empreinte a bute sur une borne. La premiere sert a lire, la seconde a
+  /// autoriser une reprise.
+  workspaceFingerprintErrorCode String?
+
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
@@ -207,8 +253,66 @@ model Run {
   fileChanges RunFileChange[]
   validations RunValidationResult[]
 
+  feedbacks          ReviewFeedback[] @relation("ReviewFeedbackSource")
+  triggeringFeedback ReviewFeedback?  @relation("ReviewFeedbackCorrection")
+
+  /// `parentRunId` est une colonne, pas une relation Prisma.
+  ///
+  /// L'index unique est la garantie qui compte : il interdit qu'une meme
+  /// execution recoive deux corrections, y compris sur double clic concurrent.
+  /// La cle etrangere, elle, n'est pas declaree — `ALTER TABLE ADD COLUMN` ne
+  /// sait pas en creer sous SQLite, et la seule alternative aurait ete de
+  /// reconstruire une table qui porte l'historique reel des executions.
+  ///
+  /// Elle ne protegerait de toute facon contre rien d'atteignable : **aucune
+  /// execution n'est jamais supprimee dans NOX**, donc aucun parent ne peut
+  /// disparaitre. Le schema decrit ici exactement ce que la base contient, plutot
+  /// que d'annoncer une contrainte qui n'existe pas.
   @@unique([taskId, sequence])
+  @@unique([parentRunId])
   @@index([taskId, status])
+}
+
+/// Le texte par lequel un humain demande une correction apres une review.
+///
+/// ## Pourquoi il est persiste
+///
+/// Parce qu'il fait partie de l'histoire de la tache au meme titre que le prompt
+/// et le diff. Six mois plus tard, « pourquoi RUN-002 existe-t-il ? » n'a qu'une
+/// bonne reponse : le texte exact que l'utilisateur avait ecrit. Le regenerer ou
+/// le resumer le rendrait faux.
+///
+/// ## Pourquoi il est immuable une fois utilise
+///
+/// Un feedback vaut pour **une** correction. Le modifier apres coup ferait mentir
+/// le prompt deja envoye ; le reutiliser lancerait deux reprises de la meme
+/// session avec le meme texte, ce qu'un double clic suffirait a provoquer.
+/// `correctionRunId` est donc unique, et sa pose est la prise du verrou.
+model ReviewFeedback {
+  id     String @id @default(cuid())
+  taskId String
+
+  /// Execution relue au moment ou le feedback a ete ecrit.
+  sourceRunId String
+
+  /// Texte exact, normalise en fins de ligne `\n` et borne.
+  text String
+
+  /// Correction lancee depuis ce feedback, une fois seulement.
+  correctionRunId String?
+
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  /// `Restrict` comme `Run` → `Task` : un feedback est un fait historique, et il
+  /// documente une execution que rien ne supprime.
+  task          Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  sourceRun     Run  @relation("ReviewFeedbackSource", fields: [sourceRunId], references: [id], onDelete: Restrict)
+  correctionRun Run? @relation("ReviewFeedbackCorrection", fields: [correctionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([correctionRunId])
+  @@index([taskId, createdAt])
+  @@index([sourceRunId])
 }
 
 /// Un fichier change par une execution, tel qu'il l'etait a la fin de celle-ci.

@@ -94,10 +94,12 @@ type SummaryRow = {
   finishedAt: Date | null;
   createdAt: Date;
   durationMs: number | null;
+  kind: string;
 };
 
 type DetailRow = SummaryRow & {
   taskId: string;
+  parentRunId: string | null;
   prompt: string;
   promptSha256: string;
   runnerRunId: string;
@@ -129,6 +131,7 @@ const SUMMARY_SELECT = {
   finishedAt: true,
   createdAt: true,
   durationMs: true,
+  kind: true,
 } as const;
 
 function readStatus(row: { id: string; status: string }): RunStatus {
@@ -151,6 +154,7 @@ function toSummary(row: SummaryRow): DevelopmentRunSummary {
     finishedAt: row.finishedAt === null ? null : row.finishedAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
     durationMs: row.durationMs,
+    kind: row.kind,
   };
 }
 
@@ -166,6 +170,7 @@ function toDetail(row: DetailRow): DevelopmentRunDetail {
   return {
     ...toSummary(row),
     taskId: row.taskId,
+    parentRunId: row.parentRunId,
     prompt: row.prompt,
     promptSha256: row.promptSha256,
     runnerRunId: row.runnerRunId,

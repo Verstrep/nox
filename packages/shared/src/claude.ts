@@ -75,6 +75,23 @@ export type StartClaudeRunRequest = {
   prompt: string;
   expectedGitHead: string;
   validationCommands: string[];
+  /**
+   * Correction ciblee : session a reprendre et etat de depart attendu.
+   *
+   * Absent pour une execution initiale, qui exige un repository **propre**.
+   * Present pour une correction, qui exige au contraire un dossier de travail
+   * **identique** a celui qui a ete relu — le travail precedent est encore la,
+   * et c'est justement ce qu'on veut corriger.
+   *
+   * `sessionId` vient de l'execution parente, relue en base par le serveur web.
+   * Aucun formulaire ne peut le fournir : ce serait offrir au navigateur le droit
+   * de reprendre n'importe quelle conversation.
+   */
+  correction?: {
+    sessionId: string;
+    expectedBranch: string;
+    expectedWorkspaceFingerprint: string;
+  };
 };
 
 /** Reponse `202` de `POST /claude/runs/start`. */
@@ -240,13 +257,115 @@ export function parseStartClaudeRunRequest(value: unknown): StartClaudeRunReques
     return null;
   }
 
-  return {
+  const request: StartClaudeRunRequest = {
     runId: value["runId"],
     repositoryPath: value["repositoryPath"],
     prompt: value["prompt"],
     expectedGitHead: value["expectedGitHead"],
     validationCommands: value["validationCommands"] as string[],
   };
+
+  // Le bloc de correction est **tout ou rien** : une session sans empreinte
+  // attendue produirait une reprise sans controle d'etat, ce qui est exactement
+  // ce que TASK-012 interdit. Un bloc incomplet est donc un corps invalide, pas
+  // un lancement initial deguise.
+  const correction: unknown = value["correction"];
+  if (correction !== undefined && correction !== null) {
+    if (
+      !isRecord(correction) ||
+      typeof correction["sessionId"] !== "string" ||
+      typeof correction["expectedBranch"] !== "string" ||
+      typeof correction["expectedWorkspaceFingerprint"] !== "string" ||
+      correction["sessionId"] === "" ||
+      correction["expectedWorkspaceFingerprint"] === ""
+    ) {
+      return null;
+    }
+    request.correction = {
+      sessionId: correction["sessionId"],
+      expectedBranch: correction["expectedBranch"],
+      expectedWorkspaceFingerprint: correction["expectedWorkspaceFingerprint"],
+    };
+  }
+
+  return request;
+}
+
+/**
+ * Corps de `POST /claude/corrections/preflight`.
+ *
+ * Le pendant de `POST /claude/preflight` pour une reprise : il ne verifie pas
+ * qu'un repository est **propre**, mais qu'il est **exactement** celui qui a ete
+ * relu. Aucun identifiant de session n'y figure : cette route ne lance rien, elle
+ * constate.
+ */
+export type ClaudeCorrectionPreflightRequest = {
+  repositoryPath: string;
+  expectedGitHead: string;
+  expectedBranch: string;
+  expectedWorkspaceFingerprint: string;
+};
+
+/** Reponse de `POST /claude/corrections/preflight`. */
+export type ClaudeCorrectionPreflightSuccess = {
+  ok: true;
+  claude: {
+    available: true;
+    version: string;
+  };
+  git: {
+    branch: string;
+    head: string;
+    upstream: string;
+  };
+};
+
+/**
+ * Valide le corps recu par `POST /claude/corrections/preflight`.
+ *
+ * Les quatre champs sont obligatoires. Une empreinte vide ferait passer un
+ * repository quelconque pour l'etat relu.
+ */
+export function parseClaudeCorrectionPreflightRequest(
+  value: unknown,
+): ClaudeCorrectionPreflightRequest | null {
+  if (
+    !isRecord(value) ||
+    typeof value["repositoryPath"] !== "string" ||
+    typeof value["expectedGitHead"] !== "string" ||
+    typeof value["expectedBranch"] !== "string" ||
+    typeof value["expectedWorkspaceFingerprint"] !== "string" ||
+    value["expectedGitHead"] === "" ||
+    value["expectedWorkspaceFingerprint"] === ""
+  ) {
+    return null;
+  }
+  return {
+    repositoryPath: value["repositoryPath"],
+    expectedGitHead: value["expectedGitHead"],
+    expectedBranch: value["expectedBranch"],
+    expectedWorkspaceFingerprint: value["expectedWorkspaceFingerprint"],
+  };
+}
+
+/** Verifie qu'une reponse JSON est un preflight de correction reussi. */
+export function isClaudeCorrectionPreflightSuccess(
+  value: unknown,
+): value is ClaudeCorrectionPreflightSuccess {
+  if (!isRecord(value) || value["ok"] !== true) {
+    return false;
+  }
+  const claude: unknown = value["claude"];
+  if (!isRecord(claude) || claude["available"] !== true || typeof claude["version"] !== "string") {
+    return false;
+  }
+  const git: unknown = value["git"];
+  return (
+    isRecord(git) &&
+    typeof git["branch"] === "string" &&
+    typeof git["head"] === "string" &&
+    typeof git["upstream"] === "string"
+  );
 }
 
 /** Valide le corps recu par `POST /claude/runs/status`. */

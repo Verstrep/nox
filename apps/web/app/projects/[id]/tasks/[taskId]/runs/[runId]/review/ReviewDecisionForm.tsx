@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useId } from "react";
 
 import { decideReviewAction } from "./actions";
@@ -8,6 +9,16 @@ import { INITIAL_REVIEW_DECISION_STATE } from "./form-state";
 type ReviewDecisionFormProps = {
   projectId: string;
   taskId: string;
+  /**
+   * Lien vers la demande de corrections, ou `null` si elle est indisponible.
+   *
+   * `null` n'est pas un detail d'affichage : il signifie qu'une precondition
+   * manque — pas de session, review absente, empreinte absente. La raison est
+   * expliquee a cote plutot que d'etre devinee depuis un bouton disparu.
+   */
+  requestChangesHref: string | null;
+  /** Pourquoi la reprise est indisponible, lorsqu'elle l'est. */
+  requestChangesReason: string | null;
 };
 
 /**
@@ -22,7 +33,12 @@ type ReviewDecisionFormProps = {
  * seulement dans la documentation : c'est exactement le moment ou l'utilisateur
  * se demande si NOX vient de commiter a sa place.
  */
-export function ReviewDecisionForm({ projectId, taskId }: ReviewDecisionFormProps) {
+export function ReviewDecisionForm({
+  projectId,
+  taskId,
+  requestChangesHref,
+  requestChangesReason,
+}: ReviewDecisionFormProps) {
   const [state, formAction, pending] = useActionState(
     decideReviewAction,
     INITIAL_REVIEW_DECISION_STATE,
@@ -74,6 +90,15 @@ export function ReviewDecisionForm({ projectId, taskId }: ReviewDecisionFormProp
           Approve
         </button>
 
+        {requestChangesHref === null ? null : (
+          <Link
+            href={requestChangesHref}
+            className="rounded-md border border-zinc-600 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-500 hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+          >
+            Request changes
+          </Link>
+        )}
+
         <button
           type="submit"
           name="decision"
@@ -86,13 +111,30 @@ export function ReviewDecisionForm({ projectId, taskId }: ReviewDecisionFormProp
         </button>
       </div>
 
-      <p id={noticeId} className="text-xs leading-relaxed text-zinc-600">
-        <span className="font-mono">Approve</span> passe la tache a{" "}
-        <span className="font-mono">Done</span>, <span className="font-mono">Reopen</span> la
-        remet a <span className="font-mono">Ready</span>. Ni l&apos;un ni l&apos;autre ne cree de
-        commit, ne fait de <code className="font-mono">git add</code> et ne pousse quoi que ce
-        soit : le commit reste votre geste.
-      </p>
+      <div id={noticeId} className="flex flex-col gap-2 text-xs leading-relaxed text-zinc-600">
+        <p>
+          <span className="font-mono">Approve</span> passe la tache a{" "}
+          <span className="font-mono">Done</span>. Aucun commit, aucun{" "}
+          <code className="font-mono">git add</code>, aucun push : le commit reste votre geste.
+        </p>
+        {/* La difference entre les deux boutons de rejet est la question la plus
+            frequente de cette page : elle est repondue ici, pas dans un
+            document que personne n'ouvrira au moment du clic. */}
+        <p>
+          <span className="font-mono">Request changes</span> demande a{" "}
+          <strong className="text-zinc-500">la meme session Claude</strong> de corriger ce travail,
+          a partir de votre feedback et sans repartir de zero.{" "}
+          <span className="font-mono">Reopen</span> remet simplement la tache a{" "}
+          <span className="font-mono">Ready</span> : c&apos;est vous qui reprendrez la main sur le
+          repository avant un futur lancement.
+        </p>
+        {requestChangesReason === null ? null : (
+          <p className="text-amber-200/80">
+            <span className="font-mono">Request changes</span> est indisponible :{" "}
+            {requestChangesReason}
+          </p>
+        )}
+      </div>
     </form>
   );
 }

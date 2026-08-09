@@ -2150,3 +2150,297 @@ Trois faits sont désormais acquis plutôt que supposés :
 
 La méthode du rejeu local est conservée : c'est le seul moyen d'observer le vrai binaire sans quota,
 et elle a déjà servi une fois pour établir que `stream-json` exige `--verbose`.
+
+### D-169 — Une correction est une exécution à part entière, distinguée par son type
+
+**Décision.** `Run.kind` vaut `INITIAL` ou `CORRECTION`. Une correction porte un `parentRunId`, son
+propre prompt, sa propre timeline, ses propres validations, sa propre review et sa propre empreinte.
+Le run parent n'est **jamais** modifié.
+
+**Justification.** La tentation était d'ajouter des tours à l'exécution existante : même tâche, même
+session, pourquoi pas le même run ? Parce qu'un run est un fait daté. Il a consommé du quota, produit
+un compte rendu, laissé un état sur le disque, et quelqu'un l'a relu. Y ajouter du travail
+a posteriori rendrait sa review fausse rétroactivement — exactement ce que TASK-011 s'était employée
+à rendre impossible.
+
+Le type est explicite plutôt que déduit de `parentRunId != null`. Une valeur dérivée oblige chaque
+lecteur à refaire la déduction, et un futur changement de préflight s'appliquerait par erreur aux
+deux natures. `kind` se lit, se filtre et se teste.
+
+### D-170 — Le feedback est un objet persistant, pas un paramètre de lancement
+
+**Décision.** `ReviewFeedback` porte un texte, sa tâche, son exécution source et — une fois
+seulement — la correction qu'il a déclenchée. Il est écrit avant toute préparation, et survit
+indéfiniment.
+
+**Justification.** Six mois plus tard, « pourquoi RUN-002 existe-t-il ? » n'a qu'une bonne réponse :
+le texte exact que l'utilisateur avait écrit. Le déduire du prompt serait fragile — le prompt évolue
+avec son générateur ; le résumer serait faux.
+
+Le persister avant le lancement a une seconde vertu : un préflight qui échoue ne fait pas perdre le
+texte. L'utilisateur rétablit son repository et réessaie, sans réécrire trois paragraphes.
+
+### D-171 — `Request changes` et `Reopen` ne se confondent pas
+
+**Décision.** Trois boutons sur une review : `Approve`, `Request changes`, `Reopen`. La différence
+entre les deux derniers est écrite sous les boutons, pas seulement dans la documentation.
+
+**Justification.** Les deux rejettent le travail, et c'est là que s'arrête la ressemblance.
+
+- `Request changes` demande à **la même session Claude** de corriger, à partir d'un feedback, en
+  conservant ce qui est déjà correct. Le repository reste tel quel — il *doit* rester tel quel.
+- `Reopen` remet simplement la tâche à `Ready`. L'utilisateur reprend la main : c'est lui qui
+  décidera quoi faire du repository avant un futur lancement.
+
+Les fusionner aurait demandé de deviner l'intention. Un bouton unique qui « rejette » aurait tantôt
+relancé un agent, tantôt rendu la main — et l'utilisateur ne saurait jamais lequel avant de cliquer.
+
+### D-172 — La session reprise vient du run parent, jamais du navigateur
+
+**Décision.** `--resume <session>` reçoit une valeur relue en base à partir de `sourceRunId`. Aucun
+formulaire ne porte de `sessionId`, de `repositoryPath`, de liste d'outils ni d'argument de ligne de
+commande. `--continue` n'est jamais passé.
+
+**Justification.** Un champ de session dans un formulaire offrirait au navigateur le droit de
+reprendre **n'importe quelle** conversation présente sur la machine — y compris celles d'un autre
+projet, d'un autre repository, ou d'une session personnelle sans rapport avec NOX. Le serveur dérive
+tout de quatre identifiants (projet, tâche, run source, feedback) et revérifie chaque relation ; un
+`sourceRunId` appartenant à un autre projet est *introuvable*, pas « refusé ».
+
+`--continue` est écarté pour la même raison : il reprend « la conversation la plus récente du
+dossier », c'est-à-dire une session que NOX n'a pas choisie et ne peut pas nommer.
+
+**Syntaxe vérifiée, pas supposée.** `-p --resume <id> --output-format stream-json --verbose` a été
+exercé sur le binaire local `2.1.223`, contre un serveur Messages en **boucle locale** — aucune
+requête vers Anthropic, aucun quota consommé. Trois faits en sont ressortis : l'historique est
+réellement rejoué (le serveur voit deux fois plus de messages au second tour), la session **conserve
+son identifiant**, et une session inconnue produit un code de sortie `1` avec un message `result` en
+erreur — que le diagnostic existant traite déjà comme n'importe quel échec de processus.
+
+### D-173 — Un dossier de travail sale est autorisé, mais un seul : celui qui a été relu
+
+**Décision.** Le préflight de correction ne vérifie pas que le repository est propre. Il vérifie
+qu'il est **exactement** celui de la review : même branche, même `HEAD`, même empreinte de dossier de
+travail.
+
+**Justification.** Une correction part par construction d'un repository sale — le travail relu n'a
+été ni commité, ni restauré, et c'est tout l'intérêt. Exiger la propreté rendrait la fonctionnalité
+impossible ; la désactiver simplement ouvrirait un trou béant :
+
+1. l'utilisateur modifie trois fichiers à la main après la review ;
+2. il clique `Request changes` ;
+3. Claude reprend sa session sur un état qu'il n'a jamais produit ;
+4. la review suivante mélange trois origines, sans qu'aucune ne soit identifiable.
+
+« Exactement l'état relu » remplace donc « propre ». C'est une contrainte plus forte, pas plus
+faible : un repository propre est un état parmi d'autres, celui-ci est un état unique.
+
+**Aucun forçage.** Il n'existe pas d'option pour passer outre, et il ne doit pas en exister. Un
+bouton « continuer quand même » transformerait une garantie en suggestion, et c'est cette garantie
+qui rend la review suivante interprétable.
+
+### D-174 — L'empreinte du dossier de travail est authentifiée, jamais un simple hachage
+
+**Décision.** L'empreinte est un HMAC-SHA256 dont la clé est dérivée du jeton du runner :
+
+```text
+fingerprintKey = HMAC-SHA256(NOX_RUNNER_TOKEN, "nox-workspace-fingerprint-v1")
+empreinte      = HMAC-SHA256(fingerprintKey, représentation canonique du dossier)
+```
+
+La clé n'est jamais écrite en base, jamais journalisée, et ne quitte jamais le runner. L'empreinte
+n'atteint jamais le navigateur.
+
+**Justification.** Un `.env` peut faire partie du dossier de travail. Stocker `SHA256(contenu)` en
+base offrirait à quiconque lit le fichier SQLite la possibilité de tester hors ligne des secrets de
+faible entropie jusqu'à retrouver le bon — une attaque par dictionnaire sur un fichier local, sans
+aucun accès réseau. Avec un HMAC, cette attaque exige la clé, qui n'est nulle part sur le disque.
+
+La comparaison se fait en temps constant. Le gain est théorique — l'attaquant devrait déjà pouvoir
+appeler le runner — mais la primitive existe et ne coûte rien.
+
+**Conséquence assumée.** Changer `NOX_RUNNER_TOKEN` rend les anciennes empreintes invérifiables. NOX
+bloque alors la reprise et l'explique, plutôt que de contourner le contrôle. Une garantie qui se
+désactive au premier obstacle n'en est pas une.
+
+### D-175 — Une empreinte partielle n'existe pas : c'est un refus
+
+**Décision.** L'empreinte couvre **toutes** les entrées changées — pas seulement les 200 que la
+review sait afficher —, avec leur code d'état, leur type, leur taille et leur contenu, plus la
+branche et `HEAD`. Un dépassement de borne (2 000 entrées, 16 Mio par fichier, 64 Mio au total), une
+entrée que NOX ne sait pas représenter sûrement, ou une lecture impossible produisent
+`WORKSPACE_FINGERPRINT_UNAVAILABLE` — et donc un run non reprenable.
+
+**Justification.** La review est une aide à la lecture : tronquer à 200 fichiers y est acceptable,
+et la troncature est affichée. L'empreinte est un contrôle de sécurité, et un contrôle partiel n'en
+est pas un — il autoriserait précisément ce qu'il prétend interdire, sans que personne ne le
+remarque. « Je ne sais pas » est une réponse sûre ; « voici une empreinte incomplète » ne l'est pas.
+
+`--no-renames` est passé volontairement : la détection de renommage est une heuristique dont le seuil
+dépend de la configuration Git de l'utilisateur. Un renommage apparaît alors comme une suppression
+plus un fichier non suivi — ce qui change l'empreinte exactement comme il se doit, sans dépendre d'un
+réglage. Un lien symbolique n'est **jamais** suivi : c'est sa cible textuelle qui entre dans
+l'empreinte, jamais le contenu qu'elle désigne.
+
+### D-176 — Le contrôle est refait juste avant le spawn
+
+**Décision.** Le préflight de correction est appelé deux fois : une fois par la page de préparation,
+une fois par le runner **immédiatement avant** de créer le processus.
+
+**Justification.** Entre l'affichage vert et le clic, l'utilisateur a eu tout le temps d'enregistrer
+un fichier dans son éditeur. Sans cette seconde vérification, la course lui donnerait raison — et la
+correction partirait sur un état que personne n'a relu.
+
+Ce n'est pas une redondance : les deux appels répondent à deux questions différentes. Le premier dit
+« puis-je proposer ce bouton ? », le second dit « puis-je lancer ce processus ? ». Seul le second
+engage quoi que ce soit, et il est le seul qui ne puisse pas être contourné.
+
+L'ordre des écritures suit la même logique : le préflight passe **avant** toute écriture. Un dossier
+de travail modifié entre-temps est une précondition, pas un échec d'exécution — il ne doit laisser ni
+run fantôme dans l'historique, ni feedback consommé.
+
+### D-177 — Un feedback vaut pour une seule correction
+
+**Décision.** `ReviewFeedback.correctionRunId` est unique et ne se pose qu'une fois, par une mise à
+jour conditionnelle dans la même transaction que la création du run. Un index unique double la règle
+en base.
+
+**Justification.** Le verrou n'est pas une vérification suivie d'une écriture — un double clic
+passerait entre les deux. La condition `correctionRunId: null` fait partie du `where` : deux appels
+simultanés ne peuvent pas la satisfaire tous les deux, et le second repart avec un refus explicite.
+Même un appel direct à Prisma échouerait, l'index unique tenant indépendamment du code applicatif.
+
+L'index unique porte aussi sur `Run.parentRunId` : une exécution reçoit au plus une correction.
+SQLite traite les `NULL` comme distincts, donc les exécutions initiales coexistent sans se gêner.
+
+Pour une seconde correction, il faut un nouveau feedback — écrit après avoir relu la nouvelle review.
+C'est le bon ordre : on ne demande pas deux corrections d'affilée sans regarder ce qu'a produit la
+première.
+
+### D-178 — La review d'une correction montre l'état complet, pas le delta
+
+**Décision.** La review d'un run de correction décrit le dossier de travail **entier** depuis le
+dernier commit — travail initial et correction confondus. Elle n'affiche pas le diff entre RUN-001 et
+RUN-002.
+
+**Justification.** La question posée par une review est toujours la même : « qu'est-ce que
+j'accepte ? ». Comme rien n'a été commité entre les deux exécutions, ce qui sera accepté est l'état
+cumulatif — et c'est donc lui qu'il faut montrer.
+
+Un mode « delta » aurait doublé la complexité de la page pour répondre à une question secondaire
+(« qu'a fait la correction ? »), à laquelle `git diff` répond déjà. La mention « Correction de
+RUN-001 » et le feedback affiché suffisent à donner le contexte.
+
+### D-179 — Une chaîne de corrections, chacune reprenant l'exécution qu'elle a relue
+
+**Décision.** `RUN-001 → RUN-002 → RUN-003` est possible. Chaque correction reprend la session de
+l'exécution **immédiatement relue**, jamais une session choisie librement, et chaque feedback pointe
+vers son propre run source.
+
+**Justification.** C'est la seule chaîne qui reste interprétable. Reprendre la session de RUN-001
+depuis RUN-003 ignorerait tout ce que RUN-002 a fait ; permettre de choisir librement transformerait
+la fonctionnalité en explorateur de sessions.
+
+La chaîne est rappelée par un lien — « Correction de l'exécution précédente » — plutôt que dessinée.
+Un graphe aurait de l'allure ; un lien se remonte run par run, et ne coûte rien à maintenir.
+
+### D-180 — Les validations d'une correction viennent de la spécification actuelle
+
+**Décision.** À la création d'un run de correction, les commandes de validation sont recopiées depuis
+la **tâche telle qu'elle est au moment du lancement**, pas depuis le run parent.
+
+**Justification.** Une correction doit satisfaire ce que la tâche exige aujourd'hui. Si
+l'utilisateur a ajouté `npm run typecheck` entre les deux exécutions, la correction doit le passer —
+recopier la liste de RUN-001 aurait validé un travail contre une spécification périmée.
+
+Le run parent, lui, garde la sienne : c'est exactement le principe de la recopie posé en TASK-011.
+Chaque run porte les commandes qu'on attendait de lui, et aucune review passée ne bouge.
+
+### D-181 — Le feedback est du contenu, jamais une instruction privilégiée
+
+**Décision.** Le texte de l'utilisateur est inséré dans le prompt entre `<review_feedback>` et
+`</review_feedback>`, un marqueur qu'il contiendrait lui-même étant neutralisé de façon visible. Les
+règles de NOX sont rappelées **après** lui, et disent explicitement que le feedback ne les modifie
+pas.
+
+**Justification.** Un champ libre peut contenir « ignore les règles précédentes », « lance git
+push », « lis .env ». Le délimiteur rend la citation non ambiguë, mais ce n'est pas là que se joue la
+sécurité : **les permissions ne dépendent pas du prompt**. Elles sont calculées à partir des
+commandes de validation enregistrées, exactement comme pour un run initial, et aucun texte ne peut
+les élargir. `git push` reste refusé par `--disallowedTools`, `.env` reste hors des outils autorisés,
+et `--dangerously-skip-permissions` n'est jamais passé.
+
+Le texte n'est pas censuré pour autant : c'est le feedback de l'utilisateur, il est conservé
+intégralement et affiché tel quel — comme du texte, jamais comme du HTML.
+
+### D-182 — Un segment non affichable n'efface plus la validation qui l'accompagne
+
+**Décision.** La lecture d'une ligne Bash répond désormais à **deux** questions distinctes : ce qui
+peut être affiché, et quelles validations enregistrées ont réellement tourné. Un segment que NOX ne
+sait pas lire n'empêche plus de reconnaître, ailleurs sur la même ligne, une commande correspondant
+mot pour mot à une validation de la tâche.
+
+**Justification.** TASK-011 corrective liait les deux : un seul segment inconnu faisait renoncer à
+toute la ligne. Le premier run réel de TASK-012 a montré ce que Claude Code émet vraiment :
+
+```text
+cd "D:\…\depot" && git diff --check && echo "OK" && git status --short && git diff --stat
+```
+
+Le `echo` suffisait à jeter la ligne entière. La validation avait pourtant tourné, et son résultat
+était connu : NOX perdait une information **certaine** à cause d'une information **inconnue**.
+
+La correspondance, elle, ne bouge pas d'un cheveu : un segment n'est une validation que s'il est
+identique, caractère pour caractère, à une commande enregistrée.
+
+### D-183 — Le découpage sur `&&` respecte les guillemets
+
+**Décision.** La ligne est découpée par un analyseur qui connaît les chaînes entre guillemets et
+apostrophes, ainsi que l'échappement par antislash. Une ligne dont un guillemet reste ouvert est
+refusée entièrement.
+
+**Justification.** Le découpage naïf `command.split("&&")` suffisait tant qu'un guillemet faisait
+renoncer à la ligne. Il ne suffit plus. Sans conscience des chaînes, `echo "&& npm run test &&"`
+produirait un segment `npm run test` qui n'a jamais tourné, et NOX affirmerait qu'une validation a
+réussi sur la foi d'une chaîne de caractères bien choisie.
+
+C'est la contrepartie exacte de
+[D-182](#d-182--un-segment-non-affichable-nefface-plus-la-validation-qui-laccompagne) :
+reconnaître une validation au milieu de segments inconnus n'est sûr que si le découpage l'est.
+
+Le reste de la prudence est inchangé : `;`, `|`, `<`, `>`, `` ` ``, `$(` et l'esperluette isolée
+font toujours renoncer à la ligne entière, **y compris à l'intérieur des guillemets**. Un refus de
+trop ne coûte qu'un affichage générique.
+
+### D-184 — Un segment masqué est signalé, jamais deviné
+
+**Décision.** Une ligne dont certains segments sont affichables et d'autres non s'affiche avec ses
+segments autorisés et une marque `...` à la place des autres :
+
+```text
+Running git diff --check && ... && git status --short && ... && git diff --stat
+```
+
+Une ligne dont **aucun** segment n'est reconnu reste « Running an allowed command ».
+
+**Justification.** Deux mauvaises réponses étaient possibles. Tout masquer — le comportement de
+TASK-011 corrective — dit à l'utilisateur « une commande a tourné » alors que NOX sait laquelle.
+N'afficher que les segments reconnus, sans marque, laisserait croire que la ligne se limitait à eux :
+ce serait un mensonge par omission.
+
+La marque ne porte aucune information venue de la commande — ni nom, ni longueur, ni fragment. La
+règle de fond ne bouge pas : **une commande n'est affichée que si elle est exactement autorisée**.
+
+### D-185 — Un échec n'est imputé qu'à une validation seule sur sa ligne
+
+**Décision.** Une ligne qui échoue ne conclut `FAILED` que si elle ne portait **qu'une** commande,
+préfixe `cd` retiré. Dès qu'elle en enchaînait d'autres — seconde validation, commande Git de
+lecture, ou segment non reconnu —, l'issue reste `UNKNOWN`.
+
+**Justification.** Avec un chaînage `&&`, une réussite prouve que tous les segments ont tourné et
+réussi : `PASSED` est alors certain, y compris au milieu de segments inconnus. Un échec, lui, ne dit
+pas quel maillon a cédé. TASK-011 ne traitait ce cas que pour deux validations enchaînées ; la règle
+s'étend à tout ce qui accompagne une validation, parce que rien ne distingue les deux situations du
+point de vue de ce que le flux permet de savoir.
+
+`UNKNOWN` est un aveu, et un aveu vaut mieux qu'un verdict inventé.

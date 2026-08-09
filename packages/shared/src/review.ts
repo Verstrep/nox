@@ -25,6 +25,11 @@
  * a la base, au web et aux tests.
  */
 
+import {
+  isRunWorkspaceFingerprint,
+  type RunWorkspaceFingerprint,
+} from "./corrections.js";
+
 /**
  * Nature d'un changement de fichier.
  *
@@ -227,6 +232,18 @@ export type RunReviewSnapshot = {
   /** Fichiers changes mais non decrits, faute de place. */
   omittedFiles: number;
   validations: RunValidationResultView[];
+  /**
+   * Empreinte opaque du dossier de travail, prise au meme instant.
+   *
+   * Elle voyage avec la review parce qu'elle decrit **le meme instant** : ce qui
+   * a ete relu et ce qui pourra etre repris sont, par construction, le meme etat.
+   * Les separer autoriserait un decalage entre les deux, et c'est precisement le
+   * decalage que TASK-012 doit rendre impossible.
+   *
+   * Elle ne quitte jamais le serveur : aucune page, aucun formulaire, aucune
+   * reponse d'API ne la rend au navigateur.
+   */
+  workspace: RunWorkspaceFingerprint;
 };
 
 /**
@@ -420,6 +437,7 @@ export function isRunReviewSnapshot(value: unknown): value is RunReviewSnapshot 
     isNullableString(value["headBefore"]) &&
     typeof value["unreliable"] === "boolean" &&
     typeof value["omittedFiles"] === "number" &&
-    Number.isInteger(value["omittedFiles"])
+    Number.isInteger(value["omittedFiles"]) &&
+    isRunWorkspaceFingerprint(value["workspace"])
   );
 }

@@ -147,6 +147,8 @@ export type DevelopmentRunSummary = {
   createdAt: string;
   /** Duree rapportee par Claude Code, en millisecondes. */
   durationMs: number | null;
+  /** `INITIAL` ou `CORRECTION` ; valeur de `RunKind`. */
+  kind: string;
 };
 
 /** Etat Git capture autour d'une execution. */
@@ -184,6 +186,8 @@ export type RunClaudeReport = {
 /** Execution complete, telle qu'affichee sur sa page. */
 export type DevelopmentRunDetail = DevelopmentRunSummary & {
   taskId: string;
+  /** Execution relue dont cette correction reprend la session ;  sinon. */
+  parentRunId: string | null;
   /** Prompt exact envoye au processus. */
   prompt: string;
   /** Empreinte SHA-256 du prompt, en hexadecimal minuscule. */

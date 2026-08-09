@@ -71,6 +71,8 @@ export type LaunchRequest = {
   allowedTools: readonly string[];
   disallowedTools: readonly string[];
   claude: ClaudeConfig;
+  /** Session a reprendre pour une correction ; absente pour un run initial. */
+  resumeSessionId?: string | null;
   /**
    * Recoit chaque morceau de `stdout` des son arrivee.
    *
@@ -104,6 +106,21 @@ export function buildClaudeArguments(request: {
   allowedTools: readonly string[];
   disallowedTools: readonly string[];
   maxTurns: number;
+  /**
+   * Session a reprendre, pour une correction ciblee. `null` pour un run initial.
+   *
+   * La valeur vient toujours du run parent relu en base, jamais d'un formulaire :
+   * accepter un identifiant du navigateur reviendrait a offrir le droit de
+   * reprendre n'importe quelle conversation presente sur la machine.
+   *
+   * Verifie sur le binaire local `2.1.223`, contre un serveur Messages en boucle
+   * locale : `-p --resume <id> --output-format stream-json --verbose` reprend bien
+   * l'historique — le serveur voit deux fois plus de messages au second tour — et
+   * conserve le meme `session_id`. Une session inconnue produit un code de sortie
+   * `1` et un message `result` en erreur, que le diagnostic existant traite comme
+   * n'importe quel echec de processus.
+   */
+  resumeSessionId?: string | null;
 }): string[] {
   // `stream-json` remplace `json` depuis TASK-010 : la meme information finale
   // arrive, precedee de tout ce qui permet de suivre le travail en cours. Le
@@ -114,6 +131,15 @@ export function buildClaudeArguments(request: {
   // seulement lui.
   const args = ["-p", "--output-format", "stream-json", "--verbose"];
   args.push("--max-turns", String(request.maxTurns));
+
+  // `--resume` prend la valeur en argument suivant, jamais collee ni deduite.
+  // `--continue` n'est **jamais** passe : il reprend « la conversation la plus
+  // recente du dossier », c'est-a-dire une session que NOX n'a pas choisie et ne
+  // peut pas nommer.
+  const resume = request.resumeSessionId ?? null;
+  if (resume !== null && resume !== "") {
+    args.push("--resume", resume);
+  }
 
   // Les regles sont jointes par des virgules ; `claude-commands.ts` garantit
   // qu'aucune commande autorisee n'en contient.
@@ -159,6 +185,7 @@ export const launchClaude: ClaudeLauncher = (request) => {
     allowedTools: request.allowedTools,
     disallowedTools: request.disallowedTools,
     maxTurns: request.claude.maxTurns,
+    resumeSessionId: request.resumeSessionId,
   });
   const plan = buildSpawnPlan(resolvedPath, args);
 

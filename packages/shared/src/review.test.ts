@@ -270,10 +270,28 @@ describe("isRunReviewSnapshot", () => {
     files: [fileChange()],
     omittedFiles: 0,
     validations: [],
+    workspace: { value: "f".repeat(64), version: "v1", errorCode: null },
   };
 
   it("accepte un instantane conforme", () => {
     assert.equal(isRunReviewSnapshot(snapshot), true);
+  });
+
+  it("accepte un instantane dont l'empreinte n'a pas pu etre calculee", () => {
+    assert.equal(
+      isRunReviewSnapshot({
+        ...snapshot,
+        workspace: { value: null, version: "v1", errorCode: "WORKSPACE_FINGERPRINT_UNAVAILABLE" },
+      }),
+      true,
+    );
+  });
+
+  it("refuse un instantane sans empreinte du dossier de travail", () => {
+    // Le champ est obligatoire : son absence signifierait « empreinte inconnue »
+    // sans le dire, et une reprise ne doit jamais s'appuyer sur un sous-entendu.
+    assert.equal(isRunReviewSnapshot({ ...snapshot, workspace: undefined }), false);
+    assert.equal(isRunReviewSnapshot({ ...snapshot, workspace: "f".repeat(64) }), false);
   });
 
   it("accepte un instantane sans aucun changement", () => {

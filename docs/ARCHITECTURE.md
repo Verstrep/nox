@@ -114,6 +114,10 @@ modules dédiés décident.
   l'exécution. Ne calcule rien, et le corps ne porte qu'un identifiant d'exécution : ni chemin de
   repository, ni commit, ni chemin de fichier. C'est ce qui l'empêche de devenir un explorateur
   Git générique.
+- `POST /claude/corrections/preflight` — authentifiée, vérifie qu'une reprise ciblée est possible.
+  Le pendant de `POST /claude/preflight` pour une correction : il ne demande pas un repository
+  **propre**, mais un dossier de travail **identique** à celui qui a été relu. Il ne lance rien, et
+  sa réponse ne contient jamais l'empreinte comparée.
 - Jeton partagé obligatoire (`Authorization: Bearer`), comparaison à temps constant.
 - Corps JSON limité à 32 Kio, `Content-Type` vérifié, délai maximal sur corps incomplet.
 - Erreurs conformes au contrat partagé de `@nox/shared` : un code, jamais un message ni une
@@ -639,6 +643,7 @@ précisément ce qu'on n'a pas prévu qui est dangereux.
 | `Read` / `Edit` / `Write` | `Reading README.md` | le contenu lu ou écrit |
 | `Grep` / `Glob` | `Searching for "renderTaskMarkdown"` | un motif de plus de 120 caractères |
 | `Bash` autorisé | `Running npm run test` | l'environnement, le répertoire, les redirections |
+| `Bash` partiel | `Running git diff --check && ...` | les segments non reconnus |
 | `Bash` autre | `Running an allowed command` | la commande elle-même |
 | Outil inconnu | `Using <Nom>` | son entrée, quelle qu'elle soit |
 | `tool_result` | `Read completed` · `Validation failed` | la sortie de l'outil |
@@ -646,6 +651,16 @@ précisément ce qu'on n'a pas prévu qui est dangereux.
 Une commande n'est reproduite que si elle correspond **exactement** à une commande de validation
 enregistrée ou à une commande Git en lecture seule autorisée. `npm run test -- --grep secret`
 n'est pas `npm run test`, et l'afficher exposerait un argument que personne n'a validé.
+
+La règle s'applique **segment par segment**. La ligne est découpée sur les `&&` de premier niveau —
+un découpage conscient des chaînes entre guillemets —, le préfixe `cd <chemin>` est retiré, et
+chaque segment est classé. Un segment non reconnu devient `...` : son existence est dite, son
+contenu jamais. Une ligne dont aucun segment n'est reconnu retombe sur le libellé générique.
+
+Ce découpage sert aussi à reconnaître les validations, et les deux questions sont **indépendantes** :
+une commande enregistrée reconnue mot pour mot reste une validation même si le reste de la ligne est
+masqué. C'est le correctif de TASK-012 — la forme réelle émise par Claude Code noie volontiers la
+validation au milieu de `echo` et de commandes Git de lecture.
 
 #### Sanitation : une seule fonction, appliquée à toutes les chaînes
 
@@ -944,3 +959,160 @@ Un run sans instantané affiche « Detailed review unavailable for this legacy r
 reconstruit pas son diff depuis le repository actuel : ce serait donner le diff d'aujourd'hui en le
 présentant comme celui d'une exécution passée. Le compte rendu, les fichiers modifiés et
 `git diff --stat` historiques restent consultables.
+
+### 5.14 Correction ciblée d'une exécution relue
+
+Après une review, l'utilisateur voit ce qui ne va pas. Jusqu'à TASK-011, il ne pouvait rien en faire
+depuis NOX : il fallait rouvrir un terminal, réexpliquer le contexte à une conversation neuve, et se
+débrouiller avec un repository déjà modifié par l'exécution précédente.
+
+Une correction reprend **la** session du run relu — celle qui a produit ce travail, et qui sait donc
+pourquoi elle l'a produit ainsi.
+
+```text
+Review
+  ↓
+Feedback humain
+  ↓
+Empreinte de l'état relu
+  ↓
+Preflight de correction
+  ↓
+--resume session du run source
+  ↓
+Correction run
+  ↓
+Streaming
+  ↓
+Review suivante
+```
+
+#### Pourquoi une correction peut partir d'un repository sale
+
+Le préflight initial exige un repository **propre** : sans état de départ connu, on ne saurait pas
+dire ce que l'agent a changé.
+
+Une correction ne peut pas exiger cela. Elle part précisément du travail que l'utilisateur vient de
+relire, et ce travail n'a été ni commité, ni restauré — c'est même le principe. Le dossier de travail
+est donc sale, volontairement.
+
+#### Pourquoi ce doit être *exactement* celui de la review
+
+Désactiver simplement le contrôle ouvrirait un trou béant :
+
+1. l'utilisateur modifie trois fichiers à la main après la review ;
+2. il clique `Request changes` ;
+3. Claude reprend sa session sur un état qu'il n'a jamais produit ;
+4. la review suivante mélange trois origines, sans qu'aucune ne soit identifiable.
+
+La règle qui remplace « propre » est donc « **exactement l'état relu** » — une contrainte plus forte,
+pas plus faible : un repository propre est un état parmi d'autres, celui-ci est un état unique.
+
+```text
+Working tree actuel
+      ↓
+Fingerprint runner
+      ↓
+Compare fingerprint historique
+      ├── identique → reprise autorisée
+      └── différent → refus
+```
+
+#### Pourquoi une liste de fichiers ne suffit pas
+
+Une liste de chemins dirait qu'un fichier a changé ; elle ne dirait pas que son **contenu** a changé.
+Or c'est le contenu qui compte : rééditer `README.md` après la review ne modifie ni la liste, ni les
+compteurs de `git diff --stat` si le nombre de lignes est conservé.
+
+L'empreinte couvre le code d'état de chaque entrée — index **et** dossier de travail —, son type, sa
+taille, son contenu, plus la branche et `HEAD`. Elle couvre aussi **toutes** les entrées changées,
+pas seulement les 200 que la review sait afficher : la review est une aide à la lecture, l'empreinte
+est un contrôle de sécurité, et un contrôle partiel n'en est pas un.
+
+Un dépassement de borne produit `WORKSPACE_FINGERPRINT_UNAVAILABLE`, donc un run non reprenable.
+« Je ne sais pas » est une réponse sûre ; « voici une empreinte incomplète » ne l'est pas.
+
+#### Pourquoi l'empreinte est authentifiée
+
+Un `.env` peut faire partie du dossier de travail. Stocker `SHA256(contenu)` en base offrirait à
+quiconque lit le fichier SQLite la possibilité de tester hors ligne des secrets de faible entropie
+jusqu'à retrouver le bon — une attaque par dictionnaire sur un fichier local, sans aucun accès
+réseau.
+
+```text
+fingerprintKey = HMAC-SHA256(NOX_RUNNER_TOKEN, "nox-workspace-fingerprint-v1")
+empreinte      = HMAC-SHA256(fingerprintKey, représentation canonique du dossier)
+```
+
+La clé n'est jamais écrite en base, jamais journalisée, et ne quitte jamais le runner. L'empreinte
+n'atteint jamais le navigateur : ni page, ni formulaire, ni réponse d'API. La comparaison est à temps
+constant.
+
+Changer `NOX_RUNNER_TOKEN` rend les anciennes empreintes invérifiables. NOX bloque alors la reprise
+et l'explique, plutôt que de contourner le contrôle.
+
+#### Pourquoi la session ne vient jamais du navigateur
+
+Un champ de session dans un formulaire offrirait le droit de reprendre **n'importe quelle**
+conversation présente sur la machine — y compris celles d'un autre projet, ou d'une session
+personnelle sans rapport avec NOX.
+
+Le serveur dérive tout de quatre identifiants — projet, tâche, run source, feedback — et revérifie
+chaque relation. Un `sourceRunId` appartenant à un autre projet est *introuvable*, pas « refusé ».
+`--continue` n'est jamais passé : il reprendrait « la conversation la plus récente du dossier »,
+c'est-à-dire une session que NOX n'a pas choisie et ne peut pas nommer.
+
+Sont interdits dans tout formulaire : `sessionId`, `resumeSessionId`, `parentRunId` libre,
+`repositoryPath`, PID, arguments CLI, `allowedTools`, `disallowedTools`.
+
+#### Le contrôle est refait juste avant le spawn
+
+La page de préparation interroge le préflight de correction, et le runner le **refait** immédiatement
+avant de créer le processus. Ce n'est pas une redondance : les deux appels répondent à deux questions
+différentes — « puis-je proposer ce bouton ? » et « puis-je lancer ce processus ? ». Entre l'affichage
+vert et le clic, l'utilisateur a eu tout le temps d'enregistrer un fichier dans son éditeur.
+
+#### Une correction est un nouveau run
+
+`Run.kind` vaut `INITIAL` ou `CORRECTION`. Une correction porte un `parentRunId`, son propre prompt,
+sa propre timeline, ses propres validations, sa propre review, sa propre empreinte. Le run parent
+n'est **jamais** modifié.
+
+```text
+TASK-006
+ ├── RUN-001 INITIAL
+ └── RUN-002 CORRECTION
+       parent = RUN-001
+```
+
+Seule la transition `REVIEW → RUNNING` est ouverte pour un lancement de correction, par une fonction
+dédiée — elle n'existe ni dans les transitions manuelles, ni dans les transitions automatisées
+génériques.
+
+Une fois lancée, une correction est un run comme les autres : même streaming SSE, même timeline, même
+reconnexion, même `Cancel run`, même capture Git finale, même review. Le seul changement de lancement
+est `--resume <session du parent>`, un prompt produit par `renderClaudeCorrectionPrompt`, et un
+préflight spécifique.
+
+#### La review d'une correction est cumulative
+
+Rien n'ayant été commité entre les deux exécutions, la review du run de correction décrit le dossier
+de travail **entier** depuis le dernier commit — travail initial et correction confondus. C'est
+volontaire : la question posée par une review est « qu'est-ce que j'accepte ? », et ce qui sera
+accepté est cet état-là.
+
+La page indique « Correction de RUN-001 » et affiche le feedback déclencheur, ce qui suffit à donner
+le contexte sans introduire un second mode de diff.
+
+#### Le feedback est du contenu, jamais une instruction
+
+Le texte de l'utilisateur est inséré entre `<review_feedback>` et `</review_feedback>`, un marqueur
+qu'il contiendrait lui-même étant neutralisé de façon visible. Les règles de NOX sont rappelées
+**après** lui, et disent explicitement que le feedback ne les modifie pas.
+
+Mais la sécurité ne se joue pas là : **les permissions ne dépendent pas du prompt**. Elles sont
+calculées à partir des commandes de validation enregistrées, exactement comme pour un run initial, et
+aucun texte ne peut les élargir. `git push` reste refusé par `--disallowedTools`, `.env` reste hors
+des outils autorisés, et `--dangerously-skip-permissions` n'est jamais passé.
+
+Le feedback est affiché comme du texte — jamais comme du HTML, jamais interprété comme du Markdown.

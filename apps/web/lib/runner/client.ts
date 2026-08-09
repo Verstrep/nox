@@ -12,6 +12,7 @@
 
 import {
   RUN_EVENT_LIMITS,
+  isClaudeCorrectionPreflightSuccess,
   isClaudePreflightSuccess,
   isClaudeRunCancelSuccess,
   isClaudeRunEventsSuccess,
@@ -28,6 +29,8 @@ import {
   isRunnerErrorResponse,
   isRunnerHealthResponse,
   isUpdateProjectDocumentSuccess,
+  type ClaudeCorrectionPreflightRequest,
+  type ClaudeCorrectionPreflightSuccess,
   type ClaudePreflightRequest,
   type ClaudePreflightSuccess,
   type ClaudeRunCancelRequest,
@@ -421,6 +424,28 @@ export function claudePreflight(
     payload,
     isClaudePreflightSuccess,
     (value) => value as ClaudePreflightSuccess,
+    options,
+  );
+}
+
+/**
+ * Verifie qu'une correction ciblee peut reprendre la session d'une execution.
+ *
+ * Le pendant de `claudePreflight` pour une reprise : il ne demande pas un
+ * repository **propre**, mais un dossier de travail **identique** a celui qui a
+ * ete relu. L'empreinte attendue est relue en base par le serveur ; elle ne
+ * transite jamais par un formulaire, et la reponse ne la renvoie pas.
+ */
+export function claudeCorrectionPreflight(
+  request: ClaudeCorrectionPreflightRequest,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<ClaudeCorrectionPreflightSuccess>> {
+  return postAuthenticated(
+    "/claude/corrections/preflight",
+    "claude/corrections/preflight",
+    request,
+    isClaudeCorrectionPreflightSuccess,
+    (value) => value as ClaudeCorrectionPreflightSuccess,
     options,
   );
 }

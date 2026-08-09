@@ -187,6 +187,22 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
     "NOX n'a pas pu capturer le detail des changements de cette execution. Son compte rendu et son etat Git restent valides ; pour le diff, utilisez « git status » et « git diff ».",
   [RUNNER_ERROR.CLAUDE_PROCESS_FAILED]:
     "L'execution s'est terminee sur une erreur. Consultez le compte rendu et la sortie d'erreur ci-dessous.",
+
+  // --- Correction ciblee ------------------------------------------------------
+  [RUNNER_ERROR.GIT_BRANCH_CHANGED]:
+    "La branche courante n'est plus celle de cette review. Revenez sur la branche d'origine avant de reprendre la session.",
+  [RUNNER_ERROR.REVIEW_FEEDBACK_INVALID]:
+    "Ce feedback ne peut pas etre enregistre : il est vide, trop long, ou contient des caracteres que NOX ne sait pas transmettre.",
+  [RUNNER_ERROR.REVIEW_FEEDBACK_ALREADY_USED]:
+    "Ce feedback a deja servi a lancer une correction. Relisez la nouvelle review, puis ecrivez-en un autre si besoin.",
+  [RUNNER_ERROR.REVIEW_NOT_RESUMABLE]:
+    "Cette execution ne peut pas etre reprise. Consultez la review pour en connaitre la raison exacte.",
+  // Le message ne liste pas ce qui a change : le detail viendrait du disque, et
+  // pourrait nommer un fichier dont le contenu ne doit pas etre expose.
+  [RUNNER_ERROR.REVIEW_WORKTREE_CHANGED]:
+    "Le repository a change depuis cette review. NOX ne peut pas attribuer surement ces modifications au run precedent. Retablissez exactement l'etat relu, ou lancez une nouvelle execution apres avoir remis Git dans un etat propre.",
+  [RUNNER_ERROR.WORKSPACE_FINGERPRINT_UNAVAILABLE]:
+    "NOX n'a pas pu verifier l'etat du dossier de travail. La reprise ciblee est indisponible pour cette execution : le contexte securise ne peut plus etre confirme.",
   [RUNNER_ERROR.CLAUDE_OUTPUT_INVALID]:
     "La sortie de Claude Code n'a pas pu etre analysee. La version installee ne produit peut-etre pas le format attendu.",
   // Ces deux codes signalent une demande que l'interface n'aurait pas du emettre.

@@ -274,6 +274,13 @@ export async function saveRunReview(
         // La capture a reussi : un eventuel echec precedent n'a plus lieu
         // d'etre affiche.
         reviewErrorCode: null,
+        // L'empreinte du dossier de travail arrive avec la review, et pour la
+        // meme raison qu'elle est immuable : elle decrit le meme instant. Les
+        // separer autoriserait un decalage entre « ce qui a ete relu » et « ce
+        // qui pourra etre repris ».
+        workspaceFingerprint: snapshot.workspace.value,
+        workspaceFingerprintVersion: snapshot.workspace.version,
+        workspaceFingerprintErrorCode: snapshot.workspace.errorCode,
       },
     });
 

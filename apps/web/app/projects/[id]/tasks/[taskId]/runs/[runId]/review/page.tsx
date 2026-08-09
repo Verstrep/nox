@@ -1,10 +1,19 @@
 import {
+  RESUME_REFUSAL,
   RUN_VALIDATION_STATUS,
   TASK_STATUS,
+  checkResumeCandidate,
   totalRunReview,
   type RunFileChange,
   type RunValidationResultView,
 } from "@nox/shared";
+import {
+  getDatabaseClient,
+  getFeedbackForCorrectionRun,
+  getRunResumeContext,
+  hasActiveRun,
+  listFeedbacksForSourceRun,
+} from "@nox/database";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -19,6 +28,7 @@ import {
   runValidationSummaryLabel,
   taskStatusLabel,
 } from "@/lib/labels";
+import { requestChangesUrl, resumeRefusalMessage } from "@/lib/correction-display";
 import { loadProject } from "@/lib/projects";
 import { formatDuration, runStatusTone, runUrl, shortSha } from "@/lib/run-display";
 import {
@@ -193,6 +203,30 @@ export default async function ReviewPage({
 
   const outcomeNotice = reviewOutcomeNotice(run.status, run.errorCode === "GIT_POLICY_VIOLATION");
   const page = runUrl(project.id, task.id, run.id);
+
+  // Correction ciblee : ce qui a ete demande depuis cette review, et — si cette
+  // execution est elle-meme une correction — le feedback qui l'a declenchee.
+  const db = getDatabaseClient();
+  const requestedChanges = await listFeedbacksForSourceRun(db, run.id);
+  const correctionOf =
+    run.parentRunId === null ? null : await getFeedbackForCorrectionRun(db, run.id);
+
+  const resumeContext = await getRunResumeContext(db, run.id);
+  const resumeRefusal =
+    resumeContext === null
+      ? RESUME_REFUSAL.RUN_NOT_COMPLETED
+      : checkResumeCandidate({
+          runStatus: resumeContext.status,
+          taskStatus: task.status,
+          errorCode: resumeContext.errorCode,
+          claudeSessionId: resumeContext.claudeSessionId,
+          hasReview: resumeContext.hasReview,
+          // Seule l'existence de l'empreinte compte ici : sa valeur ne descend
+          // jamais jusqu'a la page.
+          hasFingerprint: resumeContext.workspaceFingerprint !== null,
+          hasActiveRun: await hasActiveRun(db, task.id),
+          hasCorrection: resumeContext.hasCorrection,
+        });
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -424,12 +458,80 @@ export default async function ReviewPage({
           </>
         ) : null}
 
+        {correctionOf === null ? null : (
+          <SectionCard
+            title={`Correction de ${correctionOf.sourceRunCode}`}
+            description="Cette execution a repris la session de la precedente."
+          >
+            <p className="text-sm leading-relaxed text-zinc-400">
+              Le diff ci-dessus est l&apos;etat <strong className="text-zinc-300">complet</strong>{" "}
+              du dossier de travail depuis le dernier commit — travail initial et correction
+              confondus. C&apos;est voulu : rien n&apos;a ete commite entre les deux, et la
+              question posee est « qu&apos;accepte-t-on maintenant ? ».
+            </p>
+            <p className="mt-4 text-xs uppercase tracking-wider text-zinc-600">
+              Feedback qui a declenche cette correction
+            </p>
+            <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-zinc-950 p-4 font-mono text-sm leading-relaxed text-zinc-300">
+              {correctionOf.text}
+            </pre>
+            <p className="mt-3 text-xs text-zinc-600">
+              <Link
+                href={reviewUrl(project.id, task.id, correctionOf.sourceRunId)}
+                className="text-zinc-400 underline hover:text-zinc-200"
+              >
+                Relire la review de {correctionOf.sourceRunCode}
+              </Link>{" "}
+              — elle n&apos;a pas bouge.
+            </p>
+          </SectionCard>
+        )}
+
+        {requestedChanges.length === 0 ? null : (
+          <SectionCard
+            title="Requested changes"
+            description="Ce qui a ete demande depuis cette review, et ce que cela a produit."
+          >
+            <ul className="flex flex-col gap-5">
+              {requestedChanges.map((entry) => (
+                <li key={entry.id} className="flex flex-col gap-2">
+                  <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-zinc-950 p-4 font-mono text-sm leading-relaxed text-zinc-300">
+                    {entry.text}
+                  </pre>
+                  <p className="text-xs text-zinc-600">
+                    {formatIsoDateTime(entry.createdAt) ?? "-"} ·{" "}
+                    {entry.correctionRunId === null ? (
+                      <span>Aucune correction lancee depuis ce feedback.</span>
+                    ) : (
+                      <Link
+                        href={runUrl(project.id, task.id, entry.correctionRunId)}
+                        className="text-zinc-400 underline hover:text-zinc-200"
+                      >
+                        Correction run: {entry.correctionRunCode}
+                      </Link>
+                    )}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </SectionCard>
+        )}
+
         {task.status === TASK_STATUS.REVIEW ? (
           <SectionCard
             title="Decision"
             description="A vous de dire si ce travail est accepte. NOX ne le decide pas."
           >
-            <ReviewDecisionForm projectId={project.id} taskId={task.id} />
+            <ReviewDecisionForm
+              projectId={project.id}
+              taskId={task.id}
+              requestChangesHref={
+                resumeRefusal === null ? requestChangesUrl(project.id, task.id, run.id) : null
+              }
+              requestChangesReason={
+                resumeRefusal === null ? null : resumeRefusalMessage(resumeRefusal)
+              }
+            />
           </SectionCard>
         ) : null}
       </main>

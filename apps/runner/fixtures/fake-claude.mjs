@@ -49,6 +49,16 @@
  *                      commande Git non enregistree, une ligne composee refusee,
  *                      puis la validation enregistree
  *
+ * Modes ajoutes par TASK-012 :
+ *
+ *   stream-initial     travail initial volontairement perfectible : deux
+ *                      fichiers, dont une phrase trop longue, puis la validation
+ *                      enregistree noyee dans un enchainement `&&` — la forme
+ *                      reellement observee
+ *   stream-correction  reprise ciblee : seule la phrase visee change, le second
+ *                      fichier reste intact ; meme enchainement de validation,
+ *                      suivi de deux commandes Git de lecture non enregistrees
+ *
  * Ces modes n'existent que pour les tests. Aucun n'est atteignable en
  * production : le mode par defaut reste `success`.
  */
@@ -121,6 +131,15 @@ if (reportPath !== "") {
     "utf8",
   );
 }
+
+/**
+ * Session rapportee par les modes de TASK-012.
+ *
+ * La **meme** pour le run initial et sa correction : c'est ce que le vrai
+ * binaire fait, verifie contre un serveur Messages local — `--resume` conserve
+ * l'identifiant de la session reprise.
+ */
+const SESSION = "62b9a0f0-1d01-4a0c-8201-60f9bae0d34e";
 
 const success = {
   type: "result",
@@ -333,6 +352,91 @@ switch (mode) {
       process.stdout.write(`${line}\n`);
     }
     process.stdout.write(JSON.stringify(success));
+    process.exit(0);
+    break;
+  }
+
+  case "stream-initial": {
+    // Un travail initial simple, volontairement perfectible : deux fichiers,
+    // dont une phrase que la correction devra raccourcir.
+    const root = process.cwd();
+    writeFileSync(
+      path.join(root, "README.md"),
+      "# Depot de test\n\nCette phrase est beaucoup trop longue et devra imperativement etre " +
+        "raccourcie par la correction qui suivra cette review.\n",
+      "utf8",
+    );
+    writeFileSync(path.join(root, "note.md"), "# Note\n\nA conserver telle quelle.\n", "utf8");
+
+    const cdInitial = `cd "${root.replaceAll("\\", "/")}"`;
+    const initialValidation = process.env.FAKE_CLAUDE_VALIDATION ?? "git diff --check";
+
+    const lines = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: SESSION }),
+      JSON.stringify(toolUse("si-1", "Edit", { file_path: "README.md" })),
+      JSON.stringify(toolResult("si-1")),
+      JSON.stringify(toolUse("si-2", "Write", { file_path: "note.md" })),
+      JSON.stringify(toolResult("si-2")),
+      // La forme **reelle** observee lors du premier run de TASK-012 : la
+      // validation enregistree noyee au milieu de `echo` et de commandes Git de
+      // lecture. C'est cette ligne qui la laissait a « Not run ».
+      JSON.stringify(
+        toolUse("si-3", "Bash", {
+          command:
+            `${cdInitial} && ${initialValidation} && echo "diff --check: OK" && ` +
+            `git status --short && echo "---STAT---" && git diff --stat`,
+        }),
+      ),
+      JSON.stringify(realToolResult("si-3", "Aucune erreur d'espaces.", false)),
+      JSON.stringify(assistantText("J'ai ecrit le README et une note.")),
+    ];
+    for (const line of lines) {
+      process.stdout.write(`${line}\n`);
+    }
+    process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));
+    process.exit(0);
+    break;
+  }
+
+  case "stream-correction": {
+    // Reprise ciblee : seule la phrase visee change, `note.md` est laissee
+    // intacte. C'est ce que le test fonctionnel verifie — une correction qui
+    // reecrirait tout serait indiscernable d'un nouveau run.
+    const root = process.cwd();
+    writeFileSync(
+      path.join(root, "README.md"),
+      "# Depot de test\n\nCette phrase est courte.\n",
+      "utf8",
+    );
+
+    const cd = `cd "${root.replaceAll("\\", "/")}"`;
+    const validation = process.env.FAKE_CLAUDE_VALIDATION ?? "git diff --check";
+    const lines = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: SESSION }),
+      JSON.stringify(toolUse("sc-1", "Edit", { file_path: "README.md" })),
+      JSON.stringify(toolResult("sc-1")),
+      // Meme forme reelle que le run initial : un correction run doit suivre
+      // exactement le meme pipeline de validations.
+      JSON.stringify(
+        toolUse("sc-2", "Bash", {
+          command:
+            `${cd} && ${validation} && echo "diff --check: OK" && ` +
+            `git status --short && echo "---STAT---" && git diff --stat`,
+        }),
+      ),
+      JSON.stringify(realToolResult("sc-2", "Aucune erreur d'espaces.", false)),
+      // Deux commandes Git de lecture, seules et non enregistrees : affichables,
+      // mais elles ne portent aucun verdict et ne creent aucune validation.
+      JSON.stringify(toolUse("sc-3", "Bash", { command: `${cd} && git status --short` })),
+      JSON.stringify(realToolResult("sc-3", " M README.md", false)),
+      JSON.stringify(toolUse("sc-4", "Bash", { command: `${cd} && git diff --stat` })),
+      JSON.stringify(realToolResult("sc-4", " README.md | 2 +-", false)),
+      JSON.stringify(assistantText("J'ai raccourci la phrase, sans toucher au reste.")),
+    ];
+    for (const line of lines) {
+      process.stdout.write(`${line}\n`);
+    }
+    process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));
     process.exit(0);
     break;
   }

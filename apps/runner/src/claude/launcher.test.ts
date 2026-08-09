@@ -33,6 +33,9 @@ let reportPath: string;
 
 const isWindows = process.platform === "win32";
 
+/** Session fictive, a la forme reelle rapportee par Claude Code. */
+const SESSION = "62b9a0f0-1d01-4a0c-8201-60f9bae0d34e";
+
 function claudeConfig(overrides: Partial<ClaudeConfig> = {}): ClaudeConfig {
   return { executable, maxTurns: 12, timeoutMinutes: 5, ...overrides };
 }
@@ -314,5 +317,138 @@ describe("launchClaude - lancement reel du faux Claude", () => {
     const outcome = await handle.completed;
     assert.notEqual(outcome.spawnError, null);
     assert.equal(outcome.exitCode, null);
+  });
+});
+
+/**
+ * Tests de la reprise de session, ajoutes par TASK-012.
+ *
+ * La syntaxe testee ici a ete verifiee sur le binaire local `2.1.223`, contre un
+ * serveur Messages en boucle locale : `-p --resume <id> --output-format
+ * stream-json --verbose` reprend bien l'historique de la session, et conserve son
+ * identifiant.
+ */
+describe("buildClaudeArguments — correction ciblee", () => {
+  const base = { allowedTools: [], disallowedTools: [], maxTurns: 40 };
+
+  it("n'ajoute aucun --resume pour une execution initiale", () => {
+    const args = buildClaudeArguments(base);
+    assert.equal(args.includes("--resume"), false);
+    assert.equal(args.includes("-r"), false);
+  });
+
+  it("n'ajoute aucun --resume quand la session est nulle", () => {
+    assert.equal(
+      buildClaudeArguments({ ...base, resumeSessionId: null }).includes("--resume"),
+      false,
+    );
+  });
+
+  it("n'ajoute aucun --resume pour une session vide", () => {
+    // Une chaine vide serait comprise par le binaire comme « ouvre le selecteur
+    // interactif » : exactement ce qu'un mode non interactif ne doit pas faire.
+    assert.equal(
+      buildClaudeArguments({ ...base, resumeSessionId: "" }).includes("--resume"),
+      false,
+    );
+  });
+
+  it("ajoute --resume exactement une fois pour une correction", () => {
+    const args = buildClaudeArguments({ ...base, resumeSessionId: SESSION });
+    assert.equal(args.filter((argument) => argument === "--resume").length, 1);
+  });
+
+  it("passe la session en argument suivant, jamais collee", () => {
+    const args = buildClaudeArguments({ ...base, resumeSessionId: SESSION });
+    assert.equal(args[args.indexOf("--resume") + 1], SESSION);
+    assert.equal(
+      args.some((argument) => argument.startsWith("--resume=")),
+      false,
+    );
+  });
+
+  it("conserve tout ce qu'un run initial passe deja", () => {
+    const args = buildClaudeArguments({
+      allowedTools: ["Read", "Bash(npm run test)"],
+      disallowedTools: ["Bash(git push:*)"],
+      maxTurns: 25,
+      resumeSessionId: SESSION,
+    });
+
+    assert.equal(args[0], "-p");
+    assert.equal(args[args.indexOf("--output-format") + 1], "stream-json");
+    assert.equal(args.includes("--verbose"), true);
+    assert.equal(args[args.indexOf("--max-turns") + 1], "25");
+    assert.equal(args[args.indexOf("--allowedTools") + 1], "Read,Bash(npm run test)");
+    assert.equal(args[args.indexOf("--disallowedTools") + 1], "Bash(git push:*)");
+  });
+
+  it("ne passe jamais --continue", () => {
+    // `--continue` reprend « la conversation la plus recente du dossier » : une
+    // session que NOX n'a pas choisie et ne peut pas nommer.
+    const args = buildClaudeArguments({ ...base, resumeSessionId: SESSION });
+    assert.equal(args.includes("--continue"), false);
+    assert.equal(args.includes("-c"), false);
+  });
+
+  it("ne passe jamais --dangerously-skip-permissions", () => {
+    const args = buildClaudeArguments({ ...base, resumeSessionId: SESSION });
+    assert.equal(args.includes("--dangerously-skip-permissions"), false);
+    assert.equal(args.includes("--allow-dangerously-skip-permissions"), false);
+  });
+
+  it("ne place aucun prompt dans les arguments", () => {
+    const args = buildClaudeArguments({ ...base, resumeSessionId: SESSION });
+    assert.equal(
+      args.some((argument) => argument.includes("Tu reprends la session")),
+      false,
+    );
+  });
+});
+
+describe("launchClaude — arguments reellement recus", () => {
+  // Un test precedent laisse le faux Claude en mode lent : on le remet a
+  // "success" pour ne pas attendre dix secondes par lancement.
+  before(() => {
+    process.env["FAKE_CLAUDE_MODE"] = "success";
+  });
+
+  it("transmet --resume au processus, et le prompt par stdin", async () => {
+    const handle = launchClaude({
+      repositoryRoot: workspace,
+      prompt: "Corrige la deuxieme phrase.",
+      allowedTools: ["Read"],
+      disallowedTools: ["Bash(git push:*)"],
+      claude: claudeConfig(),
+      resumeSessionId: SESSION,
+    });
+
+    await handle.completed;
+    const received = await readReport();
+
+    assert.equal(received.argv.filter((argument) => argument === "--resume").length, 1);
+    assert.equal(received.argv[received.argv.indexOf("--resume") + 1], SESSION);
+    assert.equal(received.argv.includes("--continue"), false);
+    assert.equal(received.argv.includes("--dangerously-skip-permissions"), false);
+    // Le prompt arrive par l'entree standard, jamais en argument.
+    assert.equal(received.prompt, "Corrige la deuxieme phrase.");
+    assert.equal(
+      received.argv.some((argument) => argument.includes("Corrige la deuxieme phrase")),
+      false,
+    );
+  });
+
+  it("ne transmet aucun --resume pour un run initial", async () => {
+    const handle = launchClaude({
+      repositoryRoot: workspace,
+      prompt: "Implemente la tache.",
+      allowedTools: [],
+      disallowedTools: [],
+      claude: claudeConfig(),
+    });
+
+    await handle.completed;
+    const received = await readReport();
+    assert.equal(received.argv.includes("--resume"), false);
   });
 });

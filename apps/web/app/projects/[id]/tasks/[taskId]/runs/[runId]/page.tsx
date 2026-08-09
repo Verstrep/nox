@@ -180,6 +180,20 @@ export default async function RunPage({
             </p>
             <h1 className="mt-1 text-xl font-semibold text-zinc-50">{task.title}</h1>
             <p className="mt-1 truncate text-sm text-zinc-600">{project.name}</p>
+            {/* La chaine des corrections est rappelee ici plutot que dessinee :
+                un lien vers le parent suffit a la remonter, run par run. */}
+            {run.parentRunId === null ? null : (
+              <p className="mt-2 text-xs text-zinc-500">
+                Correction de{" "}
+                <Link
+                  href={runUrl(project.id, task.id, run.parentRunId)}
+                  className="font-mono text-zinc-400 underline hover:text-zinc-200"
+                >
+                  l&apos;execution precedente
+                </Link>{" "}
+                — la session de celle-ci a ete reprise.
+              </p>
+            )}
           </div>
           <StatusBadge tone={runStatusTone(run.status)}>
             {runStatusLabel(run.status)}

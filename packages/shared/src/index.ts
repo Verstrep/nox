@@ -129,12 +129,43 @@ export type {
 export { renderClaudeExecutionPrompt } from "./claude-prompt.js";
 
 export {
+  FEEDBACK_CLOSE,
+  FEEDBACK_OPEN,
+  renderClaudeCorrectionPrompt,
+} from "./claude-correction-prompt.js";
+
+export type { CorrectionPromptInput } from "./claude-correction-prompt.js";
+
+export {
+  RESUME_REFUSAL,
+  REVIEW_FEEDBACK_LIMITS,
+  RUN_KIND,
+  RUN_KINDS,
+  WORKSPACE_FINGERPRINT_VERSION,
+  checkResumeCandidate,
+  checkReviewFeedback,
+  isRunKind,
+  isRunWorkspaceFingerprint,
+  normalizeReviewFeedback,
+} from "./corrections.js";
+
+export type {
+  ResumeCandidate,
+  ResumeRefusal,
+  ReviewFeedbackRefusal,
+  RunKind,
+  RunWorkspaceFingerprint,
+} from "./corrections.js";
+
+export {
+  isClaudeCorrectionPreflightSuccess,
   isClaudePreflightSuccess,
   isClaudeRunCancelSuccess,
   isClaudeRunEventsSuccess,
   isClaudeRunReviewSuccess,
   isClaudeRunStatusSuccess,
   isStartClaudeRunSuccess,
+  parseClaudeCorrectionPreflightRequest,
   parseClaudePreflightRequest,
   parseClaudeRunCancelRequest,
   parseClaudeRunEventsRequest,
@@ -144,6 +175,8 @@ export {
 } from "./claude.js";
 
 export type {
+  ClaudeCorrectionPreflightRequest,
+  ClaudeCorrectionPreflightSuccess,
   ClaudePreflightGit,
   ClaudePreflightRequest,
   ClaudePreflightSuccess,

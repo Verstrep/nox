@@ -1563,6 +1563,7 @@ describe("fetchClaudeRunReview", () => {
           finishedAt: null,
         },
       ],
+      workspace: { value: "f".repeat(64), version: "v1", errorCode: null },
     },
   };
 

@@ -134,6 +134,20 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   // `500` : la capture a bien ete tentee et a echoue cote runner.
   [RUNNER_ERROR.CLAUDE_REVIEW_FAILED]: 500,
 
+  // --- Correction ciblee -----------------------------------------------------
+
+  [RUNNER_ERROR.REVIEW_FEEDBACK_INVALID]: 400,
+  // `409` : la demande est bien formee, mais l'etat rend la reprise sans objet.
+  // Le dossier de travail a change, ou le feedback a deja servi — dans les deux
+  // cas, il n'y a rien a corriger dans la requete elle-meme.
+  [RUNNER_ERROR.REVIEW_FEEDBACK_ALREADY_USED]: 409,
+  [RUNNER_ERROR.REVIEW_NOT_RESUMABLE]: 409,
+  [RUNNER_ERROR.REVIEW_WORKTREE_CHANGED]: 409,
+  [RUNNER_ERROR.GIT_BRANCH_CHANGED]: 409,
+  // `500` : NOX n'a pas su calculer l'empreinte. Ce n'est pas la faute de
+  // l'appelant, et surtout : ce n'est pas une autorisation.
+  [RUNNER_ERROR.WORKSPACE_FINGERPRINT_UNAVAILABLE]: 500,
+
   [RUNNER_ERROR.INTERNAL_ERROR]: 500,
 };
 

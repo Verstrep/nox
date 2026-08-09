@@ -386,23 +386,56 @@ orchestration OpenAI, fusion de branches, pull request, plusieurs agents.
 
 ---
 
-## 🟢 12. Feedback de review et reprise ciblée d'une session Claude — `TASK-012`
-
-**Étape active.**
+## ✅ 12. Feedback de review et reprise ciblée d'une session Claude — `TASK-012`
 
 **Objectif** : permettre de rejeter une review avec un commentaire, puis reprendre la session
 Claude associée pour appliquer un correctif ciblé — sans orchestration OpenAI automatique.
 
-- Commentaire attaché à une review rejetée.
-- Reprise de la session Claude d'une exécution, à la demande explicite de l'utilisateur.
-- Correctif ciblé plutôt que relance depuis zéro.
+- `Request changes` depuis une review, distinct de `Reopen`
+  ([D-171](DECISIONS.md#d-171--request-changes-et-reopen-ne-se-confondent-pas)).
+- Feedback humain persistant, historique, utilisable **une seule fois**
+  ([D-170](DECISIONS.md#d-170--le-feedback-est-un-objet-persistant-pas-un-paramètre-de-lancement),
+  [D-177](DECISIONS.md#d-177--un-feedback-vaut-pour-une-seule-correction)).
+- Reprise de **la** session du run relu, à la demande explicite de l'utilisateur, avec une syntaxe
+  `--resume` vérifiée sur le binaire local
+  ([D-172](DECISIONS.md#d-172--la-session-reprise-vient-du-run-parent-jamais-du-navigateur)).
+- Dossier de travail sale autorisé, mais un seul : celui qui a été relu
+  ([D-173](DECISIONS.md#d-173--un-dossier-de-travail-sale-est-autorisé-mais-un-seul--celui-qui-a-été-relu)).
+- Empreinte authentifiée du dossier de travail, complète ou refusée
+  ([D-174](DECISIONS.md#d-174--lempreinte-du-dossier-de-travail-est-authentifiée-jamais-un-simple-hachage),
+  [D-175](DECISIONS.md#d-175--une-empreinte-partielle-nexiste-pas--cest-un-refus)).
+- Contrôle refait juste avant le lancement du processus
+  ([D-176](DECISIONS.md#d-176--le-contrôle-est-refait-juste-avant-le-spawn)).
+- Correction = nouveau run, parent immuable, chaîne possible
+  ([D-169](DECISIONS.md#d-169--une-correction-est-une-exécution-à-part-entière-distinguée-par-son-type),
+  [D-179](DECISIONS.md#d-179--une-chaîne-de-corrections-chacune-reprenant-lexécution-quelle-a-relue)).
+- Review cumulative après correction, validations issues de la spécification actuelle
+  ([D-178](DECISIONS.md#d-178--la-review-dune-correction-montre-létat-complet-pas-le-delta),
+  [D-180](DECISIONS.md#d-180--les-validations-dune-correction-viennent-de-la-spécification-actuelle)).
+- Feedback traité comme du contenu, jamais comme une instruction privilégiée
+  ([D-181](DECISIONS.md#d-181--le-feedback-est-du-contenu-jamais-une-instruction-privilégiée)).
 - Commit et push restent hors périmètre, comme depuis le début.
 
-**Fin d'étape** : un aller-retour de correction se fait dans NOX, sans recopier de contexte.
+**Fin d'étape atteinte** : un aller-retour de correction se fait dans NOX, sans recopier de
+contexte. Vérifié par un test fonctionnel avec un faux Claude Code, voir
+[PROJECT_STATE.md](PROJECT_STATE.md).
+
+> **Réserve.** Aucune requête Claude réelle n'a été lancée pendant cette étape. La syntaxe
+> `-p --resume <id> --output-format stream-json --verbose` a en revanche été exercée sur le binaire
+> local `2.1.223`, contre un serveur Messages en boucle locale : l'historique est réellement rejoué
+> et la session conserve son identifiant. Une procédure de vérification manuelle est décrite dans
+> [PROJECT_STATE.md](PROJECT_STATE.md).
+
+Hors périmètre volontaire : architecte OpenAI, génération automatique du feedback, review IA,
+correction sans clic, commit/push/`git add` automatiques, `reset`, `restore`, `checkout`, nettoyage,
+reprise d'un run annulé, échoué ou bloqué, choix libre d'une session, `--continue`, plusieurs agents
+en parallèle, modification du feedback après lancement, commentaires par ligne de diff.
 
 ---
 
-## ⬜ 13. Orchestrateur OpenAI
+## 🟢 13. Orchestrateur OpenAI
+
+**Étape active.**
 
 **Objectif** : discuter du besoin dans NOX.
 
@@ -436,4 +469,4 @@ Claude associée pour appliquer un correctif ciblé — sans orchestration OpenA
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 13.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 14.**

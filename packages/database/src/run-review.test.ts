@@ -120,6 +120,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     files: [fileChange(0)],
     omittedFiles: 0,
     validations: [],
+    workspace: { value: "f".repeat(64), version: "v1", errorCode: null },
     ...overrides,
   };
 }

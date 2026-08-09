@@ -32,10 +32,11 @@
  *
  * ## Une commande Bash n'arrive jamais nue
  *
- * Claude Code 2.1.223 prefixe ses commandes de son repertoire de travail :
- * `cd "D:/…/depot" && git diff --check`. La lecture de cette ligne vit dans
- * `bash-command.ts`, avec ses raisons ; ici, on se contente d'en utiliser le
- * resultat — un texte affichable, et la liste des validations reconnues.
+ * Claude Code 2.1.223 prefixe ses commandes de son repertoire de travail, et les
+ * enchaine volontiers : `cd "D:/…/depot" && git diff --check && echo "OK"`. La
+ * lecture de cette ligne vit dans `bash-command.ts`, avec ses raisons ; ici, on
+ * se contente d'en utiliser le resultat — un texte affichable, la liste des
+ * validations reconnues, et le nombre de commandes reelles de la ligne.
  */
 
 import {
@@ -79,6 +80,15 @@ type PendingTool = {
    * cas que TASK-011 corrective a rendu possible.
    */
   validationCommands: readonly string[];
+  /**
+   * La ligne ne portait-elle qu'une seule commande, prefixe `cd` exclu ?
+   *
+   * C'est la condition qui autorise a imputer un echec. Des que la ligne
+   * enchainait autre chose — une seconde validation, une commande Git, un
+   * segment que NOX n'a pas su lire —, le resultat unique ne dit plus quel
+   * maillon a cede, et l'issue reste inconnue.
+   */
+  soleCommand: boolean;
 };
 
 /**
@@ -135,11 +145,11 @@ export type NormalizerOptions = {
   /**
    * Commandes de validation autorisees pour cette execution.
    *
-   * Une commande Bash n'est affichee que si **chacun de ses segments**
-   * correspond exactement a l'une d'elles, ou a une commande Git en lecture
-   * seule. Tout le reste devient « Running an allowed command » : le prompt peut
-   * contenir une valeur, un chemin ou un secret, et NOX ne cherche pas a
-   * distinguer les cas.
+   * Un segment de commande Bash n'est affiche que s'il correspond exactement a
+   * l'une d'elles, ou a une commande Git en lecture seule. Les autres sont
+   * reduits a `...` : le prompt peut contenir une valeur, un chemin ou un
+   * secret, et NOX ne cherche pas a distinguer les cas. Une ligne dont aucun
+   * segment n'est reconnu devient « Running an allowed command ».
    *
    * Ces memes commandes servent a reconnaitre les validations. Une commande Git
    * en lecture seule n'est **pas** une validation par nature — mais elle le
@@ -283,10 +293,14 @@ export class ClaudeEventNormalizer {
     const reading =
       name === "Bash"
         ? readBashCommand(readString(input, "command") ?? "", this.#allowedCommands)
-        : { display: null, validations: [] as readonly string[] };
+        : { display: null, validations: [] as readonly string[], commandCount: 0 };
 
     if (id !== null) {
-      this.#remember(id, { name, validationCommands: reading.validations });
+      this.#remember(id, {
+        name,
+        validationCommands: reading.validations,
+        soleCommand: reading.commandCount === 1,
+      });
     }
 
     for (const command of reading.validations) {
@@ -333,11 +347,14 @@ export class ClaudeEventNormalizer {
       const validations = pending?.validationCommands ?? [];
       if (validations.length > 0) {
         // Avec un chainage `&&`, une reussite prouve que **tous** les segments
-        // ont tourne et reussi. Un echec, lui, ne dit pas lequel a echoue :
-        // quand la ligne portait plusieurs validations, l'issue reste inconnue.
+        // ont tourne et reussi : la validation a donc reellement reussi, meme si
+        // la ligne portait par ailleurs des commandes que NOX n'affiche pas.
+        //
+        // Un echec ne dit pas lequel des maillons a cede. L'imputer a la
+        // validation n'est honnete que si elle etait seule sur la ligne.
         const outcome: ValidationOutcome = !failed
           ? "passed"
-          : validations.length === 1
+          : pending?.soleCommand === true && validations.length === 1
             ? "failed"
             : "unknown";
 
@@ -494,10 +511,11 @@ export function describeToolUse(
     }
 
     case "Bash": {
-      // Le seul cas ou une commande est reproduite : chacun de ses segments a
-      // ete valide mot pour mot en amont, donc elle ne peut rien contenir que
-      // NOX n'ait deja accepte. Le prefixe de navigation, lui, a disparu — il
-      // porte un chemin absolu de la machine.
+      // Le seul cas ou une commande est reproduite : chaque segment affiche a
+      // ete valide mot pour mot en amont, donc la ligne ne peut rien contenir
+      // que NOX n'ait deja accepte. Le prefixe de navigation, lui, a disparu —
+      // il porte un chemin absolu de la machine — et les segments non reconnus
+      // sont reduits a `...`.
       const shown = describeCommand(readString(input, "command") ?? "");
       return shown === null ? "Running an allowed command" : `Running ${shown}`;
     }

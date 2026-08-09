@@ -72,6 +72,21 @@ export {
 } from "./run-review.js";
 
 export {
+  cancelTaskCorrection,
+  createReviewFeedback,
+  getFeedbackForCorrectionRun,
+  getReviewFeedback,
+  getRunResumeContext,
+  listFeedbacksForSourceRun,
+  startCorrectionFromFeedback,
+  startTaskCorrection,
+  type CreateFeedbackResult,
+  type ReviewFeedbackView,
+  type RunResumeContext,
+  type StartCorrectionResult,
+} from "./review-feedback.js";
+
+export {
   DATABASE_URL_ENV_VAR,
   databaseFileExists,
   findRepositoryRoot,

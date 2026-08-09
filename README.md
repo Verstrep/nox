@@ -1059,23 +1059,125 @@ Partial changes
 
 C'est souvent le cas le plus utile : voir ce qu'un agent interrompu a laissé derrière lui.
 
-### Accepter ou rejeter : `Approve` / `Reopen`
+### Accepter ou rejeter : `Approve` / `Request changes` / `Reopen`
 
-Quand la tâche est en `Review`, la page propose deux boutons.
+Quand la tâche est en `Review`, la page propose trois boutons.
 
-| Bouton | Effet sur la tâche |
+| Bouton | Effet |
 | --- | --- |
 | `Approve` | `Review` → `Done` |
+| `Request changes` | ouvre la saisie d'un feedback, puis une page de préparation |
 | `Reopen` | `Review` → `Ready` |
 
-**Ni l'un ni l'autre ne touche à Git.** Pas de commit, pas de `git add`, pas de push, pas de
-restauration, pas de relance. Accepter une review veut dire « j'ai relu, ça me convient » — pas
-« enregistre-le pour moi ». Le commit reste votre geste, dans votre terminal, avec le message que
-vous choisissez.
+**Aucun des trois ne touche à Git.** Pas de commit, pas de `git add`, pas de push, pas de
+restauration. Accepter une review veut dire « j'ai relu, ça me convient » — pas « enregistre-le pour
+moi ». Le commit reste votre geste, dans votre terminal, avec le message que vous choisissez.
 
-Après `Reopen`, souvenez-vous que le repository devra redevenir propre et synchronisé avant un
-nouveau lancement. NOX ne le nettoie pas : la vérification préalable refusera de partir, ce qui
-est la bonne façon de l'apprendre.
+`Request changes` et `Reopen` rejettent tous les deux le travail, et c'est là que s'arrête la
+ressemblance :
+
+- **`Request changes`** demande à *la même session Claude* de corriger, à partir de votre feedback,
+  en conservant ce qui est déjà correct. Le repository reste tel quel — il *doit* rester tel quel.
+- **`Reopen`** remet simplement la tâche à `Ready`. Vous reprenez la main : c'est vous qui déciderez
+  quoi faire du repository avant un futur lancement. NOX ne le nettoie pas, et la vérification
+  préalable refusera de partir tant qu'il sera sale — ce qui est la bonne façon de l'apprendre.
+
+## Demander une correction : `Request changes`
+
+C'est ce qui évite de tout réexpliquer à une conversation neuve.
+
+### Écrire le feedback
+
+Un seul champ. Claude Code reprendra la session de cette exécution : il connaît déjà la tâche, les
+fichiers, et ce qu'il a produit. Inutile de tout réécrire — dites ce qui ne va pas.
+
+```text
+La deuxième phrase du README doit être plus courte. Ne touche pas au reste.
+```
+
+Jusqu'à 16 Kio. Accents, listes, extraits de code : tout est conservé tel quel. Le bouton
+`Prepare correction` **ne lance rien** — il enregistre votre texte et ouvre la page suivante.
+
+### La page de préparation
+
+Elle montre la source, votre feedback, les préconditions vérifiées à l'instant par le runner, et le
+**prompt exact** qui partira. Rien ne démarre avant `Resume Claude Code`.
+
+```text
+✓ Task is in Review
+✓ Source run completed
+✓ Claude session available
+✓ Review snapshot available
+✓ Git branch and HEAD unchanged
+✓ Repository matches reviewed state
+✓ Claude Code available
+```
+
+### Le repository doit être *exactement* celui que vous avez relu
+
+C'est la condition la moins intuitive, et la plus importante.
+
+Une correction part d'un repository **sale** — le travail relu n'a été ni commité ni restauré, c'est
+tout l'intérêt. Mais un seul dossier de travail sale est acceptable : celui de la review.
+
+Si vous avez modifié un fichier entre-temps, NOX refuse :
+
+> Le repository a changé depuis cette review. NOX ne peut pas attribuer sûrement ces modifications au
+> run précédent. Rétablissez exactement l'état relu, ou lancez une nouvelle exécution après avoir
+> remis Git dans un état propre.
+
+Pourquoi tant de sévérité ? Parce que sans cette règle, Claude reprendrait sa session sur un état
+qu'il n'a jamais produit, et la review suivante mélangerait votre travail et le sien sans qu'on
+puisse les démêler.
+
+**Il n'existe aucun bouton « continuer quand même »**, et il n'en existera pas. Un forçage
+transformerait une garantie en suggestion.
+
+Le contrôle porte sur le contenu réel des fichiers, pas sur leur liste : rééditer une ligne sans
+changer le nombre de lignes est détecté. Il est refait **juste avant** le lancement — entre
+l'affichage vert et votre clic, un enregistrement a pu se glisser.
+
+### Le run de correction
+
+C'est une exécution à part entière : son propre numéro, son propre prompt, sa propre timeline, ses
+propres validations, sa propre review. `Cancel run` fonctionne comme d'habitude.
+
+```text
+TASK-006
+ ├── RUN-001  travail initial
+ └── RUN-002  correction de RUN-001
+```
+
+**RUN-001 n'est jamais modifié.** Sa review reste consultable, identique à ce qu'elle était.
+
+La review de RUN-002 montre l'état **complet** du dossier de travail depuis le dernier commit —
+travail initial et correction confondus. C'est voulu : rien n'a été commité entre les deux, et la
+question posée est « qu'est-ce que j'accepte maintenant ? ».
+
+Vous pouvez enchaîner : `RUN-001 → RUN-002 → RUN-003`. Chaque correction reprend la session de
+l'exécution que vous venez de relire, et demande un nouveau feedback — écrit après avoir regardé ce
+qu'a produit la précédente.
+
+### Votre feedback n'est pas une instruction privilégiée
+
+Le texte est transmis à Claude entre des marqueurs explicites, et les règles de NOX sont rappelées
+après lui. Mais l'essentiel est ailleurs : **les permissions ne dépendent pas de ce que vous
+écrivez**. Elles sont calculées à partir des commandes de validation de la tâche, comme pour un run
+initial.
+
+Un feedback qui demanderait « lance git push » ou « lis .env » sera transmis tel quel — c'est votre
+texte — et n'obtiendra rien de plus : `git push` reste refusé, `.env` reste hors des outils
+autorisés, et `--dangerously-skip-permissions` n'est jamais passé.
+
+### Ce que NOX ne fait pas
+
+- Aucun feedback généré automatiquement : c'est vous qui écrivez.
+- Aucune correction sans clic.
+- Aucune session choisie ailleurs que dans le run que vous relisez.
+- Aucun commit, aucun push, aucun `git add`, aucune restauration.
+- Les exécutions antérieures à cette fonctionnalité ne sont pas reprenables : NOX n'a pas enregistré
+  l'empreinte de leur dossier de travail, et en reconstituer une aujourd'hui décrirait le présent en
+  prétendant décrire le passé.
 
 ### En cas de limite Claude
 
@@ -1257,6 +1359,8 @@ NOX/
 │   │   │   ├── run-events.ts       Jonction registre ↔ SQLite, rattrapage
 │   │   │   ├── run-review.ts       Transfert unique de l'instantané vers la base
 │   │   │   ├── review-display.ts   Sélection de fichier, lignes de diff, disponibilité
+│   │   │   ├── correction-display.ts
+│   │   │   │                   URL, refus expliqués, préconditions
 │   │   │   ├── labels.ts           Seule couche de traduction des valeurs internes
 │   │   │   ├── runs.ts             Chargement et réconciliation des runs
 │   │   │   └── ...             Validation métier et lecture des données
@@ -1277,6 +1381,8 @@ NOX/
 │           │   ├── registry.ts     Registre en mémoire : états et événements
 │           │   ├── cancel.ts       Annulation contrôlée, sans seconde logique d'arrêt
 │           │   ├── validations.ts  Suivi des commandes réellement exécutées
+│           │   ├── correction-preflight.ts
+│           │   │                   État exactement relu, avant toute reprise
 │           │   ├── stream/         Parser NDJSON, lecture des commandes Bash,
 │           │   │                   normalisation, sanitation
 │           │   └── runs.ts         Cycle de vie complet d'une exécution
@@ -1284,6 +1390,7 @@ NOX/
 │               ├── resolve-repository.ts   Résolution Git (execFile, sans shell)
 │               ├── git-state.ts            État Git en lecture seule
 │               ├── git-review.ts           Capture détaillée du diff, à la finalisation
+│               ├── workspace-fingerprint.ts Empreinte authentifiée du dossier de travail
 │               ├── documents/              Inventaire, lecture, écriture, création, confinement
 │               └── tasks/                  Document de tâche et dossier `tasks/`
 │
@@ -1300,12 +1407,16 @@ NOX/
 │   │   ├── src/claude-commands.ts  Validation des commandes et permissions
 │   │   ├── src/claude-events.ts    Événements publics, types fermés et bornes
 │   │   ├── src/review.ts           Changements, validations, bornes, fichiers sensibles
+│   │   ├── src/corrections.ts      Nature d'un run, feedback, conditions de reprise
+│   │   ├── src/claude-correction-prompt.ts
+│   │   │                           Prompt de correction, pur et déterministe
 │   │   └── src/claude.ts           Contrat des routes Claude Code
 │   │
 │   └── database/               Accès aux données (@nox/database)
 │       ├── prisma/             Schéma et migrations versionnées
 │       ├── src/                Client, chemins, requêtes sur Project, Task, Run,
-│       │                       RunEvent, RunFileChange, RunValidationResult
+│       │                       RunEvent, RunFileChange, RunValidationResult,
+│       │                       ReviewFeedback
 │       └── prisma.config.ts    Configuration du CLI Prisma
 │
 ├── data/                       Base SQLite locale (contenu non versionné)

@@ -5,6 +5,10 @@ import { after, before, describe, it } from "node:test";
 
 import type { RunnerConfig } from "./config.ts";
 import { MAX_BODY_BYTES, MAX_DOCUMENT_BODY_BYTES } from "./http/body.ts";
+import type {
+  CorrectionPreflightRequest,
+  CorrectionPreflightResult,
+} from "./claude/correction-preflight.ts";
 import { createRunnerServer } from "./server.ts";
 import type { ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
@@ -340,6 +344,25 @@ function fakeStartRun(request: StartRunRequest): Promise<StartRunResult> {
   return Promise.resolve({ ok: true, startedAt: new Date("2026-08-06T10:00:00.000Z") });
 }
 
+/**
+ * Preflight de correction simule.
+ *
+ * Il ne calcule aucune empreinte : ce n'est pas l'objet des tests de routage.
+ * Il refuse simplement toute empreinte differente de celle attendue, ce qui
+ * suffit a verifier la traduction en statut HTTP.
+ */
+function fakeCorrectionPreflight(
+  request: CorrectionPreflightRequest,
+): Promise<CorrectionPreflightResult> {
+  if (request.expectedWorkspaceFingerprint !== "f".repeat(64)) {
+    return Promise.resolve({ ok: false, code: "REVIEW_WORKTREE_CHANGED" as never });
+  }
+  return Promise.resolve({
+    ok: true,
+    claudeVersion: "2.1.223",
+    git: { branch: "main", head: "a".repeat(40), upstream: "origin/main" },
+  });
+}
 /** Registre neuf : la contrainte « un seul run actif » ne doit pas fuir entre tests. */
 const testRegistry = new ClaudeRunRegistry();
 
@@ -350,6 +373,7 @@ before(async () => {
   // Le serveur est cree sans port fixe : le systeme en attribue un libre.
   server = createRunnerServer(CONFIG, {
     claudePreflight: fakePreflight,
+    claudeCorrectionPreflight: fakeCorrectionPreflight,
     startClaudeRun: fakeStartRun,
     runRegistry: testRegistry,
     resolveRepository: fakeResolve,
@@ -2121,6 +2145,7 @@ describe("POST /claude/runs/review", () => {
             finishedAt: null,
           },
         ],
+        workspace: { value: "f".repeat(64), version: "v1", errorCode: null },
       },
     });
   }
@@ -2231,5 +2256,143 @@ describe("POST /claude/runs/review", () => {
 
     assert.equal(response.text.includes(TOKEN), false);
     assert.equal(/[A-Za-z]:\\/.test(response.text), false);
+  });
+});
+
+describe("POST /claude/corrections/preflight", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+
+  const REVIEWED = {
+    repositoryPath: "D:/depot",
+    expectedGitHead: "a".repeat(40),
+    expectedBranch: "main",
+    expectedWorkspaceFingerprint: "f".repeat(64),
+  };
+
+  it("exige une authentification", async () => {
+    const response = await call("/claude/corrections/preflight", {
+      method: "POST",
+      token: null,
+      body: JSON.stringify(REVIEWED),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("accepte un etat identique et repond sans empreinte", async () => {
+    const response = await call("/claude/corrections/preflight", {
+      ...authorized,
+      body: JSON.stringify(REVIEWED),
+    });
+
+    assert.equal(response.status, 200);
+    // Ni chemin absolu, ni empreinte dans la reponse : l'appelant apprend que
+    // l'etat correspond, pas a quoi il correspond.
+    const serialized = JSON.stringify(response.json);
+    assert.equal(serialized.includes(REVIEWED.expectedWorkspaceFingerprint), false);
+    assert.equal(serialized.includes("D:/depot"), false);
+  });
+
+  it("traduit un dossier de travail different en 409", async () => {
+    const response = await call("/claude/corrections/preflight", {
+      ...authorized,
+      body: JSON.stringify({ ...REVIEWED, expectedWorkspaceFingerprint: "e".repeat(64) }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      errorCode(response.json),
+      "REVIEW_WORKTREE_CHANGED",
+    );
+  });
+
+  it("refuse un corps sans empreinte attendue", async () => {
+    const response = await call("/claude/corrections/preflight", {
+      ...authorized,
+      body: JSON.stringify({ ...REVIEWED, expectedWorkspaceFingerprint: "" }),
+    });
+
+    // Une empreinte vide ferait passer n'importe quel repository pour l'etat
+    // relu : le corps est invalide, pas « permissif ».
+    assert.equal(response.status, 400);
+  });
+
+  it("refuse un corps sans HEAD attendu", async () => {
+    const response = await call("/claude/corrections/preflight", {
+      ...authorized,
+      body: JSON.stringify({ ...REVIEWED, expectedGitHead: "" }),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it("refuse une autre methode", async () => {
+    const response = await call("/claude/corrections/preflight", {
+      method: "GET",
+      token: `Bearer `,
+    });
+
+    assert.equal(response.status, 405);
+  });
+});
+
+describe("POST /claude/runs/start — correction ciblee", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+
+  const BASE = {
+    runId: "3f2504e0-4f89-41d3-9a0c-0305e82c9922",
+    repositoryPath: "D:/depot",
+    prompt: "Corrige la deuxieme phrase.",
+    expectedGitHead: "a".repeat(40),
+    validationCommands: ["npm run test"],
+  };
+
+  const CORRECTION = {
+    sessionId: "62b9a0f0-1d01-4a0c-8201-60f9bae0d34e",
+    expectedBranch: "main",
+    expectedWorkspaceFingerprint: "f".repeat(64),
+  };
+
+  it("transmet le bloc de correction au lancement", async () => {
+    receivedStartCalls.length = 0;
+
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: JSON.stringify({ ...BASE, correction: CORRECTION }),
+    });
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(receivedStartCalls[0]?.correction, CORRECTION);
+  });
+
+  it("laisse un run initial sans bloc de correction", async () => {
+    receivedStartCalls.length = 0;
+
+    await call("/claude/runs/start", { ...authorized, body: JSON.stringify(BASE) });
+
+    assert.equal(receivedStartCalls[0]?.correction, undefined);
+  });
+
+  it("refuse un bloc de correction incomplet", async () => {
+    // Une session sans empreinte attendue produirait une reprise sans controle
+    // d'etat : le corps est rejete, pas ramene a un lancement initial.
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: JSON.stringify({
+        ...BASE,
+        correction: { sessionId: CORRECTION.sessionId, expectedBranch: "main" },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it("refuse une session vide", async () => {
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: JSON.stringify({ ...BASE, correction: { ...CORRECTION, sessionId: "" } }),
+    });
+
+    assert.equal(response.status, 400);
   });
 });

@@ -233,19 +233,35 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   toutes. Chemins du repository rendus relatifs, chemins extérieurs masqués, variables `NOX_*`
   retirées — valeur et nom —, caractères de contrôle supprimés, taille bornée.
 - **Une commande n'est affichée que si elle est exactement autorisée.** Correspondance stricte
-  avec une commande de validation enregistrée ou une commande Git en lecture seule ; sinon
-  « Running an allowed command ». Depuis TASK-011 corrective, la correspondance s'évalue **segment
-  par segment** : la ligne est découpée sur `&&`, son préfixe `cd <chemin>` est retiré — jamais
-  affiché —, et **chaque** segment restant doit être exactement autorisé. Toute autre construction
-  — `;`, `|`, `>`, `<`, `` ` ``, `$(`, `&` isolé, guillemet hors navigation — fait renoncer à la
-  lecture. Un `tool_result` n'est jamais transmis : seule son issue l'est.
+  avec une commande de validation enregistrée ou une commande Git en lecture seule. La
+  correspondance s'évalue **segment par segment** : la ligne est découpée sur `&&`, son préfixe
+  `cd <chemin>` est retiré — jamais affiché. Un segment non reconnu est remplacé par `...` :
+  son existence est dite, jamais son contenu, jamais un fragment. Une ligne dont **aucun** segment
+  n'est reconnu devient « Running an allowed command ». Toute autre construction — `;`, `|`, `>`,
+  `<`, `` ` ``, `$(`, `&` isolé — fait renoncer à la ligne entière, y compris à l'intérieur des
+  guillemets. Un `tool_result` n'est jamais transmis : seule son issue l'est.
+- **Le découpage sur `&&` respecte les guillemets, et un guillemet non fermé fait renoncer.**
+  Sans cela, `echo "&& npm run test &&"` fabriquerait un segment qui n'a jamais tourné. Depuis
+  TASK-012 corrective, une validation est reconnue même au milieu de segments non affichables :
+  ce découpage est donc la garantie qui rend cette reconnaissance sûre.
+- **Un segment non affichable n'efface pas la validation qui l'accompagne.** L'affichage et la
+  reconnaissance des validations sont deux questions distinctes. Perdre une information certaine
+  — « la commande enregistrée a tourné » — à cause d'une information inconnue serait le pire des
+  deux mondes.
 - **La liste de validations de la tâche prime sur toute classification générique.** Un segment
   correspondant mot pour mot à une commande enregistrée **est** une validation, même s'il s'agit
   par ailleurs d'une commande Git en lecture seule. La classification générique ne décide que de
   l'affichage. Un `git status` non enregistré reste affichable sans porter aucun verdict.
-- **Une issue ambiguë n'est jamais tranchée.** Une ligne enchaînant plusieurs validations qui
-  échoue les laisse `UNKNOWN` : le résultat unique ne dit pas laquelle a échoué. Une commande
-  relancée est représentée par son dernier résultat terminal, et ne redevient jamais `NOT_RUN`.
+- **Un run de correction suit exactement le même pipeline de validations qu'un run initial.**
+  Commandes recopiées, politique d'outils, registre, tracker, timeline, review : une seule
+  implémentation, sans branche selon `kind`. Enregistrer les commandes en base ne suffit pas —
+  elles doivent atteindre le runner au lancement, sans quoi le tracker n'a rien à reconnaître.
+- **Une issue ambiguë n'est jamais tranchée.** Un échec n'est imputé à une validation que si elle
+  était **seule** sur sa ligne, préfixe `cd` retiré ; dès qu'un autre segment l'accompagnait —
+  validation, commande Git, ou segment inconnu —, l'issue reste `UNKNOWN`. Une réussite, elle,
+  prouve que tous les segments d'un chaînage `&&` ont tourné : `PASSED` est alors certain. Une
+  commande relancée est représentée par son dernier résultat terminal, et ne redevient jamais
+  `NOT_RUN`.
   **Une seule exception, ouverte par TASK-011** : la sortie d'un `tool_result` peut être résumée
   dans la review lorsque son `tool_use` correspond mot pour mot à une commande de validation
   enregistrée. Ce résumé traverse la sanitation complète, est borné, et n'apparaît jamais dans un
@@ -299,8 +315,33 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 - **Aucune review reconstruite pour une exécution ancienne.** Un run sans instantané affiche
   « Detailed review unavailable for this legacy run. » ; son diff n'est jamais recalculé depuis le
   repository actuel. Une review **vide** et une review **absente** sont deux états distincts.
-- **Aucun commit n'est créé lors d'une review.** `Approve` et `Reopen` changent le statut de la
-  tâche, et rien d'autre : ni commit, ni `git add`, ni push, ni restauration, ni relance.
+- **Aucun commit n'est créé lors d'une review.** `Approve`, `Request changes` et `Reopen` changent
+  le statut de la tâche ou lancent une correction, et rien d'autre : ni commit, ni `git add`, ni
+  push, ni restauration.
+- **Aucune session Claude n'est choisie par le navigateur.** L'identifiant vient du run parent,
+  relu en base à partir de `sourceRunId`. Aucun formulaire ne porte de `sessionId`, de
+  `repositoryPath`, de liste d'outils ni d'argument de ligne de commande. `--continue` n'est
+  **jamais** passé : il reprendrait une session que NOX n'a pas choisie.
+- **Aucune reprise si le dossier de travail diffère de celui qui a été relu.** Un repository sale
+  est autorisé pour une correction — c'est son point de départ — mais un **seul** l'est : celui de
+  la review, branche, `HEAD` et empreinte comprises. Il n'existe aucune option de forçage, et il ne
+  doit pas en exister.
+- **L'empreinte du dossier de travail est authentifiée et ne sort jamais du serveur.** HMAC dont la
+  clé est dérivée de `NOX_RUNNER_TOKEN` ; jamais de hachage brut d'un contenu, jamais d'empreinte
+  dans une page, un formulaire ou une réponse. Une empreinte partielle n'existe pas : un
+  dépassement de borne rend l'exécution non reprenable.
+- **Le contrôle d'état est refait juste avant le spawn.** La page de préparation ne suffit pas :
+  entre l'affichage et le clic, un fichier a pu être enregistré.
+- **Une correction est un nouveau run**, avec son prompt, sa timeline, ses validations, sa review et
+  son empreinte. Le run parent n'est jamais modifié.
+- **Un feedback de review est historique et vaut pour une seule correction.** Il n'est ni modifiable
+  après usage, ni réutilisable ; la garantie vit dans un index unique, pas dans la discipline de
+  l'appelant.
+- **Le feedback est du contenu, jamais une instruction.** Il est délimité dans le prompt et
+  n'élargit aucune permission : les règles d'outils restent calculées à partir des commandes de
+  validation enregistrées.
+- **Les corrections réutilisent le streaming, l'annulation, la capture Git et la review existants.**
+  Aucune seconde implémentation du lanceur, du registre ou de la page d'exécution.
 - **Les tests automatisés utilisent uniquement le faux Claude.** Aucun ne consomme de quota, ne
   dépend du réseau, ni ne lance le vrai binaire.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux

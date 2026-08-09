@@ -15,7 +15,11 @@
 
 import { createHash } from "node:crypto";
 
-import { renderClaudeExecutionPrompt, type DevelopmentTaskDetail } from "@nox/shared";
+import {
+  renderClaudeCorrectionPrompt,
+  renderClaudeExecutionPrompt,
+  type DevelopmentTaskDetail,
+} from "@nox/shared";
 
 export type ExecutionPrompt = {
   prompt: string;
@@ -36,5 +40,28 @@ export function fingerprintPrompt(prompt: string): string {
  */
 export function buildExecutionPrompt(task: DevelopmentTaskDetail): ExecutionPrompt {
   const prompt = renderClaudeExecutionPrompt(task);
+  return { prompt, sha256: fingerprintPrompt(prompt) };
+}
+
+/**
+ * Construit le prompt d'une correction ciblee et son empreinte.
+ *
+ * Les commandes de validation viennent de la **specification actuelle** de la
+ * tache, pas du run relu : une correction doit satisfaire ce que la tache exige
+ * aujourd'hui, et c'est cette liste-la qui sera recopiee dans le nouveau run. Le
+ * run precedent, lui, garde la sienne — c'est le principe de la recopie.
+ */
+export function buildCorrectionPrompt(input: {
+  task: DevelopmentTaskDetail;
+  sourceRunCode: string;
+  feedback: string;
+}): ExecutionPrompt {
+  const prompt = renderClaudeCorrectionPrompt({
+    taskCode: input.task.code,
+    taskTitle: input.task.title,
+    sourceRunCode: input.sourceRunCode,
+    feedback: input.feedback,
+    validationCommands: input.task.validationCommands,
+  });
   return { prompt, sha256: fingerprintPrompt(prompt) };
 }
