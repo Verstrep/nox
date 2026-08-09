@@ -26,6 +26,8 @@
  */
 
 import {
+  ARCHITECT_GENERATION_STATUS,
+  ARCHITECT_SESSION_STATUS,
   CLAUDE_RUN_EVENT_KIND,
   RUN_CHANGE_TYPE,
   RUN_STATUS,
@@ -34,6 +36,8 @@ import {
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_PRIORITY,
   TASK_STATUS,
+  type ArchitectGenerationStatus,
+  type ArchitectSessionStatus,
   type ClaudeRunEventKind,
   type RunChangeType,
   type RunStatus,
@@ -217,6 +221,61 @@ const TASK_TRANSITION_LABELS: Record<TaskStatus, Partial<Record<TaskStatus, stri
   // celle des transitions autorisees.
   [TASK_STATUS.RUNNING]: {},
 };
+
+/**
+ * Etat d'une session Architecte.
+ *
+ * `Proposal ready` porte le mot « proposal » a dessein : `Ready` seul se
+ * confondrait avec le statut de tache du meme nom, qui ne dit pas du tout la
+ * meme chose — l'un annonce qu'une proposition est prete a etre relue, l'autre
+ * qu'une tache est prete a etre lancee.
+ */
+const ARCHITECT_SESSION_STATUS_LABELS: Record<ArchitectSessionStatus, string> = {
+  [ARCHITECT_SESSION_STATUS.OPEN]: "Open",
+  [ARCHITECT_SESSION_STATUS.GENERATING]: "Generating…",
+  [ARCHITECT_SESSION_STATUS.NEEDS_INPUT]: "Needs input",
+  [ARCHITECT_SESSION_STATUS.PROPOSAL_READY]: "Proposal ready",
+  [ARCHITECT_SESSION_STATUS.APPLIED]: "Applied",
+  [ARCHITECT_SESSION_STATUS.FAILED]: "Failed",
+};
+
+/** Issue d'une generation, dans l'historique d'une session. */
+const ARCHITECT_GENERATION_STATUS_LABELS: Record<ArchitectGenerationStatus, string> = {
+  [ARCHITECT_GENERATION_STATUS.RUNNING]: "Running",
+  [ARCHITECT_GENERATION_STATUS.PROPOSAL_READY]: "Proposal ready",
+  [ARCHITECT_GENERATION_STATUS.NEEDS_INPUT]: "Needs input",
+  [ARCHITECT_GENERATION_STATUS.REFUSED]: "Refused",
+  [ARCHITECT_GENERATION_STATUS.FAILED]: "Failed",
+};
+
+/**
+ * Sort d'une source dans le contexte envoye.
+ *
+ * `Omitted` et `Truncated` sont distincts : le premier dit que le document
+ * existe mais que rien n'en est parti, le second qu'il en est parti une partie.
+ * Les confondre ferait croire a un envoi qui n'a pas eu lieu.
+ */
+const ARCHITECT_SOURCE_STATUS_LABELS: Record<ArchitectSourceStatus, string> = {
+  INCLUDED: "Included",
+  TRUNCATED: "Truncated",
+  OMITTED: "Omitted",
+  MISSING: "Missing",
+};
+
+/** Sort possible d'une source du contexte. */
+export type ArchitectSourceStatus = "INCLUDED" | "TRUNCATED" | "OMITTED" | "MISSING";
+
+export function architectSessionStatusLabel(status: ArchitectSessionStatus): string {
+  return ARCHITECT_SESSION_STATUS_LABELS[status];
+}
+
+export function architectGenerationStatusLabel(status: ArchitectGenerationStatus): string {
+  return ARCHITECT_GENERATION_STATUS_LABELS[status];
+}
+
+export function architectSourceStatusLabel(status: ArchitectSourceStatus): string {
+  return ARCHITECT_SOURCE_STATUS_LABELS[status];
+}
 
 export function taskStatusLabel(status: TaskStatus): string {
   return TASK_STATUS_LABELS[status];

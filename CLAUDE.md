@@ -89,6 +89,7 @@ Contexte du projet : [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) ·
 | Runner local                     | [apps/runner/](apps/runner/) — API HTTP native, port `4310` par défaut   |
 | Contrat web ↔ runner             | [packages/shared/src/runner.ts](packages/shared/src/runner.ts)           |
 | Client runner (serveur)          | [apps/web/lib/runner/](apps/web/lib/runner/)                             |
+| Architecte OpenAI (serveur)      | [apps/web/lib/architect/](apps/web/lib/architect/) — jamais dans le runner |
 | Code partagé                     | [packages/shared/](packages/shared/) — types et statuts, sans dépendance |
 | Accès aux données                | [packages/database/](packages/database/) — Prisma + SQLite               |
 | Base locale                      | `data/nox-dev.db` — jamais versionnée                                    |
@@ -100,7 +101,8 @@ Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run runner:
 `npm run db:generate` · `npm run db:migrate` · `npm run db:studio`.
 
 Le web et le runner sont deux processus séparés : ils se lancent dans deux terminaux et
-partagent le `.env` de la racine, dont `NOX_RUNNER_TOKEN`.
+partagent le `.env` de la racine, dont `NOX_RUNNER_TOKEN`. L'Architecte, lui, ne concerne que le
+web : `NOX_OPENAI_API_KEY` et `NOX_ARCHITECT_MODEL` ne sont lus que par lui.
 
 Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 
@@ -344,6 +346,58 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   Aucune seconde implémentation du lanceur, du registre ou de la page d'exécution.
 - **Les tests automatisés utilisent uniquement le faux Claude.** Aucun ne consomme de quota, ne
   dépend du réseau, ni ne lance le vrai binaire.
+- **L'Architecte OpenAI vit dans `apps/web`, côté serveur, et jamais dans le runner.** Le runner
+  est la seule frontière avec la machine ; il n'a aucune raison de parler à un fournisseur
+  externe, et n'en a pas le droit.
+- **L'Architecte n'a aucun outil.** L'appel ne déclare ni `tools`, ni `tool_choice`, ni
+  `previous_response_id`, ni `conversation`, ni mode background. Il ne peut donc déclencher
+  aucune action — cette garantie ne repose sur aucun prompt.
+- **La clé de l'Architecte s'appelle `NOX_OPENAI_API_KEY`.** Le préfixe `NOX_` la place hors de
+  portée de Claude Code par construction, puisque le runner retire toutes ces variables de
+  l'environnement du processus enfant. `OPENAI_API_KEY` serait transmise telle quelle.
+- **Aucune variable `NOX_*` n'atteint jamais le processus Claude.** Le filtre porte sur le
+  préfixe entier, jamais sur une liste nominative : une variable ajoutée plus tard est couverte
+  d'office.
+- **La clé ne quitte jamais le serveur.** Ni dans le navigateur, ni en base, ni dans un log, ni
+  dans un message d'erreur, ni dans un prompt, ni même partiellement. Une variable manquante est
+  signalée par son **nom**, jamais par sa valeur.
+- **Aucun modèle par défaut.** `NOX_ARCHITECT_MODEL` est obligatoire : choisir en silence
+  reviendrait à choisir un coût à la place de l'utilisateur.
+- **Aucune URL de base configurable.** NOX envoie du contexte projet ; une variable capable de
+  rediriger cet envoi serait un canal d'exfiltration livré avec le produit.
+- **Le contexte de l'Architecte est une liste fermée**, fixe et automatique : `CLAUDE.md`,
+  `AGENTS.md`, six documents `docs/` nommés, et les dix dernières tâches. Le navigateur ne choisit
+  aucun fichier.
+- **Aucun `.env` n'est jamais candidat**, pas plus que le code source, les diffs Git, les patches
+  de review, les prompts, les timelines, les sorties de Claude Code, les feedbacks ou les coûts.
+  Ce ne sont pas des filtres : ces éléments n'entrent dans aucun chemin de code menant au
+  fournisseur.
+- **Toute chaîne transmise au fournisseur passe par `sanitizeArchitectContext`.** Pas « toute
+  chaîne suspecte » : toutes. Elle préserve le Markdown — indentations, lignes vides, blocs de
+  code — et n'est **pas** le nettoyeur d'événements du runner, qui nettoie dans l'autre sens.
+- **Le Structured Output ne dispense d'aucune validation.** `readArchitectProposal` revalide
+  tailles, énumérations, références documentaires et commandes côté serveur. Une commande proposée
+  passe `checkValidationCommand`, la garde de TASK-008, sans variante.
+- **Un document référencé par une proposition appartient à la liste fermée transmise.** Aucune
+  tâche n'est jamais créée avec une référence inventée.
+- **Aucun appel au fournisseur n'est automatique.** Ni au chargement d'une page, ni au changement
+  d'un champ, ni périodiquement, ni après un échec. Aucun réessai du SDK : `maxRetries` vaut zéro.
+  Chaque clic est un appel, et chaque appel est facturé.
+- **Une session accepte au plus dix générations, échecs compris, et une seule à la fois.** Les
+  verrous sont des mises à jour conditionnelles en base, jamais une vérification suivie d'une
+  écriture.
+- **Aucune tâche n'est créée sans action humaine**, et elle est créée en `DRAFT`. La mettre en
+  file reste une décision séparée. `ARCHITECT_PROPOSAL_STATUS.PROPOSAL_READY` et
+  `TASK_STATUS.READY` ne désignent pas la même chose et ne doivent jamais être confondus.
+- **Une session Architecte ne produit qu'une tâche.** La session est réservée **avant** la
+  création, et rendue si celle-ci échoue ; `appliedTaskId` porte un index unique.
+- **La création d'une tâche réutilise le pipeline de TASK-007**, sans seconde implémentation.
+- **Le raisonnement interne du modèle n'est ni demandé, ni affiché, ni persisté.** `assumptions`
+  porte des hypothèses **produit**, destinées à la relecture humaine.
+- **Aucun coût n'est estimé.** Seule la consommation rapportée par le fournisseur est affichée, et
+  « non fourni » veut dire ce qu'il dit.
+- **Aucun appel réel au fournisseur dans les tests.** Tous les tests — unitaires, intégration,
+  fonctionnels — utilisent un faux fournisseur ; aucun ne joint `api.openai.com`.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
   documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code

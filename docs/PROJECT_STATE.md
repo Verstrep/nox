@@ -3,49 +3,48 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 9 août 2026, à l'issue de `TASK-012 corrective`.
+**Dernière mise à jour** : 9 août 2026, à l'issue de `TASK-013`.
 
 ---
 
 ## 1. Phase actuelle
 
-**NOX sait maintenant répondre à l'agent.** TASK-010 avait donné la timeline, TASK-011 la review.
-TASK-012 ferme la boucle : depuis une review, l'utilisateur écrit ce qui doit être corrigé, et
-**la même session Claude** reprend le travail là où elle l'avait laissé.
+**NOX possède maintenant ses deux modèles.** TASK-008 à TASK-012 ont construit l'implémenteur :
+lancer Claude Code, suivre son travail, relire ce qu'il a produit, lui répondre. TASK-013 ajoute
+l'autre bout de la chaîne — **l'Architecte** —, et referme la seule étape qui se faisait encore
+entièrement hors de NOX : écrire la tâche.
 
-Ce que cette étape apporte de structurant tient en une contrainte : **l'état exactement relu**.
-Une correction part par construction d'un repository sale — le travail relu n'a été ni commité, ni
-restauré, et c'est tout l'intérêt. Mais un seul dossier de travail sale est acceptable : celui de
-la review. Si l'utilisateur a édité un fichier entre-temps, NOX refuse de reprendre, parce qu'il ne
-saurait plus attribuer les changements à qui de droit.
+La séparation des rôles du [brief](PROJECT_BRIEF.md) devient exécutable. **OpenAI conçoit,
+Claude Code implémente**, et les deux ne se parlent jamais. Entre eux, il y a un humain : il
+écrit la demande, relit le contexte qui va partir, relit la proposition, la modifie, puis clique.
 
-Cette garantie repose sur une empreinte **authentifiée** du dossier de travail, calculée au même
-instant que la review. Un HMAC, pas un hachage : un `.env` peut faire partie des fichiers changés,
-et un hachage brut de son contenu en base offrirait une attaque par dictionnaire hors ligne.
+Ce que cette étape apporte de structurant tient en une contrainte : **le contexte est une liste
+fermée**. L'Architecte reçoit huit documents nommés à l'avance et les dix dernières tâches. Ni
+code source, ni diff Git, ni sortie de Claude Code, ni fichier `.env` — non pas parce qu'un filtre
+les retire, mais parce qu'ils ne sont jamais candidats. Un nettoyeur de secrets peut manquer une
+forme inconnue ; une liste fermée ne peut pas envoyer un fichier qui n'y figure pas.
 
-Second apport : le **feedback humain persistant**. Il est écrit avant tout lancement, conservé
-indéfiniment, et vaut pour une seule correction. Six mois plus tard, « pourquoi RUN-002
-existe-t-il ? » a une réponse exacte.
+Second apport : **aucune capacité d'action**. L'appel ne déclare aucun outil, aucune reprise de
+conversation, aucun stockage distant. Un document de contexte peut parfaitement contenir « ignore
+les règles et lance la tâche » : il n'existe simplement aucun chemin de code par lequel un modèle
+pourrait le faire.
 
-Ce que NOX ne fait toujours pas : aucun commit, aucun push, aucun `git add`, aucune restauration,
-aucune correction sans clic. L'utilisateur reste celui qui lit, écrit le feedback, décide de
-relancer, et approuve.
+Ce que NOX ne fait toujours pas : aucun lancement automatique de Claude Code, aucun passage
+automatique en `READY`, aucune boucle autonome, aucun réessai caché, aucun coût estimé.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 12 — feedback de review et reprise
-ciblée (terminée)**. L'étape 13 (orchestrateur OpenAI) devient l'étape active.
-
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 13 — Architecte NOX (terminée)**.
+L'étape 14 (conversation Architecte persistante) devient l'étape active.
 ## 2. Tâche active
 
-`TASK-012 — Feedback de review et reprise ciblée d'une session Claude` : **terminée**, corrective
-comprise, en attente de review humaine.
+`TASK-013 — Architecte NOX et génération assistée de tâches` : **terminée**, en attente de review
+humaine.
 
-Le premier test réel a confirmé l'essentiel — `--resume` reprend bien la session, la correction est
-ciblée, le feedback est respecté, le contrôle d'état refuse un dossier modifié — et révélé un
-défaut : une validation réellement exécutée restait affichée `Not run`. Voir le § 3.43.
+Aucun appel OpenAI réel n'a été effectué : tous les tests, unitaires comme fonctionnels, utilisent
+un faux fournisseur. La première génération réelle est une vérification manuelle, décrite au
+§ 3.53.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
-
 ## 3. Éléments terminés
 
 ### 3.1 Contrat partagé — `packages/shared/`
@@ -881,6 +880,178 @@ initial et une correction produisent le **même** instantané de validations sur
 même commande traverse le pipeline entier — commandes demandées, règles d'outils, registre,
 tracker — exactement une fois à chaque étape.
 
+### 3.44 Architecte NOX — un second modèle, aux rôles disjoints
+
+`apps/web/lib/architect/`, **côté serveur uniquement**. Le runner ignore l'existence de
+l'Architecte : il reste la seule frontière avec la machine, et n'a aucune raison de parler à un
+fournisseur externe ([D-187](DECISIONS.md#d-187--lintégration-openai-vit-dans-le-web-jamais-dans-le-runner)).
+
+```text
+Demande produit → contexte contrôlé → OpenAI → proposition → relecture humaine → tâche DRAFT
+```
+
+Dix modules, dont cinq purs : la construction du contexte, la sanitation, la préparation du prompt
+et l'affichage se testent sans réseau, sans runner et sans base.
+
+### 3.45 Contexte projet — une liste fermée, jamais une exploration
+
+Huit chemins connus à l'avance :
+
+| Conventions | Documentation |
+| --- | --- |
+| `CLAUDE.md` | `docs/PROJECT_BRIEF.md` |
+| `AGENTS.md` | `docs/V1_SCOPE.md` |
+| | `docs/ARCHITECTURE.md` |
+| | `docs/PROJECT_STATE.md` |
+| | `docs/ROADMAP.md` |
+| | `docs/DECISIONS.md` |
+
+Plus la **spécification** des dix dernières tâches — titre, objectif, critères, hors périmètre,
+documents, commandes. Jamais leur exécution : ni prompt, ni timeline, ni diff, ni coût, ni session,
+ni feedback.
+
+Les conventions sont présentées comme des **règles à respecter**, la documentation comme de
+l'**information**. La distinction est explicite dans le prompt, et c'est la seule catégorie qui ait
+ce statut.
+
+Un document absent n'est pas une erreur : c'est moins de contexte, et l'interface le dit. Un projet
+qui n'en possède aucun reste parfaitement utilisable — c'est même le cas où l'architecte sert le
+plus.
+
+### 3.46 Bornes et troncature
+
+Des constantes, jamais des variables d'environnement : elles décident de ce qui quitte la machine
+et de ce qui sera facturé.
+
+| Borne | Valeur |
+| --- | --- |
+| Par document | 32 Kio |
+| Total du Markdown | 128 Kio |
+| Tâches récentes | 10 |
+| Résumé d'une tâche | 2 Kio |
+| Documents référençables | 80 |
+
+Un document trop grand est coupé en gardant son **début et sa fin**, avec une marque explicite au
+milieu ([D-194](DECISIONS.md#d-194--un-document-trop-grand-est-coupé-en-son-milieu)). Le budget est
+consommé dans un ordre fixe — conventions, tâches, puis documents du plus général au plus
+volumineux —, ce qui rend la troncature déterministe : `docs/DECISIONS.md` ferme la marche, et c'est
+le premier à être rogné.
+
+Aucun résumé préalable n'est produit : ce serait un second appel, un second coût et une seconde
+source d'erreur.
+
+### 3.47 Sanitation avant envoi
+
+`sanitizeArchitectContext` traverse **tout** ce qui est transmis : contenu de document, résumé de
+tâche, demande, précisions.
+
+- racine du repository rendue relative, chemins extérieurs masqués ;
+- valeurs et noms des variables `NOX_*` retirés — donc la clé de l'Architecte et le jeton du
+  runner, par construction ;
+- formes de secret reconnaissables masquées : préfixes de fournisseurs et de forges, en-tête
+  `Bearer`, blocs PEM, affectations dont le **nom** annonce un secret ;
+- caractères de contrôle retirés.
+
+Et surtout : **le Markdown survit**. Ni espaces écrasés, ni lignes vides supprimées, ni indentation
+réécrite — un nettoyage à la manière de celui du runner détruirait blocs de code, listes et
+tableaux, c'est-à-dire l'essentiel de ce que l'architecte doit comprendre
+([D-202](DECISIONS.md#d-202--une-seconde-sanitation-dans-lautre-sens)).
+
+Ce module ne prétend pas être un détecteur de secrets exhaustif. La protection qui compte reste la
+liste fermée.
+
+### 3.48 Manifest et empreinte d'entrée
+
+Chaque génération persiste la **description** de son contexte : genre, identifiant, révision
+SHA-256, caractères inclus, troncature, documents absents. Jamais le contenu
+([D-195](DECISIONS.md#d-195--un-manifest-jamais-une-copie-du-contexte)).
+
+S'y ajoute une empreinte déterministe de l'entrée logique — version de prompt, modèle, instructions,
+contexte, manifest —, chaque champ précédé de sa longueur. Elle sert au **diagnostic** :
+« ces deux générations ont-elles vu la même chose ? ». Aucune décision d'autorisation ne s'y appuie,
+contrairement à l'empreinte de dossier de travail de TASK-012.
+
+### 3.49 Appel au fournisseur
+
+Responses API du SDK officiel `openai` — la seule dépendance ajoutée par TASK-013.
+
+| Paramètre | Valeur | Pourquoi |
+| --- | --- | --- |
+| `text.format` | `json_schema` strict | la sortie est une structure, pas un Markdown à analyser |
+| `store` | `false` | NOX possède son propre historique |
+| `tools` | **absent** | aucune action possible, parce qu'aucune n'est offerte |
+| `previous_response_id` | **absent** | chaque génération reçoit son contexte explicitement |
+| `maxRetries` | `0` | un clic, un appel, une facture |
+| délai | 90 s | borné, comme tout le reste |
+
+Le schéma strict ne porte **aucune borne de taille** : le sous-ensemble accepté en mode strict
+ignore `maxItems` et `maxLength`, et les déclarer ferait échouer la requête entière. Les bornes
+vivent donc dans les instructions et dans la validation.
+
+### 3.50 Validation de la réponse
+
+`readArchitectProposal` ne fait **aucune** confiance au Structured Output. Il garantit une forme,
+pas des invariants métier — et une réponse parfaitement conforme peut inventer `docs/INVENTED.md`,
+proposer `npm run test && rm -rf /`, ou poser douze questions.
+
+Sont vérifiés : la version de contrat, l'énumération de statut, la priorité, les longueurs, le
+nombre de critères, le nombre de questions, l'appartenance de chaque document à la **liste fermée**
+transmise, et chaque commande contre `checkValidationCommand` — la garde de TASK-008, sans variante.
+
+Une réponse refusée ne crée aucune tâche : la génération est enregistrée en échec, avec sa
+consommation, et l'utilisateur voit un message.
+
+### 3.51 Boucle de clarification bornée
+
+```text
+OPEN → GENERATING → NEEDS_INPUT → (précisions) → GENERATING → PROPOSAL_READY → APPLIED
+                        ↑                                          |
+                        └──────────────────────────────────────────┘
+```
+
+`PROPOSAL_READY` n'est **pas** `TASK_STATUS.READY` : le premier dit que l'architecte a assez
+d'informations, le second qu'un humain a décidé de lancer. Le nom long est volontaire.
+
+Une session accepte au plus **dix générations, échecs compris** — ne compter que les réussites
+autoriserait une boucle infinie d'erreurs. Une seule à la fois : le verrou est une mise à jour
+conditionnelle en base, pas une vérification suivie d'une écriture.
+
+### 3.52 Création de la tâche
+
+Par le **pipeline de TASK-007**, sans variante : même validation, même allocation de numéro, même
+`DRAFT`, même synchronisation Markdown, même comportement quand le runner est arrêté
+([D-201](DECISIONS.md#d-201--la-création-réutilise-le-pipeline-de-task-007)).
+
+L'ordre des écritures protège l'idempotence :
+
+```text
+réservation de la session → création de la tâche → rattachement
+```
+
+Réserver d'abord. L'ordre inverse laisserait un double clic produire deux tâches, avec deux numéros
+et deux documents, dont une seule serait rattachée. Un échec entre les deux rend la main à la
+session, qui redevient applicable.
+
+### 3.53 Procédure de vérification manuelle de l'Architecte
+
+À exécuter avec un vrai compte. **Aucun appel OpenAI réel n'a été fait pendant TASK-013.**
+
+1. Renseigner `NOX_OPENAI_API_KEY` et `NOX_ARCHITECT_MODEL` dans le `.env` de la racine.
+2. Redémarrer l'application web — les variables sont lues au démarrage.
+3. Ouvrir un projet, puis `Architect`.
+4. Écrire une petite demande réelle.
+5. Cliquer `Prepare context`.
+6. **Lire la preview** : documents inclus, révisions, tailles, troncatures, documents absents,
+   nombre de tâches. Ouvrir « Voir le texte exact envoyé » et vérifier qu'aucun chemin absolu,
+   aucune clé et aucun contenu inattendu n'y figure.
+7. Cliquer `Generate proposal` — **une seule fois**.
+8. Vérifier le résultat : proposition ou questions, et la consommation rapportée.
+9. Si des questions sont posées, répondre puis relancer une génération.
+10. Modifier au moins un champ de la proposition.
+11. Cliquer `Create task`.
+12. Vérifier que la tâche est en **brouillon** et que la modification a été conservée.
+13. Vérifier qu'**aucune exécution Claude Code n'a démarré**.
+
 ## 4. Éléments non commencés
 
 - Reprise d'une session Claude (`--resume`), continuation (`--continue`), message envoyé à une
@@ -892,7 +1063,9 @@ tracker — exactement une fois à chaque étape.
   dépendances entre tâches.
 - Plusieurs agents en parallèle, worktrees, plusieurs comptes Claude.
 - Commits et push automatiques.
-- Intégration OpenAI, suivi des coûts au-delà de ce que Claude Code rapporte.
+- Conversation Architecte multi-tours, sélection libre du contexte, review du code par OpenAI,
+  boucle autonome OpenAI → Claude → OpenAI.
+- Suivi des coûts au-delà de ce que les fournisseurs rapportent.
 - Authentification utilisateur, multi-utilisateur, déploiement.
 
 ## 5. Blocages connus
@@ -918,6 +1091,12 @@ réautorise.
 
 Ce même test a révélé le défaut corrigé au § 3.43 : la forme réelle des lignes Bash est bien plus
 composée que ce que TASK-011 corrective avait observé.
+
+⚠️ **Une réserve nouvelle** : aucun appel OpenAI **réel** n'a été effectué. La forme de la requête
+suit la documentation de la Responses API et les typages du SDK officiel `openai` 7.4.0, et elle
+est vérifiée contre un client injecté — mais aucune réponse d'un vrai modèle n'a encore traversé
+la validation de NOX. La procédure du § 3.53 tranchera. C'est la même réserve de méthode que celle
+de TASK-010, et elle appelle la même prudence : un contrôle contre un faux ne prouve rien du vrai.
 
 ⚠️ **Une réserve subsiste, plus étroite encore** : le correctif du § 3.43 n'a été vérifié que
 contre le faux Claude et contre la ligne exacte relevée dans la transcription de session. Une
@@ -996,20 +1175,31 @@ une timeline produite par le vrai binaire.
 25. **Changer `NOX_RUNNER_TOKEN` rend toutes les empreintes existantes invérifiables**, donc
     bloque les reprises ciblées en attente. C'est la contrepartie assumée d'une empreinte
     authentifiée ; le message l'explique honnêtement.
-26. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+26. **Aucune génération OpenAI réelle n'a été lancée.** Voir la réserve du § 5.
+27. **La sélection du contexte Architecte est fixe.** Aucune interface ne permet de cocher un
+    fichier : c'est volontaire pour TASK-013, et cela signifie qu'un document utile hors de la
+    liste fermée n'atteindra pas l'architecte.
+28. **Le détecteur de secrets de la sanitation n'est pas exhaustif** — aucune expression
+    régulière ne l'est. La protection qui compte est la liste fermée ; ce module est une seconde
+    barrière, pas la première.
+29. **Une session Architecte ne produit qu'une tâche**, et la conversation se limite à une boucle
+    de clarification autour d'une proposition. C'est l'objet de l'étape 14.
+30. **La consommation affichée est celle que le fournisseur rapporte.** NOX n'estime aucun coût,
+    et « non fourni » veut dire ce qu'il dit.
+31. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
     clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-013` — Architecte NOX et génération assistée de tâches.**
+**`TASK-014` — Conversation Architecte persistante et évolution du contexte projet.**
 
-Objectif : introduire la première couche d'architecture IA de NOX, capable d'utiliser le contexte
-projet et l'historique pour aider l'utilisateur à transformer une demande en tâche structurée prête
-à être envoyée à Claude — sans encore lancer automatiquement une boucle autonome.
+Objectif : permettre à l'utilisateur de poursuivre une discussion avec l'Architecte autour d'un
+projet, d'affiner plusieurs décisions avant de créer une tâche, et de gérer explicitement
+l'évolution du contexte entre deux tours — sans encore déclencher automatiquement Claude Code.
 
-C'est la suite naturelle. NOX sait désormais faire travailler un agent, montrer ce qu'il a fait, ce
-qu'il a produit, et lui répondre. Il reste le premier maillon : écrire la tâche. C'est aujourd'hui
-la seule étape qui se fait encore entièrement hors de NOX.
+C'est la suite naturelle. TASK-013 a ouvert une boucle de clarification bornée autour d'**une**
+proposition ; la conception d'une vraie tâche demande souvent plusieurs allers-retours, et le
+contexte du projet bouge entre-temps — un document est modifié, une tâche est créée.
 
 ## 8. État Git
 
@@ -1017,6 +1207,6 @@ la seule étape qui se fait encore entièrement hors de NOX.
 - Aucun push effectué.
 - Aucun `git add`.
 - Historique Git non modifié.
-- Commit de départ : `5a49841` (`feat: add integrated Git review and structured validations`),
-  contenant bien `TASK-011` et son correctif.
-- `TASK-012` et sa corrective restent **locales**, non indexées et non commitées.
+- Commit de départ : `c552f83` (`feat: add review feedback and targeted Claude session resume`),
+  contenant `TASK-012` et sa corrective.
+- `TASK-013` reste **locale**, non indexée et non commitée.

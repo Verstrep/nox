@@ -45,7 +45,8 @@ model Project {
   /// dans un log ou dans une conversation.
   nextTaskSequence Int @default(1)
 
-  tasks Task[]
+  tasks             Task[]
+  architectSessions ArchitectSession[]
 }
 
 /// Une tache de developpement : la specification d'une unite de travail.
@@ -97,6 +98,7 @@ model Task {
   validationCommands TaskValidationCommand[]
   runs               Run[]
   reviewFeedbacks    ReviewFeedback[]
+  architectSession   ArchitectSession?
 
   @@unique([projectId, sequence])
   @@index([projectId, status])
@@ -518,4 +520,128 @@ model TaskValidationCommand {
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, position])
+}
+
+/// Une conversation bornee avec l'Architecte, autour d'une demande produit.
+///
+/// ## Pourquoi une session, et pas seulement une generation
+///
+/// Parce qu'une proposition se construit rarement du premier coup : l'architecte
+/// pose des questions, l'utilisateur repond, une seconde generation arrive. La
+/// session porte ce qui traverse ces tours — la demande, les precisions, l'issue
+/// — pendant que chaque generation garde ce qui lui est propre.
+///
+/// ## Ce qu'elle ne contient pas
+///
+/// Aucun document du repository. Le contexte envoye est decrit par le manifest de
+/// chaque generation, jamais recopie : dupliquer des dizaines de kilooctets de
+/// Markdown a chaque appel ferait de SQLite une seconde copie de Git, et une copie
+/// qui vieillit mal.
+///
+/// `appliedTaskId` est unique : une session cree **une** tache, jamais deux, y
+/// compris sur double clic concurrent. La garantie vit dans l'index, pas dans la
+/// discipline de l'appelant.
+model ArchitectSession {
+  id        String @id @default(cuid())
+  projectId String
+
+  /// Numero attribue a la creation, unique dans le projet et jamais modifie.
+  sequence Int
+
+  /// Demande produit, telle que l'utilisateur l'a ecrite.
+  requestText String
+
+  /// Precisions apportees en reponse aux questions de l'architecte.
+  clarificationText String?
+
+  /// Valeur de `ArchitectSessionStatus`, stockee en chaine comme les autres enums.
+  status String
+
+  /// Prochain numero de generation, incremente de facon atomique.
+  ///
+  /// Il ne recule jamais, meme apres un echec : une generation ratee a consomme
+  /// un appel et un quota, et son numero ne doit pas etre reattribue. C'est aussi
+  /// lui qui borne le nombre d'appels d'une session.
+  nextGenerationSequence Int @default(1)
+
+  /// Tache creee depuis cette session, une fois seulement.
+  appliedTaskId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project     Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  appliedTask Task?                 @relation(fields: [appliedTaskId], references: [id], onDelete: Restrict)
+  generations ArchitectGeneration[]
+
+  @@unique([projectId, sequence])
+  @@unique([appliedTaskId])
+  @@index([projectId, createdAt])
+}
+
+/// Un appel au fournisseur, et ce qu'il a rendu.
+///
+/// ## Pourquoi un enfant plutot qu'un ecrasement
+///
+/// Parce qu'une generation est un fait : elle a consomme des jetons et produit un
+/// resultat. La remplacer par la suivante effacerait la question posee au tour
+/// precedent, la consommation, et la possibilite de comparer deux propositions.
+///
+/// Une generation terminee est **immuable** : la couche d'ecriture refuse de
+/// modifier une ligne qui n'est plus `RUNNING`.
+///
+/// ## Ce qui n'est pas stocke
+///
+/// Ni le prompt complet, ni les documents envoyes. `inputHash` identifie l'entree
+/// logique — version de prompt, demande, precisions, manifest, contenu envoye,
+/// modele — sans la conserver ; `contextManifestJson` dit avec quoi la
+/// proposition a ete produite. Aucune cle, aucun secret, aucun chemin absolu.
+model ArchitectGeneration {
+  id        String @id @default(cuid())
+  sessionId String
+
+  /// Numero attribue a la creation, unique dans la session et jamais modifie.
+  sequence Int
+
+  /// Modele effectivement utilise, tel que le serveur l'a lu dans sa configuration.
+  model String
+
+  /// Version du prompt, pour qu'un changement de consignes soit detectable.
+  promptVersion String
+
+  /// Empreinte deterministe de l'entree logique. Diagnostic, jamais securite.
+  inputHash String
+
+  /// `ArchitectContextManifest` serialise.
+  contextManifestJson String
+
+  /// Valeur de `ArchitectGenerationStatus`.
+  status String
+
+  /// `ArchitectTaskProposal` serialise, lorsqu'une proposition a ete validee.
+  proposalJson String?
+
+  /// Questions posees, serialisees. Redondant avec la proposition, et utile :
+  /// une generation `NEEDS_INPUT` se relit sans deserialiser toute la proposition.
+  questionsJson String?
+
+  /// Identifiant de reponse rapporte par le fournisseur, lorsqu'il en fournit un.
+  providerResponseId String?
+
+  /// Consommation **rapportee**. Jamais estimee, jamais convertie en cout.
+  inputTokens       Int?
+  outputTokens      Int?
+  totalTokens       Int?
+  cachedInputTokens Int?
+
+  /// Valeur de `ArchitectErrorCode`, lorsque la generation a echoue.
+  errorCode String?
+
+  createdAt DateTime @default(now())
+
+  /// `Cascade` comme `RunEvent` : une generation ne raconte rien sans sa session.
+  session ArchitectSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, sequence])
+  @@index([sessionId, sequence])
 }

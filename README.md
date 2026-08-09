@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-009 — suppression sécurisée et libellés d'état en anglais**.
+Dernière étape terminée : **TASK-013 — Architecte NOX et génération assistée de tâches**.
 
 | Élément | État |
 | --- | --- |
@@ -31,12 +31,14 @@ Dernière étape terminée : **TASK-009 — suppression sécurisée et libellés
 | Suivi d'une exécution et persistance de son résultat | ✅ fonctionnels |
 | Suppression d'un document Markdown | ✅ fonctionnelle |
 | Suppression d'une tâche sans exécution | ✅ fonctionnelle |
-| Streaming des événements, annulation d'une exécution | ⬜ non commencés |
-| Diff complet dans l'interface | ⬜ non commencé |
+| Streaming des événements, annulation d'une exécution | ✅ fonctionnels |
+| Review Git intégrée et validations structurées | ✅ fonctionnelles |
+| Feedback de review et reprise ciblée d'une session Claude | ✅ fonctionnelles |
+| Architecte OpenAI : contexte contrôlé, proposition de tâche | ✅ fonctionnel |
 | Renommage, déplacement d'un document | ⬜ non commencés |
 | Archivage, suppression d'une tâche avec exécutions | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
-| Intégration OpenAI (orchestrateur) | ⬜ non commencée |
+| Conversation Architecte multi-tours | ⬜ non commencée |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
@@ -142,6 +144,35 @@ Points importants :
 - **Le runner refuse d'écouter ailleurs que sur la boucle locale.** Il exécute des commandes sur
   votre machine ; l'exposer au réseau reviendrait à offrir cette capacité à quiconque l'atteint.
 - Le fichier `.env` n'est pas versionné. Ne partagez jamais la valeur réelle de votre jeton.
+
+## Configuration : l'Architecte OpenAI
+
+L'Architecte est **facultatif**. Sans lui, NOX fonctionne exactement comme avant : vous écrivez
+vos tâches à la main. Avec lui, vous décrivez une intention et il propose une tâche structurée que
+vous relisez avant de la créer.
+
+Deux variables, toutes deux obligatoires pour générer :
+
+```env
+NOX_OPENAI_API_KEY=<votre-cle-openai>
+NOX_ARCHITECT_MODEL=<identifiant-de-modele>
+```
+
+Points importants :
+
+- **La clé s'appelle `NOX_OPENAI_API_KEY`, et pas `OPENAI_API_KEY`.** Ce n'est pas un détail : le
+  runner retire de l'environnement de Claude Code **toutes** les variables commençant par `NOX_`.
+  Nommée ainsi, la clé est hors de portée de l'agent par construction, sans qu'aucune règle
+  supplémentaire ait à être écrite — ni oubliée.
+- **Aucun modèle par défaut.** NOX n'en choisit jamais un en silence : ce serait choisir un coût et
+  une disponibilité à votre place. Sans `NOX_ARCHITECT_MODEL`, la page Architecte reste
+  consultable et le contexte reste inspectable ; seule la génération est bloquée.
+- **Aucune URL de base configurable.** NOX envoie du contexte projet ; pouvoir rediriger cet envoi
+  vers une adresse arbitraire ouvrirait un canal d'exfiltration pour un gain nul.
+- **Redémarrez l'application web** après avoir modifié ces variables : elles sont lues au
+  démarrage.
+- La clé n'atteint jamais le navigateur, n'est jamais écrite en base, et n'apparaît dans aucun
+  message d'erreur.
 
 ## Base de données locale
 
@@ -1202,6 +1233,95 @@ blocs de réflexion, secrets, sorties énormes, processus descendants, et un mod
 réellement un repository temporaire pour éprouver la review. Elle ne consomme donc aucun quota et
 ne dépend d'aucun réseau.
 
+## Concevoir une tâche : `Architect`
+
+Depuis la page d'un projet, `Architect` ouvre la page des demandes.
+
+```text
+Demande produit
+      ↓
+Prepare context      ← aucun appel au fournisseur
+      ↓
+Generate proposal    ← un clic, un appel
+      ↓
+Questions ou proposition
+      ↓
+Relecture et édition humaines
+      ↓
+Create task          → tâche en brouillon
+```
+
+### Deux modèles, deux rôles
+
+NOX utilise deux modèles qui ne se parlent jamais.
+
+| | Architecte | Implémenteur |
+| --- | --- | --- |
+| Fournisseur | OpenAI | Claude Code |
+| Rôle | proposer **une** tâche | modifier le repository |
+| Accès au disque | aucun | oui, via le runner |
+| Accès à Git | aucun | lecture seule |
+| Outils | **aucun** | ceux que la tâche autorise |
+
+Entre les deux, il y a vous.
+
+### Ce qui est envoyé, et ce qui ne l'est jamais
+
+Avant tout appel, `Prepare context` affiche exactement ce qui quittera votre machine : documents
+inclus, révisions courtes, tailles, troncatures, documents absents, nombre de tâches récentes. Un
+dépliant montre le **texte exact**.
+
+| Envoyé | Jamais envoyé |
+| --- | --- |
+| `CLAUDE.md`, `AGENTS.md` | tout fichier `.env` |
+| six documents `docs/` nommés | code source |
+| spécification des 10 dernières tâches | diffs Git, patches de review |
+| votre demande et vos précisions | prompts, timelines et sorties de Claude Code |
+| | clé d'API, jeton du runner, chemins absolus |
+
+La colonne de droite n'est pas une liste de filtres : ces éléments **ne sont jamais candidats**.
+Le constructeur de contexte ne connaît que huit chemins et une table de tâches.
+
+Les documents volumineux sont coupés en gardant leur **début et leur fin**, avec une marque
+explicite au milieu — pour un fichier comme `DECISIONS.md`, le début porte les conventions et la
+fin les décisions récentes.
+
+### Un clic, un appel
+
+Aucun appel n'est déclenché par l'ouverture d'une page, la saisie d'un champ, un minuteur ou un
+échec précédent. En cas d'erreur — quota, délai dépassé, panne —, NOX affiche le message et vous
+propose de relancer : c'est vous qui recliquez. NOX ne réessaie jamais tout seul.
+
+Une demande accepte au plus **dix générations**, échecs compris, et une seule à la fois.
+
+### Questions et précisions
+
+Si une décision structurante manque, l'architecte répond par des **questions** plutôt que par une
+tâche approximative. Répondez dans le champ prévu, puis cliquez `Generate again` : la nouvelle
+génération reçoit votre demande, les questions précédentes, vos réponses et le contexte actuel.
+
+### La proposition
+
+Chaque champ est modifiable : titre, priorité, objectif, contexte, critères, hors périmètre,
+documents, commandes de validation. Les **hypothèses** de l'architecte sont affichées à part —
+elles servent à votre relecture, pas à la spécification.
+
+`Create task` crée la tâche par le même chemin qu'une création manuelle : même numéro, même
+document `tasks/TASK-xxx.md`, même statut **brouillon**. Aucune exécution Claude Code ne démarre,
+et la mettre en file reste une décision séparée.
+
+Une demande ne crée **qu'une** tâche. Un second clic est refusé, y compris simultané.
+
+### Consommation
+
+Chaque génération affiche `Usage reported by OpenAI` : jetons d'entrée, de sortie, total, et part
+servie par le cache. Une valeur que le fournisseur ne rapporte pas s'affiche « non fourni ».
+
+**NOX n'estime aucun coût en euros ou en dollars.** Un prix dépend du modèle, du palier et de la
+date ; un chiffre affiché ici serait faux à la première grille tarifaire modifiée, et un chiffre
+faux sur une facture est pire que pas de chiffre du tout. Consultez le tableau de bord de votre
+fournisseur.
+
 ## Lancer le runner
 
 Dans un second terminal :
@@ -1337,6 +1457,8 @@ NOX/
 │   │   │       └── [id]/       Page de détail d'un projet
 │   │   │           ├── documents/  Liste, lecteur, éditeur + Server Action
 │   │   │           │   └── new/    Formulaire de création + Server Action
+│   │   │           ├── architect/   Demandes Architecte
+│   │   │           │   └── [sessionId]/  Contexte, génération, proposition
 │   │   │           └── tasks/      Backlog filtrable
 │   │   │               ├── new/        Formulaire de tâche + Server Action
 │   │   │               └── [taskId]/   Détail, transitions, reprise
@@ -1361,6 +1483,15 @@ NOX/
 │   │   │   ├── review-display.ts   Sélection de fichier, lignes de diff, disponibilité
 │   │   │   ├── correction-display.ts
 │   │   │   │                   URL, refus expliqués, préconditions
+│   │   │   ├── architect/       Architecte OpenAI, serveur uniquement
+│   │   │   │   ├── config.ts        Variables d'environnement, sans défaut
+│   │   │   │   ├── context.ts       Liste fermée, bornes, manifest
+│   │   │   │   ├── sanitize.ts      Nettoyage de ce qui quitte la machine
+│   │   │   │   ├── prepare.ts       Contexte + prompt + empreinte d'entrée
+│   │   │   │   ├── provider.ts      Interface étroite + faux fournisseur
+│   │   │   │   ├── openai.ts        Responses API, Structured Output strict
+│   │   │   │   ├── service.ts       Orchestration d'une génération
+│   │   │   │   └── apply.ts         Création par le pipeline de TASK-007
 │   │   │   ├── labels.ts           Seule couche de traduction des valeurs internes
 │   │   │   ├── runs.ts             Chargement et réconciliation des runs
 │   │   │   └── ...             Validation métier et lecture des données

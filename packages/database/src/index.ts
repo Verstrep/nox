@@ -72,6 +72,29 @@ export {
 } from "./run-review.js";
 
 export {
+  InvalidArchitectRecordError,
+  attachArchitectTask,
+  claimArchitectSession,
+  createArchitectSession,
+  finishArchitectGeneration,
+  formatArchitectSessionCode,
+  getArchitectSession,
+  latestArchitectProposal,
+  latestArchitectQuestions,
+  listArchitectSessions,
+  releaseArchitectSession,
+  saveArchitectClarification,
+  startArchitectGeneration,
+  type ClaimArchitectSessionResult,
+  type ArchitectGenerationView,
+  type ArchitectSessionSummary,
+  type ArchitectSessionView,
+  type FinishGenerationInput,
+  type StartGenerationInput,
+  type StartGenerationResult,
+} from "./architect.js";
+
+export {
   cancelTaskCorrection,
   createReviewFeedback,
   getFeedbackForCorrectionRun,

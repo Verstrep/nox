@@ -236,6 +236,36 @@ describe("launchClaude - lancement reel du faux Claude", () => {
     assert.deepEqual(leaked, [], `variables NOX transmises : ${leaked.join(", ")}`);
   });
 
+  it("ne transmet jamais la cle de l'Architecte au processus Claude", async () => {
+    // Non-regression de TASK-013, et raison d'etre du nom `NOX_OPENAI_API_KEY` :
+    // le filtre porte sur le prefixe entier, donc la cle de l'Architecte est
+    // couverte par construction. Un agent qui pourrait la lire appellerait le
+    // fournisseur pour son propre compte.
+    process.env["FAKE_CLAUDE_MODE"] = "success";
+    process.env["NOX_OPENAI_API_KEY"] = "cle-architecte-qui-ne-doit-pas-fuir";
+    process.env["NOX_ARCHITECT_MODEL"] = "modele-qui-ne-doit-pas-fuir";
+
+    try {
+      const handle = launchClaude({
+        repositoryRoot: workspace,
+        prompt: "x",
+        allowedTools: [],
+        disallowedTools: [],
+        claude: claudeConfig(),
+      });
+      await handle.completed;
+
+      const report = await readReport();
+      // Le nom seul est asserte : la valeur n'apparait jamais dans un message
+      // d'echec, y compris quand le test echoue.
+      assert.equal(report.environmentNames.includes("NOX_OPENAI_API_KEY"), false);
+      assert.equal(report.environmentNames.includes("NOX_ARCHITECT_MODEL"), false);
+    } finally {
+      delete process.env["NOX_OPENAI_API_KEY"];
+      delete process.env["NOX_ARCHITECT_MODEL"];
+    }
+  });
+
   it("transmet bien les arguments calcules", async () => {
     process.env["FAKE_CLAUDE_MODE"] = "success";
 

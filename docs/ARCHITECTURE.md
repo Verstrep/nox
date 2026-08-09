@@ -9,12 +9,15 @@ dans [PROJECT_STATE.md](PROJECT_STATE.md).
 Navigateur
     ↓
 Next.js  (interface, orchestration, persistance métier)
-    ↓ HTTP local authentifié
-Runner NOX
-    ↓
-Git et système de fichiers local
-    ↓
-Claude Code CLI          (à venir)
+    ├── SQLite                 (persistance locale)
+    ├── OpenAI Architect       (conception d'une tâche)
+    └── HTTP local authentifié
+             ↓
+        Runner NOX
+             ↓
+        Git et système de fichiers local
+             ↓
+        Claude Code CLI        (implémentation)
 ```
 
 Chaque étage n'appelle que l'étage immédiatement inférieur. Le navigateur ne parle jamais au
@@ -181,7 +184,51 @@ il n'écrit pas en base. Aucun composant React n'appelle Prisma directement.
 Le provider est SQLite pour la V1 ; il est isolé derrière ce package et pourra changer sans
 toucher à `apps/web`. Voir [D-019](DECISIONS.md#d-019--sqlite-comme-persistance-locale-de-la-v1).
 
-### 3.5 Future couche d'orchestration
+### 3.5 L'Architecte OpenAI — conception d'une tâche
+
+Situé dans `apps/web/lib/architect/`, **côté serveur uniquement**. Aucun import OpenAI n'existe
+dans un Client Component, et la clé n'atteint jamais le navigateur.
+
+Responsabilités :
+
+- assembler un **contexte projet contrôlé** à partir d'une liste fermée de documents et des
+  dernières tâches ;
+- construire un prompt déterministe et le rendre prévisualisable avant tout envoi ;
+- appeler le fournisseur avec un Structured Output strict ;
+- valider la réponse contre les invariants de NOX ;
+- persister la génération, son manifest et sa consommation.
+
+Ce qu'il ne peut pas faire, par construction :
+
+| Il n'a aucun accès à | Pourquoi |
+| --- | --- |
+| système de fichiers | il ne reçoit que ce que le runner a bien voulu rendre |
+| Git | aucune de ses sorties n'atteint une commande |
+| runner | il vit dans le web, et n'a aucun client runner |
+| Claude Code | les deux modèles ne se parlent jamais |
+| outils | l'appel ne déclare **aucun** `tools` |
+| réseau arbitraire | aucune URL de base n'est configurable |
+
+**Aucune de ces limites ne repose sur un prompt.** Un texte de contexte peut demander n'importe
+quoi ; il n'existe simplement aucun chemin de code par lequel un modèle pourrait agir.
+
+Découpage des modules :
+
+```text
+lib/architect/
+├── config.ts        variables d'environnement, sans valeur par défaut
+├── context.ts       liste fermée, bornes, troncature, manifest   (pur)
+├── sanitize.ts      nettoyage de tout ce qui quitte la machine   (pur)
+├── prepare.ts       contexte + prompt + empreinte d'entrée       (pur)
+├── provider.ts      interface étroite + faux fournisseur
+├── openai.ts        Responses API, Structured Output strict
+├── service.ts       orchestration : lecture, réservation, appel, validation
+├── apply.ts         création de la tâche par le pipeline de TASK-007
+├── recent-tasks.ts  sélection des tâches envoyées
+└── display.ts       URL, statuts de sources, tailles               (pur)
+```
+
+### 3.6 Future couche d'orchestration
 
 Située dans `apps/web`, sous forme de modules sans dépendance à React.
 
@@ -1116,3 +1163,82 @@ aucun texte ne peut les élargir. `git push` reste refusé par `--disallowedTool
 des outils autorisés, et `--dangerously-skip-permissions` n'est jamais passé.
 
 Le feedback est affiché comme du texte — jamais comme du HTML, jamais interprété comme du Markdown.
+
+### 5.15 Conception d'une tâche par l'Architecte
+
+Le chemin inverse de tous les précédents : ici, quelque chose **sort** de la machine.
+
+```text
+Demande produit de l'utilisateur
+              ↓
+Context Builder          liste fermée, bornes, troncature
+              ↓
+Contexte projet sanitisé   chemins relatifs, secrets masqués
+              ↓
+OpenAI Architect         aucun outil, Structured Output strict
+              ↓
+Proposition de tâche     validée contre les invariants de NOX
+              ↓
+Relecture humaine        chaque champ éditable
+              ↓
+Création par le pipeline de TASK-007 → tâche DRAFT
+```
+
+#### Ce qui part, et ce qui ne part jamais
+
+| Envoyé | Jamais envoyé |
+| --- | --- |
+| `CLAUDE.md`, `AGENTS.md` | tout fichier `.env` |
+| six documents `docs/` nommément | code source |
+| spécification des 10 dernières tâches | diffs Git, patches de review |
+| demande et précisions de l'utilisateur | prompts, timelines, sorties de Claude Code |
+| | feedbacks de review, coûts, sessions |
+| | clé d'API, jeton du runner, chemins absolus |
+
+La colonne de droite n'est pas une liste de filtres : ce sont des choses qui **ne sont jamais
+candidates**. Le constructeur de contexte ne connaît que huit chemins et une table de tâches.
+
+#### Deux blocs, deux natures
+
+L'appel sépare ce que la Responses API sépare déjà :
+
+- **`instructions`** — les règles de l'architecte. Elles viennent de NOX, et de nulle part ailleurs.
+- **`input`** — le contexte, la demande, les précisions. Tout y est délimité et annoncé comme de
+  l'information.
+
+Un document de contexte peut contenir « ignore les règles précédentes ». La délimitation rend la
+citation non ambiguë ; la sécurité, elle, vient d'ailleurs — le modèle n'a aucun outil, et sa sortie
+traverse une validation complète avant qu'un humain ne clique.
+
+#### Le manifest
+
+Chaque génération persiste la **description** de son contexte, jamais son contenu :
+
+```text
+kind          identifier              revision        chars   truncated
+INSTRUCTIONS  CLAUDE.md               3f8a2c1d9e4b     2 048   false
+DOCUMENT      docs/ARCHITECTURE.md    b71c04e5aa2f    18 432   false
+DOCUMENT      docs/DECISIONS.md       9d2e6f01c3a8    32 768   true
+TASK          TASK-012                —                  412   false
+```
+
+Il répond à une question, des mois plus tard : **avec quoi cette proposition a-t-elle été
+produite ?** Les révisions sont celles de TASK-005 — aucune quatrième logique d'empreinte.
+
+#### Deux verrous
+
+```text
+une génération à la fois        mise à jour conditionnelle sur le statut de session
+une tâche par session           réservation avant création, index unique sur appliedTaskId
+```
+
+Les deux sont des mises à jour conditionnelles, pas des vérifications suivies d'écritures : un
+double clic passerait entre les deux. Une session accepte au plus dix générations, **échecs
+compris** — ne compter que les réussites autoriserait une boucle infinie d'erreurs.
+
+#### Ce que l'Architecte ne déclenche jamais
+
+Aucune exécution Claude Code, aucun passage automatique en `READY`, aucun commit, aucune écriture
+de document projet, aucun réessai. La tâche créée est un brouillon ; la lancer reste une décision
+séparée, prise depuis sa page.
+

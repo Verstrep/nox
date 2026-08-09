@@ -433,22 +433,57 @@ en parallèle, modification du feedback après lancement, commentaires par ligne
 
 ---
 
-## 🟢 13. Orchestrateur OpenAI
+## ✅ 13. Architecte NOX et génération assistée de tâches — `TASK-013`
 
-**Étape active.**
+**Objectif** : concevoir une tâche dans NOX, à partir du contexte réel du projet.
 
-**Objectif** : discuter du besoin dans NOX.
+- Second modèle, aux rôles disjoints : **OpenAI conçoit, Claude Code implémente**
+  ([D-186](DECISIONS.md#d-186--openai-conçoit-claude-implémente)).
+- Intégration **server-side** dans `apps/web` ; le runner ignore l'existence de l'Architecte
+  ([D-187](DECISIONS.md#d-187--lintégration-openai-vit-dans-le-web-jamais-dans-le-runner)).
+- Responses API, Structured Output strict, `store: false`, **aucun outil**
+  ([D-188](DECISIONS.md#d-188--responses-api-structured-output-strict-aucun-outil)).
+- Contexte projet **fermé** : huit documents nommés et les dix dernières tâches. Ni code, ni diff,
+  ni sortie de Claude Code, ni `.env`
+  ([D-193](DECISIONS.md#d-193--le-contexte-est-une-liste-fermée-jamais-une-exploration)).
+- Contexte visible **avant** l'envoi : documents, révisions, tailles, troncatures, texte exact.
+- Manifest persisté avec chaque génération, jamais le contenu envoyé
+  ([D-195](DECISIONS.md#d-195--un-manifest-jamais-une-copie-du-contexte)).
+- Boucle de clarification bornée : `NEEDS_INPUT`, questions, précisions, nouvelle génération.
+  Dix générations au maximum par session, une seule à la fois.
+- Proposition entièrement éditable, puis création par le **pipeline de TASK-007** — tâche `DRAFT`
+  ([D-201](DECISIONS.md#d-201--la-création-réutilise-le-pipeline-de-task-007)).
+- `NOX_OPENAI_API_KEY` : le préfixe `NOX_` place la clé hors de portée de Claude Code
+  ([D-190](DECISIONS.md#d-190--nox_openai_api_key-et-pas-openai_api_key)).
+- Consommation rapportée affichée, **aucun coût estimé**
+  ([D-203](DECISIONS.md#d-203--aucun-coût-estimé)).
 
-- Une conversation persistée par projet.
-- Documents du projet fournis comme contexte.
-- Proposition de tâches et de mises à jour de documents, validées par l'utilisateur.
-- Suivi indicatif des coûts.
+**Terminée.** Aucun appel OpenAI réel n'a été effectué pendant l'implémentation : tous les tests
+utilisent un faux fournisseur. La première génération réelle est une vérification manuelle décrite
+dans [PROJECT_STATE.md](PROJECT_STATE.md).
 
-**Fin d'étape** : le découpage d'un besoin se fait dans NOX plutôt que dans un onglet séparé.
+**Toujours hors périmètre** : boucle autonome OpenAI → Claude → OpenAI, review du code par OpenAI,
+lancement automatique de Claude, passage automatique en `READY`, outils OpenAI, sélection libre du
+contexte, conversation générale.
 
 ---
 
-## ⬜ 14. Test sur un petit projet réel
+## 🟢 14. Conversation Architecte persistante et évolution du contexte
+
+**Étape active.**
+
+**Objectif** : poursuivre une discussion avec l'Architecte autour d'un projet.
+
+- Plusieurs tours de discussion avant de créer une tâche.
+- Gestion explicite de l'évolution du contexte entre deux tours.
+- Affinage de plusieurs décisions dans une même session.
+
+**Fin d'étape** : le découpage d'un besoin se fait entièrement dans NOX, sans onglet séparé.
+Claude Code n'est toujours pas déclenché automatiquement.
+
+---
+
+## ⬜ 15. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -460,7 +495,7 @@ en parallèle, modification du feedback après lancement, commentaires par ligne
 
 ---
 
-## ⬜ 15. Fonctionnalités avancées
+## ⬜ 16. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -469,4 +504,4 @@ en parallèle, modification du feedback après lancement, commentaires par ligne
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 14.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 15.**

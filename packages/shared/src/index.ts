@@ -235,6 +235,63 @@ export type {
 } from "./task-documents.js";
 
 export {
+  ARCHITECT_ERROR,
+  ARCHITECT_ERROR_CODES,
+  ARCHITECT_GENERATION_STATUS,
+  ARCHITECT_GENERATION_STATUSES,
+  ARCHITECT_LIMITS,
+  ARCHITECT_PROPOSAL_STATUS,
+  ARCHITECT_PROPOSAL_STATUSES,
+  ARCHITECT_SCHEMA_NAME,
+  ARCHITECT_SCHEMA_VERSION,
+  ARCHITECT_SESSION_STATUS,
+  ARCHITECT_SESSION_STATUSES,
+  EMPTY_ARCHITECT_USAGE,
+  buildArchitectProposalSchema,
+  checkArchitectText,
+  isArchitectContextManifest,
+  isArchitectErrorCode,
+  isArchitectGenerationStatus,
+  isArchitectProposalStatus,
+  isArchitectSessionStatus,
+  normalizeArchitectText,
+  readArchitectProposal,
+} from "./architect.js";
+
+export type {
+  ArchitectContextManifest,
+  ArchitectContextSource,
+  ArchitectErrorCode,
+  ArchitectGenerationStatus,
+  ArchitectProposalRefusal,
+  ArchitectProposalResult,
+  ArchitectProposalStatus,
+  ArchitectSessionStatus,
+  ArchitectTaskProposal,
+  ArchitectTextRefusal,
+  ArchitectUsage,
+} from "./architect.js";
+
+export {
+  ARCHITECT_PROMPT_VERSION,
+  CLARIFICATION_CLOSE,
+  CLARIFICATION_OPEN,
+  DOCUMENT_CLOSE,
+  DOCUMENT_OPEN,
+  REQUEST_CLOSE,
+  REQUEST_OPEN,
+  neutralizeArchitectMarkers,
+  renderArchitectPrompt,
+} from "./architect-prompt.js";
+
+export type {
+  ArchitectPrompt,
+  ArchitectPromptDocument,
+  ArchitectPromptInput,
+  ArchitectPromptTask,
+} from "./architect-prompt.js";
+
+export {
   PROJECT_DOCUMENT_CATEGORIES,
   PROJECT_DOCUMENT_CATEGORY,
   isCreateProjectDocumentSuccess,

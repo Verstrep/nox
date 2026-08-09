@@ -18,11 +18,6 @@ import { loadProjectTasks } from "@/lib/tasks";
  */
 const PLANNED_SECTIONS = [
   {
-    id: "conversation",
-    title: "Conversation",
-    description: "Echanger avec l'orchestrateur pour clarifier le besoin de ce projet.",
-  },
-  {
     id: "runs",
     title: "Executions",
     description: "Suivre les executions de Claude Code, leurs logs et leurs resultats.",
@@ -127,6 +122,25 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           ) : (
             <p className="text-sm text-amber-200/90">{documents.message}</p>
           )}
+        </SectionCard>
+
+        <SectionCard
+          title="Architecte"
+          description="Transformer une demande produit en tache structuree, a partir du contexte du projet."
+          action={
+            <Link
+              href={`/projects/${project.id}/architect`}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Architect
+            </Link>
+          }
+        >
+          <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
+            L&apos;architecte lit les documents du projet et ses taches recentes, puis propose une
+            tache que vous relisez avant de la creer. Il ne lance rien, ne modifie aucun fichier, et
+            ne voit ni le code, ni les diffs, ni les sorties de Claude Code.
+          </p>
         </SectionCard>
 
         <SectionCard
