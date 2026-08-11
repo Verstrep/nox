@@ -2685,3 +2685,184 @@ n'est calculé.
 chiffre affiché par NOX serait faux à la première grille tarifaire modifiée, et un chiffre faux sur
 une facture est pire que pas de chiffre du tout. « Non fourni » est une réponse honnête ; un total
 reconstitué à partir d'une somme partielle ne le serait pas.
+
+### D-204 — La conversation Architecte appartient à NOX
+
+**Décision.** Le transcript est persisté dans SQLite et reconstruit **en entier** à chaque tour.
+Chaque appel reste sans état côté fournisseur : `store: false`, et ni `previous_response_id`, ni
+`conversation`, ni mode background.
+
+**Justification.** Un identifiant de conversation hébergé chez le fournisseur reprendrait un
+historique que NOX n'a pas choisi, dont il ne pourrait rien montrer à l'utilisateur, et qui
+disparaîtrait le jour où le fournisseur cesserait de le conserver. Une conversation doit rester
+lisible six mois plus tard, après un changement de modèle, après un redémarrage, et même si aucune
+réponse n'est plus récupérable chez OpenAI.
+
+C'est le même principe que pour les sessions Claude en [D-176](#d-176--le-contrôle-est-refait-juste-avant-le-spawn) : ce que NOX ne possède pas,
+il ne peut pas le garantir.
+
+### D-205 — La réponse publique n'est pas du raisonnement
+
+**Décision.** `message` est un **artefact utilisateur** : une réponse écrite pour être lue, qui
+compare des options, explique un compromis ou signale une incohérence. Elle est persistée et
+affichée. Aucun raisonnement interne n'est demandé, reçu, stocké ni résumé.
+
+**Justification.** Les deux se ressemblent et ne sont pas la même chose. Le raisonnement d'un modèle
+est un état intermédiaire, instable, souvent faux dans le détail, et sa place n'est pas dans une
+base de données. Une réponse rédigée est une prise de position, que l'utilisateur peut contester —
+c'est exactement ce dont une conception a besoin.
+
+La règle de TASK-010 sur les blocs `thinking` de Claude Code reste inchangée et sans exception ;
+celle-ci ne l'assouplit pas, elle décrit un autre objet.
+
+### D-206 — Une proposition ne clôt pas la conversation
+
+**Décision.** `PROPOSAL_READY` n'est plus un état terminal. L'utilisateur peut répondre, demander
+une tâche plus petite, et obtenir une **nouvelle** proposition complète. Les propositions
+précédentes restent intactes et consultables.
+
+**Justification.** TASK-013 imposait un choix binaire : créer la tâche, ou tout recommencer. Or la
+première proposition est presque toujours trop grosse — c'est même le symptôme que le découpage
+fonctionne, puisque l'architecte part d'une demande large. Pouvoir dire « plus petit » sans perdre
+la discussion est le cœur de TASK-014.
+
+Une nouvelle proposition est **complète**, jamais un fragment ni une liste de différences : NOX ne
+saurait pas fusionner deux propositions partielles, et un modèle qui répond par un diff se
+contredit vite.
+
+### D-207 — Seule la dernière proposition est créable
+
+**Décision.** `Create task` ne s'applique qu'à la dernière génération `PROPOSAL_READY`, et
+uniquement si aucun tour ne lui a succédé. La règle est vérifiée en base — le statut de la session
+n'est plus `PROPOSAL_READY` dès qu'un tour de discussion a suivi — pas seulement dans l'interface.
+
+**Justification.** Créer une tâche à partir d'une proposition que la conversation a déjà dépassée
+produirait exactement ce que l'utilisateur venait de demander de changer. L'information « cette
+proposition est périmée » existe, elle est certaine, et l'ignorer serait un choix.
+
+Un échec de fournisseur ne périme rien : il n'a figé aucun message, donc il n'a rien changé à la
+discussion.
+
+### D-208 — Une empreinte de contexte, et ce qu'elle n'est pas
+
+**Décision.** `architectContextFingerprint` est un SHA-256 déterministe du contexte réellement
+préparé : contenu sanitisé, révisions, troncatures, révisions de tâches, ordre. Elle sert à une
+seule question — le contexte actuel est-il exactement celui qui a été prévisualisé ? Elle **n'est
+pas** authentifiée.
+
+**Justification.** L'empreinte de dossier de travail de TASK-012 est une primitive de sécurité : un
+attaquant capable de la forger obtiendrait une exécution de Claude Code, donc elle est un HMAC. Ici,
+ce qui est protégé est la cohérence entre un écran et un envoi, et le seul acteur capable de tricher
+serait l'utilisateur contre son propre aperçu. Un SHA-256 nu suffit — et le dire évite qu'on prenne
+un jour cette fonction pour une garantie qu'elle n'offre pas.
+
+Elle porte sur le **contenu envoyé**, pas seulement sur les révisions : une révision décrit les
+octets d'un fichier avant sanitation et troncature, et un même fichier peut être coupé différemment
+si le budget change.
+
+### D-209 — La révision d'une tâche se calcule sur ce qui est envoyé
+
+**Décision.** `architectTaskRevision` hache le code, le titre, le statut, l'objectif, le hors
+périmètre, les critères, les documents et les commandes — chaque champ précédé de sa longueur.
+`updatedAt` n'y entre pas, et le document Markdown de la tâche non plus.
+
+**Justification.** Un horodatage dit quand une ligne a été touchée, jamais ce qu'elle contient. Deux
+spécifications différentes doivent porter deux révisions, même si une restauration leur donne la
+même date ; et une réécriture à l'identique ne doit pas se signaler comme un changement de contexte.
+
+Le document Markdown est exclu parce qu'il n'est pas transmis : il ne fait pas partie de ce contexte.
+
+### D-210 — Deux clics, toujours
+
+**Décision.** `Review context` prépare le tour et n'appelle personne. `Send to Architect` appelle.
+La touche Entrée n'envoie rien.
+
+**Justification.** C'est le principe de TASK-013, et il compte davantage maintenant qu'une
+conversation enchaîne les messages : dans un chat grand public, une frappe suffit à déclencher un
+appel. Ici, chaque appel est facturé et fait quitter du contexte projet à la machine. L'utilisateur
+doit pouvoir lire ce qui part **avant** que cela ne parte, à chaque tour.
+
+### D-211 — Un contexte modifié après l'aperçu bloque l'envoi
+
+**Décision.** Juste avant l'appel, le contexte est reconstruit et son empreinte recomparée à celle
+de l'aperçu. Si elles diffèrent, aucune génération n'est réservée et aucun appel n'est fait. Il
+n'existe ni `Send anyway`, ni `Ignore`, ni option de forçage.
+
+**Justification.** Entre l'affichage de la preview et le clic, un fichier a pu être enregistré —
+c'est même le cas courant quand on travaille sur le projet en parallèle. Sans cette relecture,
+l'utilisateur aurait validé un contexte et envoyé un autre, ce qui viderait la preview de son sens.
+
+Le contrôle vit dans la transaction de réservation, pas seulement dans le service : deux clics
+simultanés ne peuvent pas tous deux trouver le brouillon intact.
+
+### D-212 — Aucun « Keep old context »
+
+**Décision.** Un nouveau tour part toujours du contexte **actuel** du projet. NOX ne propose jamais
+de renvoyer le contexte d'un tour précédent.
+
+**Justification.** NOX ne conserve pas le contenu documentaire de chaque génération — seulement son
+manifest. Il ne peut donc pas rejouer un ancien contexte, et proposer un bouton qui le prétendrait
+serait un mensonge. Conserver ce contenu ferait grossir la base sans borne, dupliquerait des
+documents que le repository possède déjà, et donnerait l'illusion qu'un contexte passé est
+reconstituable.
+
+Les anciens manifests restent historiques : ils disent **avec quoi** un tour a été produit, jamais
+avec quoi le prochain pourrait l'être.
+
+### D-213 — Le transcript est borné, jamais résumé
+
+**Décision.** Vingt tours par conversation, 8 Kio par message utilisateur, 12 Kio par réponse
+d'architecte, 64 Kio de transcript. Au-delà, NOX **refuse** et invite à ouvrir une nouvelle
+conversation. Aucun résumé automatique, aucune fenêtre glissante, aucune suppression des premiers
+messages.
+
+**Justification.** Une décision prise au deuxième message peut être essentielle au quinzième.
+N'envoyer que les dix derniers sans le dire fabriquerait une mémoire fictive : le modèle
+contredirait un choix déjà tranché, et l'utilisateur n'aurait aucun moyen de comprendre pourquoi.
+
+Un résumé par un second appel coûterait un appel de plus pour perdre de l'information, et
+introduirait une seconde source d'erreur entre l'utilisateur et l'architecte. Un refus lisible vaut
+mieux que les deux.
+
+### D-214 — Un message devient historique quand le tour a abouti
+
+**Décision.** Les deux messages d'un tour — celui de l'utilisateur et la réponse — sont écrits dans
+la **même transaction** que la conclusion de la génération, et seulement si le fournisseur a
+répondu. Un échec ne laisse aucun message et conserve le brouillon.
+
+**Justification.** Trois choses en découlent, et chacune compte :
+
+- le texte de l'utilisateur lui reste acquis après une panne qui n'est pas la sienne ;
+- la conversation ne montre jamais « You / erreur / You » — le même message répété deux fois parce
+  qu'il n'était jamais parti ;
+- un rafraîchissement du navigateur après une réponse ne peut pas réémettre l'appel, puisque le
+  brouillon a disparu dans la transaction qui a figé le tour.
+
+L'échec, lui, reste auditable : la génération `FAILED` garde son numéro, son manifest, son empreinte
+et son code d'erreur.
+
+### D-215 — Le message d'ouverture n'existe qu'en un exemplaire
+
+**Décision.** `requestText` porte le texte d'ouverture, et aucun message n'est écrit à la création
+d'une conversation. Ce texte devient le premier message `USER` au premier tour réussi. Il n'est pas
+modifiable.
+
+**Justification.** Deux exemplaires du même texte finissent toujours par diverger, et l'extrait
+affiché dans la liste des conversations dirait alors autre chose que le transcript. Le rendre
+immuable est la garantie la moins coûteuse : pour repartir d'autre chose, on ouvre une nouvelle
+conversation, ce qui ne consomme rien.
+
+Le serveur relit ce texte en base au premier tour ; le navigateur n'en transmet aucun.
+
+### D-216 — Les sessions de TASK-013 restent en lecture seule
+
+**Décision.** `ArchitectSession.conversationVersion` vaut `1` pour les sessions ouvertes avant
+TASK-014 et `2` ensuite. Une session `1` reste consultable — demande, précisions, générations,
+consommation, proposition, tâche appliquée — mais ne se poursuit pas.
+
+**Justification.** Ces sessions n'ont jamais enregistré de messages. Reconstituer un transcript à
+partir de leur demande et de leurs précisions produirait un échange qui n'a pas eu lieu, avec des
+tours inventés et un ordre supposé. Une lecture seule honnête vaut mieux qu'une fausse
+reconstruction, et ouvrir une nouvelle conversation ne coûte rien.
+
+La migration est purement additive : aucune donnée de TASK-013 n'a été recopiée ni reconstruite.

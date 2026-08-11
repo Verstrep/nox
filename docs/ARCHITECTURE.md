@@ -184,19 +184,21 @@ il n'écrit pas en base. Aucun composant React n'appelle Prisma directement.
 Le provider est SQLite pour la V1 ; il est isolé derrière ce package et pourra changer sans
 toucher à `apps/web`. Voir [D-019](DECISIONS.md#d-019--sqlite-comme-persistance-locale-de-la-v1).
 
-### 3.5 L'Architecte OpenAI — conception d'une tâche
+### 3.5 L'Architecte OpenAI — conversation et conception
 
 Situé dans `apps/web/lib/architect/`, **côté serveur uniquement**. Aucun import OpenAI n'existe
 dans un Client Component, et la clé n'atteint jamais le navigateur.
 
 Responsabilités :
 
+- tenir la **conversation locale** : transcript persisté, reconstruit en entier à chaque tour ;
 - assembler un **contexte projet contrôlé** à partir d'une liste fermée de documents et des
   dernières tâches ;
 - construire un prompt déterministe et le rendre prévisualisable avant tout envoi ;
+- calculer l'**empreinte du contexte** et la comparer entre l'aperçu et l'envoi ;
 - appeler le fournisseur avec un Structured Output strict ;
 - valider la réponse contre les invariants de NOX ;
-- persister la génération, son manifest et sa consommation.
+- persister le tour, ses messages, son manifest et sa consommation.
 
 Ce qu'il ne peut pas faire, par construction :
 
@@ -217,15 +219,19 @@ Découpage des modules :
 ```text
 lib/architect/
 ├── config.ts        variables d'environnement, sans valeur par défaut
-├── context.ts       liste fermée, bornes, troncature, manifest   (pur)
-├── sanitize.ts      nettoyage de tout ce qui quitte la machine   (pur)
-├── prepare.ts       contexte + prompt + empreinte d'entrée       (pur)
+├── context.ts       liste fermée, bornes, troncature, manifest      (pur)
+├── context-diff.ts  comparaison de deux manifests, faits sûrs       (pur)
+├── fingerprint.ts   empreintes de contexte et de tâche              (pur)
+├── sanitize.ts      nettoyage de tout ce qui quitte la machine      (pur)
+├── transcript.ts    conversation locale transmise, sans fenêtre     (pur)
+├── prepare.ts       contexte + transcript + prompt + empreintes     (pur)
 ├── provider.ts      interface étroite + faux fournisseur
 ├── openai.ts        Responses API, Structured Output strict
-├── service.ts       orchestration : lecture, réservation, appel, validation
+├── service.ts       préparation d'un tour, puis envoi contrôlé
 ├── apply.ts         création de la tâche par le pipeline de TASK-007
 ├── recent-tasks.ts  sélection des tâches envoyées
-└── display.ts       URL, statuts de sources, tailles               (pur)
+├── errors.ts        codes traduits en phrases françaises
+└── display.ts       URL, statuts de sources, tailles                (pur)
 ```
 
 ### 3.6 Future couche d'orchestration
@@ -1168,21 +1174,95 @@ Le feedback est affiché comme du texte — jamais comme du HTML, jamais interpr
 
 Le chemin inverse de tous les précédents : ici, quelque chose **sort** de la machine.
 
+Depuis TASK-014, ce n'est plus un formulaire mais une **conversation locale** : un tour, une
+réponse, autant de fois que nécessaire, jusqu'à une proposition que l'utilisateur accepte.
+
 ```text
-Demande produit de l'utilisateur
+Conversation Architecte locale
               ↓
-Context Builder          liste fermée, bornes, troncature
+Message de l'utilisateur
               ↓
-Contexte projet sanitisé   chemins relatifs, secrets masqués
+Préparation du contexte     liste fermée, bornes, troncature, sanitation
               ↓
-OpenAI Architect         aucun outil, Structured Output strict
+Empreinte du contexte       ce qui sera envoyé, décrit exactement
               ↓
-Proposition de tâche     validée contre les invariants de NOX
+Envoi explicite             second clic ; le contexte est recontrôlé ici
               ↓
-Relecture humaine        chaque champ éditable
+Tour OpenAI sans état       aucun outil, aucun historique distant
+              ↓
+Réponse publique persistée  message, questions, proposition éventuelle
+              ↓
+Tour local suivant  ⟳
+              ↓
+Relecture humaine           chaque champ éditable
               ↓
 Création par le pipeline de TASK-007 → tâche DRAFT
 ```
+
+#### Pourquoi la conversation est locale
+
+Le transcript vit dans SQLite et repart **en entier** à chaque tour. NOX n'utilise ni
+`previous_response_id`, ni `conversation`, ni mode background, et garde `store: false`.
+
+Un identifiant de conversation hébergé reprendrait un historique que NOX n'a pas choisi, dont il
+ne pourrait rien montrer, et qui disparaîtrait le jour où le fournisseur cesserait de le
+conserver. Une conversation doit rester lisible après un changement de modèle, après un
+redémarrage, et même si plus aucune réponse n'est récupérable côté OpenAI.
+
+#### Transcript et raisonnement ne sont pas la même chose
+
+| | Transcript | Raisonnement interne |
+| --- | --- | --- |
+| Nature | réponse écrite pour être lue | état intermédiaire du modèle |
+| Demandé par NOX | oui, c'est le champ `message` | **jamais** |
+| Persisté | oui, immuable | jamais |
+| Affiché | oui | jamais |
+
+La règle de TASK-010 sur les blocs `thinking` de Claude Code reste sans exception. Celle-ci ne
+l'assouplit pas : elle décrit un autre objet.
+
+#### Le contexte est comparé entre deux tours
+
+```text
+Manifest du tour précédent
+              ↓
+         Comparaison
+              ↑
+Manifest du contexte actuel
+
+identiques   → Project context unchanged
+différents   → Project context changed since previous turn
+```
+
+La comparaison ne rend que des **faits sûrs** : ajouté, retiré, modifié avec ses deux révisions,
+troncature changée, tâche entrée ou sortie de la fenêtre des dix. Jamais un diff de contenu — NOX
+ne conserve pas le texte des documents envoyés, et ne prétend pas savoir ce qui a changé dedans.
+
+#### L'ancien contexte n'est pas réutilisable
+
+Un nouveau tour part toujours du contexte **actuel**. NOX ne propose aucun « continuer avec
+l'ancien contexte » : il ne conserve que les manifests, donc il ne pourrait pas rejouer ce
+contexte, et un bouton qui le prétendrait serait un mensonge.
+
+#### Deux clics, et un contrôle entre les deux
+
+```text
+Review context   →  contexte lu, empreinte calculée, brouillon enregistré
+                    (aucun appel au fournisseur)
+Send to Architect → contexte RELU et recomparé
+                    → identique  : génération réservée, appel, messages figés
+                    → différent  : refus, aucun appel, brouillon intact
+```
+
+Le second contrôle n'est pas une redondance : entre l'affichage de la preview et le clic, un
+fichier a pu être enregistré. Il n'existe ni `Send anyway`, ni option de forçage.
+
+#### Un message devient historique quand le tour a abouti
+
+Les deux messages d'un tour sont écrits dans la **même transaction** que la conclusion de la
+génération, et le brouillon y est effacé. Un échec du fournisseur n'écrit aucun message et
+conserve le brouillon : le texte de l'utilisateur lui reste acquis, la conversation ne montre
+jamais le même message deux fois, et un rafraîchissement ne réémet rien.
 
 #### Ce qui part, et ce qui ne part jamais
 
@@ -1233,8 +1313,32 @@ une tâche par session           réservation avant création, index unique sur 
 ```
 
 Les deux sont des mises à jour conditionnelles, pas des vérifications suivies d'écritures : un
-double clic passerait entre les deux. Une session accepte au plus dix générations, **échecs
+double clic passerait entre les deux. Une conversation accepte au plus vingt tours, **échecs
 compris** — ne compter que les réussites autoriserait une boucle infinie d'erreurs.
+
+#### Le transcript est borné, jamais résumé
+
+```text
+20 tours par conversation
+ 8 Kio par message utilisateur
+12 Kio par réponse d'architecte
+64 Kio de transcript envoyé
+```
+
+Au-delà, NOX **refuse** et invite à ouvrir une nouvelle conversation. Aucun résumé automatique,
+aucune fenêtre glissante, aucune suppression des premiers messages.
+
+Une décision prise au deuxième message peut être essentielle au quinzième. N'envoyer que les dix
+derniers sans le dire fabriquerait une mémoire fictive : le modèle contredirait un choix déjà
+tranché, et l'utilisateur n'aurait aucun moyen de comprendre pourquoi. Un résumé par un second
+appel coûterait un appel de plus pour perdre de l'information.
+
+#### Les sessions de TASK-013 restent lisibles
+
+`conversationVersion` vaut `1` avant TASK-014 et `2` ensuite. Une session `1` garde sa demande,
+ses précisions, ses générations, sa consommation, sa proposition et sa tâche — mais ne se
+poursuit pas. Elle n'a jamais enregistré de messages, et NOX ne lui en invente pas : une
+reconstruction produirait des tours qui n'ont pas eu lieu.
 
 #### Ce que l'Architecte ne déclenche jamais
 

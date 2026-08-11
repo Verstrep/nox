@@ -43,8 +43,8 @@ export default async function ArchitectPage({
         <div>
           <h1 className="text-xl font-semibold text-zinc-50">Architecte</h1>
           <p className="mt-2 max-w-prose text-sm leading-relaxed text-zinc-400">
-            Decris ce que tu veux construire. NOX utilisera le contexte du projet pour preparer une
-            tache structuree que tu pourras relire avant de la creer.
+            Decris ce que tu veux construire. L&apos;architecte te repond, pose des questions si
+            besoin, et propose une tache que tu pourras relire et modifier avant de la creer.
           </p>
           <p className="mt-1 truncate text-sm text-zinc-600">{project.name}</p>
         </div>
@@ -52,7 +52,7 @@ export default async function ArchitectPage({
 
       <main className="flex flex-col gap-6">
         <SectionCard
-          title="Nouvelle demande"
+          title="Nouvelle conversation"
           description="L'architecte propose ; vous decidez. Rien n'est cree sans votre clic."
         >
           <NewArchitectRequestForm
@@ -63,13 +63,13 @@ export default async function ArchitectPage({
         </SectionCard>
 
         <SectionCard
-          title="Demandes precedentes"
-          description="Chaque demande garde son contexte, ses generations et la tache qu'elle a produite."
+          title="Conversations precedentes"
+          description="Chaque conversation garde ses messages, ses tours et la tache qu'elle a produite."
         >
           {sessions.length === 0 ? (
             <EmptyState
-              title="Aucune demande"
-              hint="Les demandes que vous ouvrirez apparaitront ici, avec leur historique complet."
+              title="Aucune conversation"
+              hint="Les conversations que vous ouvrirez apparaitront ici, avec leur historique complet."
             />
           ) : (
             <ul className="flex flex-col divide-y divide-zinc-800/80">
@@ -85,8 +85,8 @@ export default async function ArchitectPage({
                       <span className="text-xs text-zinc-600">
                         {formatIsoDateTime(session.createdAt)} ·{" "}
                         {session.generationCount === 1
-                          ? "1 generation"
-                          : `${String(session.generationCount)} generations`}
+                          ? "1 tour"
+                          : `${String(session.generationCount)} tours`}
                       </span>
                     </div>
                     <p className="text-sm text-zinc-300">{architectExcerpt(session.requestText)}</p>

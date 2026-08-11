@@ -1,65 +1,75 @@
 /**
- * Orchestration d'une generation Architecte, cote serveur.
+ * Orchestration d'un tour de conversation Architecte, cote serveur.
  *
- * ## L'ordre des operations, et pourquoi
+ * ## Deux clics, et pourquoi
  *
  * ```text
- * documents lus par le runner
+ * Review context           ← aucun appel au fournisseur
  *        ↓
- * contexte assemble et nettoye
+ * contexte lu, empreinte calculee, brouillon enregistre
  *        ↓
- * generation reservee en base   ← le verrou : une seule a la fois
+ * Send to Architect        ← un clic, un appel
+ *        ↓
+ * contexte relu et recompare   ← la page ne suffit pas
+ *        ↓
+ * generation reservee          ← le verrou : un tour a la fois
  *        ↓
  * appel au fournisseur
  *        ↓
  * validation NOX de la reponse
  *        ↓
- * generation conclue en base
+ * messages figes, brouillon efface   ← dans la meme transaction
  * ```
  *
- * La reservation precede l'appel : sans elle, deux clics simultanes
- * consommeraient deux generations et deux facturations. Elle le precede de peu —
- * la lecture des documents, qui peut echouer, a lieu avant, pour qu'un runner
- * arrete ne consomme jamais une generation.
+ * Le second controle du contexte n'est pas une redondance. Entre l'affichage de
+ * la preview et le clic, un fichier a pu etre enregistre — c'est meme le cas
+ * courant quand on travaille en parallele sur le projet. Sans cette relecture,
+ * l'utilisateur aurait valide un contexte et envoye un autre.
  *
  * ## Aucun appel automatique
  *
  * Rien ici n'est declenche par un rendu de page, un changement de champ, un
- * minuteur ou un echec precedent. `runArchitectGeneration` n'est appelee que
- * depuis une Server Action, elle-meme declenchee par un clic.
+ * minuteur ou un echec precedent. `sendArchitectTurn` n'est appelee que depuis
+ * une Server Action, elle-meme declenchee par un clic.
  */
 
 import {
   ARCHITECT_ERROR,
   ARCHITECT_GENERATION_STATUS,
-  ARCHITECT_PROPOSAL_STATUS,
+  ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SCHEMA_NAME,
-  buildArchitectProposalSchema,
-  readArchitectProposal,
+  ARCHITECT_TURN_STATE,
+  buildArchitectTurnSchema,
+  readArchitectTurn,
+  type ArchitectContextManifest,
   type ArchitectErrorCode,
-  type ArchitectTaskProposal,
+  type ArchitectTurn,
   type DevelopmentTaskDetail,
   type ProjectDocumentSummary,
 } from "@nox/shared";
 import {
   finishArchitectGeneration,
+  saveArchitectTurnDraft,
   startArchitectGeneration,
   type ArchitectGenerationView,
+  type ArchitectSessionView,
   type DatabaseClient,
 } from "@nox/database";
 
 import { listProjectDocuments, readProjectDocument } from "../runner/client.ts";
 import { describeRunnerFailure, type RunnerFailure } from "../runner/errors.ts";
 import { ARCHITECT_DOCUMENT_ALLOWLIST, type FetchedArchitectDocument } from "./context.ts";
+import { diffArchitectManifests, type ArchitectContextChange } from "./context-diff.ts";
 import { ARCHITECT_REQUEST_TIMEOUT_MS } from "./config.ts";
 import { prepareArchitectGeneration, type PreparedArchitectGeneration } from "./prepare.ts";
 import type { ArchitectProvider } from "./provider.ts";
+import { architectTranscript } from "./transcript.ts";
 
 /**
  * Acces au repository, injectes plutot qu'importes.
  *
  * Les tests rejouent ainsi chaque scenario — runner arrete, document absent,
- * document enorme — sans demarrer ni runner, ni repository.
+ * document modifie entre deux tours — sans demarrer ni runner, ni repository.
  */
 export type ArchitectRepositoryPorts = {
   listDocuments: (
@@ -128,49 +138,61 @@ export async function fetchArchitectContext(
   return { ok: true, context: { documents, inventory: inventory.value } };
 }
 
-export type GenerationInput = {
-  sessionId: string;
+export type TurnInput = {
+  session: ArchitectSessionView;
   projectName: string;
   repositoryPath: string;
-  request: string;
-  clarification: string | null;
-  previousQuestions: readonly string[];
+  /** Message que l'utilisateur vient d'ecrire. */
+  message: string;
   tasks: readonly DevelopmentTaskDetail[];
   model: string;
-  provider: ArchitectProvider;
   environment: Record<string, string | undefined>;
   ports?: ArchitectRepositoryPorts;
 };
 
-export type GenerationOutcome =
-  | { ok: true; generation: ArchitectGenerationView; proposal: ArchitectTaskProposal }
+export type PreparedTurn = {
+  prepared: PreparedArchitectGeneration;
+  /** Manifest du dernier tour, ou `null` si c'est le premier. */
+  previousManifest: ArchitectContextManifest | null;
+  /** Faits surs depuis le dernier tour. Vide quand rien n'a bouge. */
+  changes: ArchitectContextChange[];
+  /** Faux au premier tour : il n'y a rien a comparer. */
+  comparable: boolean;
+};
+
+export type PrepareTurnResult =
+  | { ok: true; turn: PreparedTurn }
   | { ok: false; code: ArchitectErrorCode }
   | { ok: false; message: string };
 
-/** Traduit un refus de reservation en code stable. */
-function reservationCode(reason: "not_found" | "already_applied" | "active" | "limit"): ArchitectErrorCode {
-  switch (reason) {
-    case "already_applied":
-      return ARCHITECT_ERROR.ARCHITECT_ALREADY_APPLIED;
-    case "active":
-      return ARCHITECT_ERROR.ARCHITECT_GENERATION_ACTIVE;
-    case "limit":
-      return ARCHITECT_ERROR.ARCHITECT_GENERATION_LIMIT;
-    default:
-      return ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR;
-  }
+/**
+ * Dernier tour ayant reellement produit un contexte comparable.
+ *
+ * Les generations en echec sont ecartees : leur manifest decrit un contexte qui
+ * n'a jamais donne de reponse, et le comparer ferait annoncer un changement la
+ * ou l'utilisateur n'a rien vu.
+ */
+function lastComparableGeneration(session: ArchitectSessionView): ArchitectGenerationView | null {
+  return (
+    session.generations.find(
+      (generation) =>
+        generation.manifest !== null &&
+        (generation.status === ARCHITECT_GENERATION_STATUS.PROPOSAL_READY ||
+          generation.status === ARCHITECT_GENERATION_STATUS.CONTINUE ||
+          generation.status === ARCHITECT_GENERATION_STATUS.NEEDS_INPUT),
+    ) ?? null
+  );
 }
 
 /**
- * Prepare le contexte d'une session sans rien envoyer.
+ * Construit le contexte d'un tour, sans rien envoyer.
  *
- * Appelee par la page de preparation **et** par la generation : les deux voient
+ * Appelee par `Review context` **et** par `Send to Architect` : les deux voient
  * donc exactement le meme contexte, calcule par le meme code. Afficher une
- * preview construite autrement mentirait a l'utilisateur sur ce qui part.
+ * preview construite autrement reviendrait a mentir a l'utilisateur sur ce qui
+ * part.
  */
-export async function prepareArchitectContext(
-  input: Omit<GenerationInput, "provider" | "sessionId">,
-): Promise<{ ok: true; prepared: PreparedArchitectGeneration } | { ok: false; message: string }> {
+export async function prepareArchitectTurn(input: TurnInput): Promise<PrepareTurnResult> {
   const fetched = await fetchArchitectContext(
     input.repositoryPath,
     input.ports ?? runnerArchitectPorts,
@@ -179,47 +201,143 @@ export async function prepareArchitectContext(
     return fetched;
   }
 
+  const prepared = prepareArchitectGeneration({
+    projectName: input.projectName,
+    repositoryPath: input.repositoryPath,
+    documents: fetched.context.documents,
+    inventory: fetched.context.inventory,
+    tasks: input.tasks,
+    transcript: architectTranscript(input.session),
+    newMessage: input.message,
+    model: input.model,
+    environment: input.environment,
+  });
+
+  if (prepared.transcriptTooLarge) {
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CONVERSATION_TOO_LARGE };
+  }
+
+  const previous = lastComparableGeneration(input.session);
+  const previousManifest = previous?.manifest ?? null;
+
   return {
     ok: true,
-    prepared: prepareArchitectGeneration({
-      projectName: input.projectName,
-      repositoryPath: input.repositoryPath,
-      documents: fetched.context.documents,
-      inventory: fetched.context.inventory,
-      tasks: input.tasks,
-      request: input.request,
-      previousQuestions: input.previousQuestions,
-      clarification: input.clarification,
-      model: input.model,
-      environment: input.environment,
-    }),
+    turn: {
+      prepared,
+      previousManifest,
+      changes:
+        previousManifest === null
+          ? []
+          : diffArchitectManifests(previousManifest, prepared.manifest),
+      comparable: previousManifest !== null,
+    },
   };
 }
 
 /**
- * Execute une generation complete.
+ * Prepare un tour et enregistre son brouillon.
+ *
+ * Le brouillon est ecrit en base pour que l'apercu et l'envoi parlent du **meme**
+ * message : recopie dans un champ cache du formulaire, il pourrait etre modifie
+ * entre les deux, et la preview aurait decrit autre chose que ce qui part.
+ */
+export async function reviewArchitectTurn(
+  db: DatabaseClient,
+  input: TurnInput,
+): Promise<PrepareTurnResult> {
+  const prepared = await prepareArchitectTurn(input);
+  if (!prepared.ok) {
+    return prepared;
+  }
+
+  const saved = await saveArchitectTurnDraft(db, {
+    sessionId: input.session.id,
+    messageText: input.message,
+    contextFingerprint: prepared.turn.prepared.contextFingerprint,
+    manifest: prepared.turn.prepared.manifest,
+  });
+  if (!saved) {
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_GENERATION_ACTIVE };
+  }
+
+  return prepared;
+}
+
+export type SendTurnOutcome =
+  | { ok: true; generation: ArchitectGenerationView; turn: ArchitectTurn }
+  | { ok: false; code: ArchitectErrorCode }
+  | { ok: false; message: string };
+
+/** Traduit un refus de reservation en code stable. */
+function reservationCode(
+  reason: "not_found" | "already_applied" | "active" | "limit" | "legacy" | "no_draft" | "changed",
+): ArchitectErrorCode {
+  switch (reason) {
+    case "already_applied":
+      return ARCHITECT_ERROR.ARCHITECT_ALREADY_APPLIED;
+    case "active":
+      return ARCHITECT_ERROR.ARCHITECT_GENERATION_ACTIVE;
+    case "limit":
+      return ARCHITECT_ERROR.ARCHITECT_GENERATION_LIMIT;
+    case "legacy":
+      return ARCHITECT_ERROR.ARCHITECT_SESSION_LEGACY;
+    case "no_draft":
+      return ARCHITECT_ERROR.ARCHITECT_NO_PENDING_TURN;
+    case "changed":
+      return ARCHITECT_ERROR.ARCHITECT_CONTEXT_CHANGED;
+    default:
+      return ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR;
+  }
+}
+
+export type SendTurnInput = Omit<TurnInput, "message"> & {
+  provider: ArchitectProvider;
+};
+
+/**
+ * Envoie le tour prepare.
  *
  * Ne leve jamais : toute panne devient un code, et la generation reservee est
  * conclue en base dans **tous** les cas. Une generation laissee `RUNNING`
- * bloquerait la session pour toujours, puisque c'est elle qui porte le verrou.
+ * bloquerait la conversation pour toujours, puisque c'est elle qui porte le
+ * verrou.
+ *
+ * Le message de l'utilisateur vient du brouillon relu en base, jamais du
+ * formulaire : c'est ce qui garantit qu'on envoie le texte qui a ete
+ * prévisualisé, et qu'un rafraichissement apres reponse ne reemet rien.
  */
-export async function runArchitectGeneration(
+export async function sendArchitectTurn(
   db: DatabaseClient,
-  input: GenerationInput,
-): Promise<GenerationOutcome> {
-  const prepared = await prepareArchitectContext(input);
+  input: SendTurnInput,
+): Promise<SendTurnOutcome> {
+  const pending = input.session.pendingTurn;
+  if (pending === null) {
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_NO_PENDING_TURN };
+  }
+
+  // Le contexte est reconstruit maintenant, et non repris de la preview : entre
+  // l'affichage et le clic, un fichier a pu etre enregistre.
+  const prepared = await prepareArchitectTurn({ ...input, message: pending.messageText });
   if (!prepared.ok) {
-    // Le contexte n'a pas pu etre lu : aucune generation n'est reservee, aucun
-    // appel n'est fait, et la session reste exactement dans l'etat ou elle etait.
-    return { ok: false, message: prepared.message };
+    return prepared;
+  }
+
+  if (prepared.turn.prepared.contextFingerprint !== pending.contextFingerprint) {
+    // Aucun appel, aucune generation reservee, aucun quota consomme. Le
+    // brouillon reste : l'utilisateur relit le contexte mis a jour et renvoie.
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CONTEXT_CHANGED };
   }
 
   const reserved = await startArchitectGeneration(db, {
-    sessionId: input.sessionId,
+    sessionId: input.session.id,
     model: input.model,
-    promptVersion: prepared.prepared.prompt.version,
-    inputHash: prepared.prepared.inputHash,
-    manifest: prepared.prepared.manifest,
+    promptVersion: prepared.turn.prepared.prompt.version,
+    inputHash: prepared.turn.prepared.inputHash,
+    contextFingerprint: prepared.turn.prepared.contextFingerprint,
+    manifest: prepared.turn.prepared.manifest,
+    // Second controle, dans la transaction : deux clics simultanes ne peuvent
+    // pas tous deux trouver le brouillon intact.
+    expectedFingerprint: pending.contextFingerprint,
   });
   if (!reserved.ok) {
     return { ok: false, code: reservationCode(reserved.reason) };
@@ -227,8 +345,8 @@ export async function runArchitectGeneration(
 
   const generationId = reserved.generation.id;
 
-  /** Conclut la generation en echec, sans jamais laisser le verrou pose. */
-  const fail = async (code: ArchitectErrorCode): Promise<GenerationOutcome> => {
+  /** Conclut le tour en echec, sans jamais laisser le verrou pose. */
+  const fail = async (code: ArchitectErrorCode): Promise<SendTurnOutcome> => {
     await finishArchitectGeneration(db, {
       generationId,
       status:
@@ -236,6 +354,9 @@ export async function runArchitectGeneration(
           ? ARCHITECT_GENERATION_STATUS.REFUSED
           : ARCHITECT_GENERATION_STATUS.FAILED,
       errorCode: code,
+      // Aucun message : le tour n'a pas eu lieu. Le brouillon survit, et la
+      // conversation ne montre ni question restee sans reponse, ni fausse
+      // reponse d'architecte.
     });
     return { ok: false, code };
   };
@@ -244,10 +365,10 @@ export async function runArchitectGeneration(
   try {
     result = await input.provider.generateTaskProposal({
       model: input.model,
-      instructions: prepared.prepared.prompt.instructions,
-      input: prepared.prepared.prompt.input,
+      instructions: prepared.turn.prepared.prompt.instructions,
+      input: prepared.turn.prepared.prompt.input,
       schemaName: ARCHITECT_SCHEMA_NAME,
-      schema: buildArchitectProposalSchema(),
+      schema: buildArchitectTurnSchema(),
       timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
     });
   } catch (error) {
@@ -261,12 +382,12 @@ export async function runArchitectGeneration(
     return fail(result.code);
   }
 
-  const validated = readArchitectProposal(result.value.raw, prepared.prepared.availableDocuments);
+  const validated = readArchitectTurn(result.value.raw, prepared.turn.prepared.availableDocuments);
   if (!validated.ok) {
     // La reponse respectait le schema strict et reste inacceptable : c'est
     // exactement le cas que la validation metier existe pour attraper.
     console.error(
-      "[nox] Proposition Architecte refusee :",
+      "[nox] Tour Architecte refuse :",
       validated.refusal.field,
       validated.refusal.message,
     );
@@ -280,23 +401,30 @@ export async function runArchitectGeneration(
     return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
   }
 
-  const proposal = validated.proposal;
-  const ready = proposal.status === ARCHITECT_PROPOSAL_STATUS.PROPOSAL_READY;
+  const turn = validated.turn;
+  const ready = turn.state === ARCHITECT_TURN_STATE.PROPOSAL_READY;
 
   const generation = await finishArchitectGeneration(db, {
     generationId,
     status: ready
       ? ARCHITECT_GENERATION_STATUS.PROPOSAL_READY
-      : ARCHITECT_GENERATION_STATUS.NEEDS_INPUT,
-    proposal,
-    questions: proposal.questions,
+      : ARCHITECT_GENERATION_STATUS.CONTINUE,
+    turnState: turn.state,
+    proposal: turn.proposal,
+    questions: turn.questions,
     providerResponseId: result.value.responseId,
     usage: result.value.usage,
+    // Le tour a abouti : les deux messages deviennent historiques, et le
+    // brouillon disparait dans la meme transaction.
+    messages: [
+      { role: ARCHITECT_MESSAGE_ROLE.USER, content: pending.messageText },
+      { role: ARCHITECT_MESSAGE_ROLE.ARCHITECT, content: turn.message },
+    ],
   });
 
   if (generation === null) {
     return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR };
   }
 
-  return { ok: true, generation, proposal };
+  return { ok: true, generation, turn };
 }

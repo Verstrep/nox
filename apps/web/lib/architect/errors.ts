@@ -56,7 +56,23 @@ const MESSAGES: Record<ArchitectErrorCode, string> = {
     "lancer une autre.",
 
   [ARCHITECT_ERROR.ARCHITECT_ALREADY_APPLIED]:
-    "Cette session a deja produit une tache. Ouvrez une nouvelle demande pour en preparer une autre.",
+    "Cette conversation a deja produit une tache. Ouvrez une nouvelle conversation pour en " +
+    "preparer une autre.",
+
+  [ARCHITECT_ERROR.ARCHITECT_NO_PENDING_TURN]:
+    "Aucun message prepare. Ecrivez votre message, relisez le contexte, puis envoyez.",
+
+  [ARCHITECT_ERROR.ARCHITECT_CONTEXT_CHANGED]:
+    "Le contexte du projet a change depuis votre apercu. Relisez le contexte mis a jour avant de " +
+    "l'envoyer. Aucun appel n'a ete fait.",
+
+  [ARCHITECT_ERROR.ARCHITECT_CONVERSATION_TOO_LARGE]:
+    "Cette conversation a atteint la taille maximale que NOX accepte d'envoyer. Aucun message " +
+    "n'est resume ni supprime : ouvrez une nouvelle conversation pour poursuivre.",
+
+  [ARCHITECT_ERROR.ARCHITECT_SESSION_LEGACY]:
+    "Cette conversation a ete ouverte avant l'historique conversationnel et reste en lecture " +
+    "seule. Ouvrez une nouvelle conversation pour discuter avec l'architecte.",
 };
 
 /** Phrase affichee pour un code de l'Architecte. */

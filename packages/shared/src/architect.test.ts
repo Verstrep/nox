@@ -14,11 +14,14 @@ import {
   ARCHITECT_LIMITS,
   ARCHITECT_PROPOSAL_STATUS,
   ARCHITECT_SCHEMA_VERSION,
-  buildArchitectProposalSchema,
+  ARCHITECT_TURN_SCHEMA_VERSION,
+  ARCHITECT_TURN_STATE,
+  buildArchitectTurnSchema,
   checkArchitectText,
   isArchitectContextManifest,
   normalizeArchitectText,
   readArchitectProposal,
+  readArchitectTurn,
 } from "../dist/index.js";
 
 const DOCUMENTS = ["CLAUDE.md", "docs/ARCHITECTURE.md", "docs/PROJECT_STATE.md"];
@@ -249,37 +252,248 @@ describe("readArchitectProposal — commandes de validation", () => {
   });
 });
 
-describe("buildArchitectProposalSchema", () => {
+/** Proposition telle que le modele la rend dans un tour : sans enveloppe. */
+function proposalBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const body = ready(overrides);
+  delete body["schemaVersion"];
+  delete body["status"];
+  delete body["questions"];
+  return body;
+}
+
+/** Tour minimal, auquel chaque test applique sa variation. */
+function turn(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION,
+    state: ARCHITECT_TURN_STATE.CONTINUE,
+    message: "Deux options se presentent. Je recommande la seconde.",
+    questions: [],
+    proposal: null,
+    ...overrides,
+  };
+}
+
+function readTurn(value: unknown) {
+  return readArchitectTurn(value, DOCUMENTS);
+}
+
+describe("readArchitectTurn — discussion", () => {
+  it("accepte un tour sans proposition", () => {
+    const result = readTurn(turn());
+    assert.ok(result.ok);
+    assert.equal(result.turn.state, ARCHITECT_TURN_STATE.CONTINUE);
+    assert.equal(result.turn.proposal, null);
+  });
+
+  it("accepte jusqu'a cinq questions", () => {
+    const questions = ["a ?", "b ?", "c ?", "d ?", "e ?"];
+    const result = readTurn(turn({ questions }));
+    assert.ok(result.ok);
+    assert.deepEqual(result.turn.questions, questions);
+  });
+
+  it("refuse plus de cinq questions", () => {
+    const result = readTurn(turn({ questions: ["a ?", "b ?", "c ?", "d ?", "e ?", "f ?"] }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "questions");
+  });
+
+  it("refuse une proposition rendue alors que la discussion continue", () => {
+    // Se contredire n'est pas une erreur benigne : NOX ne peut pas deviner
+    // laquelle des deux affirmations tenir pour vraie.
+    const result = readTurn(turn({ proposal: proposalBody() }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "proposal");
+  });
+
+  it("normalise les fins de ligne du message", () => {
+    const result = readTurn(turn({ message: "  Premiere ligne.\r\nSeconde ligne.  " }));
+    assert.ok(result.ok);
+    assert.equal(result.turn.message, "Premiere ligne.\nSeconde ligne.");
+  });
+
+  it("refuse un message vide", () => {
+    const result = readTurn(turn({ message: "   " }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "message");
+  });
+
+  it("refuse un message absent", () => {
+    const result = readTurn(turn({ message: null }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "message");
+  });
+
+  it("refuse un message au-dela de la borne", () => {
+    const result = readTurn(turn({ message: "x".repeat(ARCHITECT_LIMITS.architectMessage + 1) }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "message");
+  });
+
+  it("accepte un message exactement a la borne", () => {
+    const result = readTurn(turn({ message: "x".repeat(ARCHITECT_LIMITS.architectMessage) }));
+    assert.ok(result.ok);
+  });
+
+  it("conserve un contenu hostile tel quel, sans l'interpreter", () => {
+    // Le message est du texte, et il le restera jusqu'a l'affichage : aucune
+    // couche ne le traite comme du HTML ou du Markdown execute.
+    const message = "<script>alert(1)</script> & <b>gras</b>";
+    const result = readTurn(turn({ message }));
+    assert.ok(result.ok);
+    assert.equal(result.turn.message, message);
+  });
+
+  it("refuse une version de contrat inconnue", () => {
+    const result = readTurn(turn({ schemaVersion: 1 }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "schemaVersion");
+  });
+
+  it("refuse une issue de tour inconnue", () => {
+    const result = readTurn(turn({ state: "NEEDS_INPUT" }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "state");
+  });
+
+  it("refuse une reponse qui n'est pas une structure", () => {
+    const result = readTurn("PROPOSAL_READY");
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "turn");
+  });
+});
+
+describe("readArchitectTurn — proposition", () => {
+  const readReady = (overrides: Record<string, unknown> = {}) =>
+    readTurn(
+      turn({
+        state: ARCHITECT_TURN_STATE.PROPOSAL_READY,
+        proposal: proposalBody(overrides),
+      }),
+    );
+
+  it("accepte une proposition complete", () => {
+    const result = readReady();
+    assert.ok(result.ok);
+    assert.equal(result.turn.proposal?.title, "Exporter les taches d'un projet en JSON");
+    assert.equal(result.turn.proposal?.status, ARCHITECT_PROPOSAL_STATUS.PROPOSAL_READY);
+    assert.equal(result.turn.proposal?.schemaVersion, ARCHITECT_SCHEMA_VERSION);
+  });
+
+  it("refuse une proposition annoncee mais absente", () => {
+    const result = readTurn(turn({ state: ARCHITECT_TURN_STATE.PROPOSAL_READY, proposal: null }));
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "proposal");
+  });
+
+  it("ecarte les questions d'une proposition prete", () => {
+    // Une proposition n'attend rien : des questions posees en meme temps
+    // seraient contradictoires.
+    const result = readTurn(
+      turn({
+        state: ARCHITECT_TURN_STATE.PROPOSAL_READY,
+        questions: ["Vraiment ?"],
+        proposal: proposalBody(),
+      }),
+    );
+    assert.ok(result.ok);
+    assert.deepEqual(result.turn.questions, []);
+    assert.deepEqual(result.turn.proposal?.questions, []);
+  });
+
+  it("applique la meme validation qu'une proposition isolee", () => {
+    const result = readReady({ documentReferences: ["docs/INVENTED.md"] });
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "documentReferences");
+  });
+
+  it("refuse une commande de validation dangereuse", () => {
+    const result = readReady({ validationCommands: ["npm run test && rm -rf /"] });
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "validationCommands");
+  });
+
+  it("refuse une proposition sans critere", () => {
+    const result = readReady({ acceptanceCriteria: [] });
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "acceptanceCriteria");
+  });
+
+  it("refuse une proposition sans titre", () => {
+    const result = readReady({ title: null });
+    assert.ok(!result.ok);
+    assert.equal(result.refusal.field, "title");
+  });
+});
+
+describe("buildArchitectTurnSchema", () => {
   it("declare tous les champs comme requis", () => {
-    const schema = buildArchitectProposalSchema();
+    const schema = buildArchitectTurnSchema();
     const properties = Object.keys(schema["properties"] as Record<string, unknown>);
     assert.deepEqual([...(schema["required"] as string[])].sort(), [...properties].sort());
   });
 
-  it("interdit les proprietes supplementaires", () => {
-    assert.equal(buildArchitectProposalSchema()["additionalProperties"], false);
+  it("declare tous les champs de la proposition imbriquee comme requis", () => {
+    const schema = buildArchitectTurnSchema();
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    const proposal = properties["proposal"] as Record<string, unknown>;
+    const fields = Object.keys(proposal["properties"] as Record<string, unknown>);
+    assert.deepEqual([...(proposal["required"] as string[])].sort(), [...fields].sort());
+  });
+
+  it("interdit les proprietes supplementaires, y compris dans la proposition", () => {
+    const schema = buildArchitectTurnSchema();
+    assert.equal(schema["additionalProperties"], false);
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    assert.equal(properties["proposal"]?.["additionalProperties"], false);
+  });
+
+  it("rend la proposition nullable", () => {
+    const schema = buildArchitectTurnSchema();
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    assert.deepEqual(properties["proposal"]?.["type"], ["object", "null"]);
+  });
+
+  it("ne demande ni statut, ni questions dans la proposition imbriquee", () => {
+    // Les faire repeter au modele alors que `state` les dit deja n'ajouterait
+    // qu'une occasion de se contredire.
+    const schema = buildArchitectTurnSchema();
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    const proposal = properties["proposal"] as Record<string, unknown>;
+    const fields = Object.keys(proposal["properties"] as Record<string, unknown>);
+    assert.equal(fields.includes("status"), false);
+    assert.equal(fields.includes("questions"), false);
+    assert.equal(fields.includes("schemaVersion"), false);
   });
 
   it("ne declare aucune borne de taille", () => {
     // Le mode strict d'OpenAI ignore `maxItems` et `maxLength` ; les declarer
     // ferait echouer la requete entiere. Les bornes vivent dans la validation.
-    const serialized = JSON.stringify(buildArchitectProposalSchema());
+    const serialized = JSON.stringify(buildArchitectTurnSchema());
     assert.equal(serialized.includes("maxItems"), false);
     assert.equal(serialized.includes("minItems"), false);
     assert.equal(serialized.includes("maxLength"), false);
     assert.equal(serialized.includes("pattern"), false);
   });
 
-  it("fige la version du contrat", () => {
-    const schema = buildArchitectProposalSchema();
+  it("fige la version du contrat de tour", () => {
+    const schema = buildArchitectTurnSchema();
     const properties = schema["properties"] as Record<string, Record<string, unknown>>;
-    assert.deepEqual(properties["schemaVersion"]?.["enum"], [ARCHITECT_SCHEMA_VERSION]);
+    assert.deepEqual(properties["schemaVersion"]?.["enum"], [ARCHITECT_TURN_SCHEMA_VERSION]);
+  });
+
+  it("ferme la liste des issues de tour", () => {
+    const schema = buildArchitectTurnSchema();
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    assert.deepEqual(properties["state"]?.["enum"], ["CONTINUE", "PROPOSAL_READY"]);
   });
 
   it("ferme la liste des priorites, valeur nulle comprise", () => {
-    const schema = buildArchitectProposalSchema();
+    const schema = buildArchitectTurnSchema();
     const properties = schema["properties"] as Record<string, Record<string, unknown>>;
-    const values = properties["priority"]?.["enum"] as unknown[];
+    const proposal = properties["proposal"] as Record<string, unknown>;
+    const fields = proposal["properties"] as Record<string, Record<string, unknown>>;
+    const values = fields["priority"]?.["enum"] as unknown[];
     assert.ok(values.includes("CRITICAL"));
     assert.ok(values.includes(null));
     assert.equal(values.includes("URGENT"), false);

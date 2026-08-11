@@ -40,9 +40,8 @@ const BASE: PrepareArchitectInput = {
     },
   ],
   tasks: [],
-  request: "Je veux exporter les taches en JSON.",
-  previousQuestions: [],
-  clarification: null,
+  transcript: [],
+  newMessage: "Je veux exporter les taches en JSON.",
   model: "modele-de-test",
   environment: ENVIRONMENT,
 };
@@ -68,18 +67,26 @@ describe("prepareArchitectGeneration", () => {
     assert.ok(prepared.prompt.input.includes("apps"));
   });
 
-  it("nettoie aussi la demande de l'utilisateur", () => {
+  it("nettoie aussi le message de l'utilisateur", () => {
     const prepared = prepare({
-      request: `Corrige D:/Projets/Dev/nox/apps/web et la cle ${ENVIRONMENT["NOX_OPENAI_API_KEY"] ?? ""}`,
+      newMessage: `Corrige D:/Projets/Dev/nox/apps/web et la cle ${ENVIRONMENT["NOX_OPENAI_API_KEY"] ?? ""}`,
     });
 
     assert.equal(prepared.prompt.input.includes("D:/Projets/Dev/nox"), false);
     assert.equal(prepared.prompt.input.includes("cle-architecte-de-test-9876543210"), false);
   });
 
-  it("nettoie les precisions", () => {
-    const prepared = prepare({ clarification: "Voir C:/Users/theo/secret.txt" });
+  it("nettoie aussi le transcript", () => {
+    // Une reponse d'architecte a ete produite a partir d'un contexte, et un
+    // modele recopie ce qu'il lit : elle traverse la meme sanitation.
+    const prepared = prepare({
+      transcript: [
+        { role: "USER", content: "Voir C:/Users/theo/secret.txt" },
+        { role: "ARCHITECT", content: "Le depot est dans D:/Projets/Dev/nox." },
+      ],
+    });
     assert.equal(prepared.prompt.input.includes("C:/Users"), false);
+    assert.equal(prepared.prompt.input.includes("D:/Projets/Dev/nox"), false);
   });
 
   it("ne laisse jamais la cle atteindre le prompt", () => {
@@ -155,7 +162,7 @@ describe("architectInputHash", () => {
 
   it("suit la preparation complete", () => {
     const first = prepare();
-    const second = prepare({ request: "Une demande differente." });
+    const second = prepare({ newMessage: "Une demande differente." });
     assert.notEqual(first.inputHash, second.inputHash);
   });
 });

@@ -13,11 +13,11 @@ type NewArchitectRequestFormProps = {
 };
 
 /**
- * Saisie d'une demande produit.
+ * Premier message d'une conversation Architecte.
  *
- * Un seul champ. Le bouton ne contacte aucun fournisseur : il enregistre la
- * demande et ouvre la page de preparation, ou le contexte exact s'affiche avant
- * qu'un seul caractere ne quitte la machine.
+ * Un seul champ. Le bouton ne contacte aucun fournisseur : il ouvre la
+ * conversation et sa page, ou le contexte exact s'affiche avant qu'un seul
+ * caractere ne quitte la machine.
  *
  * Le texte survit a un refus : le perdre parce qu'une validation a echoue serait
  * la pire facon de refuser.
@@ -54,9 +54,10 @@ export function NewArchitectRequestForm({
           Que veux-tu construire ou modifier ?
         </label>
         <p id={helpId} className="text-xs leading-relaxed text-zinc-500">
-          Decrivez l&apos;intention, pas l&apos;implementation. L&apos;architecte lira le contexte
-          du projet et proposera <strong className="text-zinc-400">une</strong> tache, la plus
-          petite qui apporte quelque chose. {maxLength.toLocaleString("fr-FR")} caracteres maximum.
+          Decrivez l&apos;intention, pas l&apos;implementation. Vous pourrez en discuter autant que
+          necessaire ; la conversation aboutira a <strong className="text-zinc-400">une</strong>{" "}
+          tache, la plus petite qui apporte quelque chose.{" "}
+          {maxLength.toLocaleString("fr-FR")} caracteres maximum.
         </p>
         <textarea
           id={fieldId}
@@ -77,7 +78,7 @@ export function NewArchitectRequestForm({
           disabled={pending}
           className="rounded-md border border-zinc-600 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-500 hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {pending ? "Preparation…" : "Prepare context"}
+          {pending ? "Ouverture…" : "Start conversation"}
         </button>
 
         <Link
@@ -89,8 +90,8 @@ export function NewArchitectRequestForm({
       </div>
 
       <p className="text-xs leading-relaxed text-zinc-600">
-        Ce bouton ne contacte aucun fournisseur. Il prepare le contexte et vous le montre ; c&apos;est
-        un second clic qui declenchera la generation.
+        Ce bouton ne contacte aucun fournisseur. Il ouvre la conversation et vous montre le
+        contexte ; ce sont deux clics de plus qui declencheront le premier appel.
       </p>
     </form>
   );

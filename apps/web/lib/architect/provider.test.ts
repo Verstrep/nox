@@ -13,7 +13,7 @@ import { describe, it } from "node:test";
 import {
   ARCHITECT_ERROR,
   ARCHITECT_SCHEMA_NAME,
-  buildArchitectProposalSchema,
+  buildArchitectTurnSchema,
 } from "@nox/shared";
 import { APIError, APIConnectionTimeoutError } from "openai";
 
@@ -26,7 +26,7 @@ const INPUT: ArchitectProviderInput = {
   instructions: "Tu es l'architecte.",
   input: "## Demande\n\nExporter les taches.",
   schemaName: ARCHITECT_SCHEMA_NAME,
-  schema: buildArchitectProposalSchema(),
+  schema: buildArchitectTurnSchema(),
   timeoutMs: 1_000,
 };
 

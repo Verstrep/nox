@@ -25,8 +25,11 @@
  * reecrits : ce sont des fichiers du repository, pas des chaines d'interface.
  */
 
+import type { ArchitectContextChangeKind } from "./architect/context-diff.ts";
+
 import {
   ARCHITECT_GENERATION_STATUS,
+  ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SESSION_STATUS,
   CLAUDE_RUN_EVENT_KIND,
   RUN_CHANGE_TYPE,
@@ -37,6 +40,7 @@ import {
   TASK_PRIORITY,
   TASK_STATUS,
   type ArchitectGenerationStatus,
+  type ArchitectMessageRole,
   type ArchitectSessionStatus,
   type ClaudeRunEventKind,
   type RunChangeType,
@@ -233,6 +237,7 @@ const TASK_TRANSITION_LABELS: Record<TaskStatus, Partial<Record<TaskStatus, stri
 const ARCHITECT_SESSION_STATUS_LABELS: Record<ArchitectSessionStatus, string> = {
   [ARCHITECT_SESSION_STATUS.OPEN]: "Open",
   [ARCHITECT_SESSION_STATUS.GENERATING]: "Generating…",
+  [ARCHITECT_SESSION_STATUS.CONTINUE]: "In discussion",
   [ARCHITECT_SESSION_STATUS.NEEDS_INPUT]: "Needs input",
   [ARCHITECT_SESSION_STATUS.PROPOSAL_READY]: "Proposal ready",
   [ARCHITECT_SESSION_STATUS.APPLIED]: "Applied",
@@ -243,6 +248,7 @@ const ARCHITECT_SESSION_STATUS_LABELS: Record<ArchitectSessionStatus, string> = 
 const ARCHITECT_GENERATION_STATUS_LABELS: Record<ArchitectGenerationStatus, string> = {
   [ARCHITECT_GENERATION_STATUS.RUNNING]: "Running",
   [ARCHITECT_GENERATION_STATUS.PROPOSAL_READY]: "Proposal ready",
+  [ARCHITECT_GENERATION_STATUS.CONTINUE]: "Discussion",
   [ARCHITECT_GENERATION_STATUS.NEEDS_INPUT]: "Needs input",
   [ARCHITECT_GENERATION_STATUS.REFUSED]: "Refused",
   [ARCHITECT_GENERATION_STATUS.FAILED]: "Failed",
@@ -264,6 +270,36 @@ const ARCHITECT_SOURCE_STATUS_LABELS: Record<ArchitectSourceStatus, string> = {
 
 /** Sort possible d'une source du contexte. */
 export type ArchitectSourceStatus = "INCLUDED" | "TRUNCATED" | "OMITTED" | "MISSING";
+
+/**
+ * Nature d'un changement de contexte entre deux tours.
+ *
+ * Les libelles disent un **fait**, jamais une consequence : NOX ne sait pas
+ * pourquoi un document a change, et n'a pas a le supposer.
+ */
+const ARCHITECT_CONTEXT_CHANGE_LABELS: Record<ArchitectContextChangeKind, string> = {
+  ADDED: "Added",
+  REMOVED: "Removed",
+  MODIFIED: "Modified",
+  TRUNCATION_CHANGED: "Truncation changed",
+  TASK_ADDED: "Added to recent context",
+  TASK_MODIFIED: "Specification changed",
+  TASK_REMOVED: "Removed from recent context",
+};
+
+/** Auteur d'un message, tel que le fil l'affiche. */
+const ARCHITECT_MESSAGE_ROLE_LABELS: Record<ArchitectMessageRole, string> = {
+  [ARCHITECT_MESSAGE_ROLE.USER]: "You",
+  [ARCHITECT_MESSAGE_ROLE.ARCHITECT]: "Architect",
+};
+
+export function architectContextChangeLabel(kind: ArchitectContextChangeKind): string {
+  return ARCHITECT_CONTEXT_CHANGE_LABELS[kind];
+}
+
+export function architectMessageRoleLabel(role: ArchitectMessageRole): string {
+  return ARCHITECT_MESSAGE_ROLE_LABELS[role];
+}
 
 export function architectSessionStatusLabel(status: ArchitectSessionStatus): string {
   return ARCHITECT_SESSION_STATUS_LABELS[status];

@@ -552,7 +552,34 @@ model ArchitectSession {
   requestText String
 
   /// Precisions apportees en reponse aux questions de l'architecte.
+  ///
+  /// Champ de TASK-013, conserve pour relire les sessions d'alors. Depuis
+  /// TASK-014, les precisions sont des messages de conversation : ce champ
+  /// n'est plus jamais ecrit.
   clarificationText String?
+
+  /// Version conversationnelle : 1 avant TASK-014, 2 ensuite.
+  ///
+  /// Une session `1` n'a jamais enregistre de messages. NOX ne lui en invente
+  /// pas : elle reste consultable avec ses generations et sa tache, mais ne se
+  /// poursuit plus. Une fausse reconstruction serait pire qu'une lecture seule.
+  conversationVersion Int @default(1)
+
+  /// Texte du prochain message, prepare mais pas encore envoye.
+  ///
+  /// Le brouillon vit ici plutot que dans le navigateur pour une raison simple :
+  /// l'apercu et l'envoi doivent parler du **meme** message. Il est efface dans
+  /// la transaction qui fige le tour, ce qui empeche un rafraichissement de
+  /// reemettre l'appel.
+  pendingMessageText String?
+
+  /// Empreinte du contexte au moment de l'apercu.
+  pendingContextFingerprint String?
+
+  /// `ArchitectContextManifest` de l'apercu, serialise.
+  pendingContextManifestJson String?
+
+  pendingPreparedAt DateTime?
 
   /// Valeur de `ArchitectSessionStatus`, stockee en chaine comme les autres enums.
   status String
@@ -573,10 +600,47 @@ model ArchitectSession {
   project     Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   appliedTask Task?                 @relation(fields: [appliedTaskId], references: [id], onDelete: Restrict)
   generations ArchitectGeneration[]
+  messages    ArchitectMessage[]
 
   @@unique([projectId, sequence])
   @@unique([appliedTaskId])
   @@index([projectId, createdAt])
+}
+
+/// Un message de la conversation Architecte.
+///
+/// Immuable : ni modifie, ni supprime, ni reecrit. Un message n'apparait que
+/// lorsqu'un tour a reellement abouti — un echec du fournisseur n'en laisse
+/// aucun, et le brouillon de l'utilisateur lui reste acquis.
+model ArchitectMessage {
+  id        String @id @default(cuid())
+  sessionId String
+
+  /// Numero attribue a l'insertion, unique dans la session et jamais modifie.
+  sequence Int
+
+  /// Valeur de `ArchitectMessageRole` : `USER` ou `ARCHITECT`.
+  role String
+
+  /// Texte reellement envoye, ou reponse **publique** de l'architecte.
+  ///
+  /// Aucun raisonnement interne n'est demande au modele, ni recu, ni stocke ici.
+  content String
+
+  /// Generation du tour auquel ce message appartient.
+  ///
+  /// Les deux messages d'un meme tour — celui de l'utilisateur et la reponse —
+  /// portent le meme identifiant : c'est ce qui permet de retrouver le modele,
+  /// la consommation et le manifest d'une reponse donnee.
+  generationId String?
+
+  createdAt DateTime @default(now())
+
+  session    ArchitectSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  generation ArchitectGeneration? @relation(fields: [generationId], references: [id], onDelete: SetNull)
+
+  @@unique([sessionId, sequence])
+  @@index([sessionId, sequence])
 }
 
 /// Un appel au fournisseur, et ce qu'il a rendu.
@@ -618,6 +682,17 @@ model ArchitectGeneration {
   /// Valeur de `ArchitectGenerationStatus`.
   status String
 
+  /// Valeur de `ArchitectTurnState`, depuis TASK-014. `null` pour les
+  /// generations enregistrees avant, qui n'etaient pas des tours.
+  turnState String?
+
+  /// Empreinte deterministe du contexte reellement envoye.
+  ///
+  /// Elle repond a une seule question : « ce contexte est-il exactement celui
+  /// que l'utilisateur a prévisualisé ? ». Ce n'est pas une primitive de
+  /// securite, contrairement a l'empreinte de dossier de travail de TASK-012.
+  contextFingerprint String?
+
   /// `ArchitectTaskProposal` serialise, lorsqu'une proposition a ete validee.
   proposalJson String?
 
@@ -640,7 +715,8 @@ model ArchitectGeneration {
   createdAt DateTime @default(now())
 
   /// `Cascade` comme `RunEvent` : une generation ne raconte rien sans sa session.
-  session ArchitectSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session  ArchitectSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  messages ArchitectMessage[]
 
   @@unique([sessionId, sequence])
   @@index([sessionId, sequence])

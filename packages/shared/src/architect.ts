@@ -36,6 +36,71 @@ import { TASK_PRIORITIES, isTaskPriority, type TaskPriority } from "./tasks.js";
 export const ARCHITECT_SCHEMA_VERSION = 1;
 
 /**
+ * Version du contrat de **tour** conversationnel.
+ *
+ * Le tour est ce que le modele rend depuis TASK-014 : un message public, des
+ * questions eventuelles, et une proposition ou rien. La proposition qu'il porte
+ * garde, elle, sa version 1 — sa forme n'a pas change, et les propositions
+ * persistees avant TASK-014 restent lisibles telles quelles.
+ */
+export const ARCHITECT_TURN_SCHEMA_VERSION = 2;
+
+/**
+ * Issue d'un tour de conversation.
+ *
+ * Deux valeurs, et deux seulement :
+ *
+ * - `CONTINUE` : la discussion doit continuer. Le modele repond, recommande,
+ *   pose au plus cinq questions — mais ne propose pas encore de tache.
+ * - `PROPOSAL_READY` : une tache coherente peut etre proposee. La conversation
+ *   **ne se ferme pas pour autant** : l'utilisateur peut demander plus petit, et
+ *   le tour suivant produira une autre proposition.
+ */
+export const ARCHITECT_TURN_STATE = {
+  CONTINUE: "CONTINUE",
+  PROPOSAL_READY: "PROPOSAL_READY",
+} as const;
+
+export type ArchitectTurnState = (typeof ARCHITECT_TURN_STATE)[keyof typeof ARCHITECT_TURN_STATE];
+
+export const ARCHITECT_TURN_STATES: readonly ArchitectTurnState[] =
+  Object.values(ARCHITECT_TURN_STATE);
+
+export const isArchitectTurnState = createStatusGuard(ARCHITECT_TURN_STATES);
+
+/**
+ * Auteur d'un message de conversation.
+ *
+ * `ARCHITECT` designe la **reponse publique** du modele — celle qui est ecrite
+ * pour l'utilisateur. Aucun raisonnement interne n'est demande, ni recu, ni
+ * persiste : les deux ne sont pas la meme chose et ne doivent jamais etre
+ * confondus.
+ */
+export const ARCHITECT_MESSAGE_ROLE = {
+  USER: "USER",
+  ARCHITECT: "ARCHITECT",
+} as const;
+
+export type ArchitectMessageRole =
+  (typeof ARCHITECT_MESSAGE_ROLE)[keyof typeof ARCHITECT_MESSAGE_ROLE];
+
+export const ARCHITECT_MESSAGE_ROLES: readonly ArchitectMessageRole[] =
+  Object.values(ARCHITECT_MESSAGE_ROLE);
+
+export const isArchitectMessageRole = createStatusGuard(ARCHITECT_MESSAGE_ROLES);
+
+/**
+ * Version conversationnelle d'une session.
+ *
+ * `1` : session ouverte avant TASK-014. Elle n'a jamais enregistre de messages,
+ * et NOX **ne lui en invente pas** : elle reste consultable, avec ses
+ * generations et sa tache eventuelle, mais ne se poursuit plus.
+ *
+ * `2` : session conversationnelle, dont chaque tour est enregistre.
+ */
+export const ARCHITECT_CONVERSATION_VERSION = { LEGACY: 1, CONVERSATION: 2 } as const;
+
+/**
  * Issue d'une generation, telle que le modele la declare.
  *
  * Deux valeurs, et deux seulement : soit l'architecte peut proposer, soit il a
@@ -62,10 +127,19 @@ export const isArchitectProposalStatus = createStatusGuard(ARCHITECT_PROPOSAL_ST
  * session en echec reste consultable, et un nouveau clic peut la ramener a
  * `PROPOSAL_READY`. Seul `APPLIED` est definitif — une tache a ete creee, et il
  * n'y en aura pas de seconde.
+ *
+ * `PROPOSAL_READY` n'est pas non plus un point d'arret : depuis TASK-014 la
+ * conversation continue, et un tour suivant peut ramener la session a
+ * `CONTINUE` puis a une autre proposition.
+ *
+ * `NEEDS_INPUT` n'est plus jamais ecrit : il decrivait le formulaire de
+ * clarification de TASK-013. Il reste declare pour que les sessions ouvertes
+ * avant TASK-014 se relisent sans erreur.
  */
 export const ARCHITECT_SESSION_STATUS = {
   OPEN: "OPEN",
   GENERATING: "GENERATING",
+  CONTINUE: "CONTINUE",
   NEEDS_INPUT: "NEEDS_INPUT",
   PROPOSAL_READY: "PROPOSAL_READY",
   APPLIED: "APPLIED",
@@ -87,10 +161,18 @@ export const isArchitectSessionStatus = createStatusGuard(ARCHITECT_SESSION_STAT
  * a refuse de repondre, le second qu'aucune reponse exploitable n'est arrivee.
  * Les confondre priverait l'utilisateur de la seule information qui change ce
  * qu'il doit faire ensuite.
+ *
+ * `CONTINUE` et `PROPOSAL_READY` reprennent les deux issues d'un tour. Elles
+ * sont les seules a produire des messages de conversation : une generation qui
+ * echoue n'en laisse aucun, et le brouillon de l'utilisateur lui reste acquis.
+ *
+ * `NEEDS_INPUT` n'est plus jamais ecrit depuis TASK-014 ; il reste declare pour
+ * les generations enregistrees avant.
  */
 export const ARCHITECT_GENERATION_STATUS = {
   RUNNING: "RUNNING",
   PROPOSAL_READY: "PROPOSAL_READY",
+  CONTINUE: "CONTINUE",
   NEEDS_INPUT: "NEEDS_INPUT",
   REFUSED: "REFUSED",
   FAILED: "FAILED",
@@ -116,10 +198,27 @@ export const isArchitectGenerationStatus = createStatusGuard(ARCHITECT_GENERATIO
  * ne passerait pas la validation de creation serait une impasse.
  */
 export const ARCHITECT_LIMITS = {
-  /** Demande produit initiale. */
-  request: 8_000,
-  /** Precisions apportees en reponse aux questions. */
-  clarification: 8_000,
+  /**
+   * Message ecrit par l'utilisateur, premier compris.
+   *
+   * Une seule borne pour tous : le premier message d'une conversation n'est pas
+   * d'une autre nature que le quatrieme, et deux limites differentes pour la
+   * meme chose finiraient par diverger.
+   */
+  request: 8 * 1024,
+  /** Precisions de TASK-013. Conservee pour relire les sessions d'alors. */
+  clarification: 8 * 1024,
+  /** Reponse publique de l'architecte, telle qu'elle est affichee et persistee. */
+  architectMessage: 12 * 1024,
+  /**
+   * Transcript envoye au fournisseur.
+   *
+   * Depasser cette borne **arrete** la conversation : NOX ne resume pas, ne
+   * fenetre pas, et ne supprime pas les premiers messages. Une decision prise au
+   * deuxieme message peut etre essentielle au quinzieme ; l'oublier en silence
+   * fabriquerait une memoire fictive, ce qui est pire qu'un refus lisible.
+   */
+  transcript: 64 * 1024,
   title: 160,
   objective: 5_000,
   context: 10_000,
@@ -129,8 +228,15 @@ export const ARCHITECT_LIMITS = {
   commands: { max: 10, length: 200 },
   assumptions: { max: 10, length: 500 },
   questions: { max: 5, length: 300 },
-  /** Generations d'une meme session : au-dela, NOX refuse d'appeler. */
-  generations: 10,
+  /**
+   * Generations d'une meme conversation, echecs compris.
+   *
+   * Vingt depuis TASK-014 : une conception reelle demande plusieurs allers et
+   * retours, la ou TASK-013 n'en offrait qu'un ou deux. Compter aussi les echecs
+   * reste indispensable — ne compter que les reussites autoriserait une boucle
+   * infinie d'erreurs, chacune facturee.
+   */
+  generations: 20,
 } as const;
 
 /**
@@ -175,8 +281,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Refus construit en un seul endroit : la forme reste identique partout. */
-function refuse(field: string, message: string): ArchitectProposalResult {
+/**
+ * Refus construit en un seul endroit : la forme reste identique partout.
+ *
+ * Le type de retour ne mentionne que la branche d'echec, commune a la lecture
+ * d'une proposition et a celle d'un tour : les deux refusent de la meme facon.
+ */
+function refuse(field: string, message: string): { ok: false; refusal: ArchitectProposalRefusal } {
   return { ok: false, refusal: { field, message } };
 }
 
@@ -394,70 +505,199 @@ export function readArchitectProposal(
 }
 
 /**
+ * Un tour de conversation, tel que le modele le rend.
+ *
+ * `message` est le seul texte destine a l'utilisateur, et c'est un **artefact
+ * utilisateur** : une explication, une comparaison d'options, une recommandation.
+ * Ce n'est pas du raisonnement interne — NOX n'en demande pas, n'en recoit pas,
+ * et n'en persiste aucun.
+ */
+export type ArchitectTurn = {
+  schemaVersion: typeof ARCHITECT_TURN_SCHEMA_VERSION;
+  state: ArchitectTurnState;
+  message: string;
+  questions: string[];
+  /** Proposition complete, ou `null` lorsque la discussion continue. */
+  proposal: ArchitectTaskProposal | null;
+};
+
+export type ArchitectTurnResult =
+  | { ok: true; turn: ArchitectTurn }
+  | { ok: false; refusal: ArchitectProposalRefusal };
+
+/**
+ * Valide un tour rendu par le fournisseur.
+ *
+ * Delegue **entierement** la partie proposition a `readArchitectProposal` : la
+ * liste fermee des documents, les commandes de validation et les bornes de champ
+ * n'ont qu'une seule implementation, et un tour ne l'assouplit pas.
+ *
+ * Les champs `schemaVersion` et `status` de la proposition sont poses ici plutot
+ * que demandes au modele : les lui faire repeter alors que `state` les dit deja
+ * n'ajouterait qu'une occasion de se contredire.
+ */
+export function readArchitectTurn(
+  value: unknown,
+  availableDocuments: readonly string[],
+): ArchitectTurnResult {
+  if (!isRecord(value)) {
+    return refuse("turn", "La reponse de l'architecte n'est pas une structure lisible.");
+  }
+
+  if (value["schemaVersion"] !== ARCHITECT_TURN_SCHEMA_VERSION) {
+    return refuse(
+      "schemaVersion",
+      "La reponse de l'architecte ne suit pas la version de contrat attendue.",
+    );
+  }
+
+  const state: unknown = value["state"];
+  if (!isArchitectTurnState(state)) {
+    return refuse("state", "L'architecte a rendu une issue de tour inconnue.");
+  }
+
+  const rawMessage: unknown = value["message"];
+  if (typeof rawMessage !== "string") {
+    return refuse("message", "L'architecte n'a rendu aucune reponse lisible.");
+  }
+  const message = rawMessage.replace(/\r\n?/gu, "\n").trim();
+  if (message === "") {
+    return refuse("message", "L'architecte a rendu une reponse vide.");
+  }
+  if (message.length > ARCHITECT_LIMITS.architectMessage) {
+    return refuse("message", "La reponse de l'architecte depasse la taille acceptee par NOX.");
+  }
+
+  const questions = readList(value["questions"], ARCHITECT_LIMITS.questions);
+  if (questions === null) {
+    return refuse(
+      "questions",
+      `L'architecte a pose trop de questions (maximum ${String(ARCHITECT_LIMITS.questions.max)}).`,
+    );
+  }
+
+  const rawProposal: unknown = value["proposal"];
+
+  if (state === ARCHITECT_TURN_STATE.CONTINUE) {
+    if (isRecord(rawProposal)) {
+      return refuse(
+        "proposal",
+        "L'architecte annonce vouloir continuer la discussion tout en rendant une proposition.",
+      );
+    }
+    return {
+      ok: true,
+      turn: { schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION, state, message, questions, proposal: null },
+    };
+  }
+
+  if (!isRecord(rawProposal)) {
+    return refuse("proposal", "L'architecte annonce une proposition prete sans en rendre aucune.");
+  }
+
+  const validated = readArchitectProposal(
+    {
+      ...rawProposal,
+      schemaVersion: ARCHITECT_SCHEMA_VERSION,
+      status: ARCHITECT_PROPOSAL_STATUS.PROPOSAL_READY,
+      questions: [],
+    },
+    availableDocuments,
+  );
+  if (!validated.ok) {
+    return validated;
+  }
+
+  return {
+    ok: true,
+    turn: {
+      schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION,
+      state,
+      message,
+      // Une proposition prete n'attend rien : les questions eventuelles du
+      // modele seraient contradictoires, et sont ignorees plutot qu'affichees.
+      questions: [],
+      proposal: validated.proposal,
+    },
+  };
+}
+
+function shortStrings(description: string): Record<string, unknown> {
+  return { type: "array", description, items: { type: "string" } };
+}
+
+/**
+ * Champs d'une proposition, sans son enveloppe.
+ *
+ * Definis une seule fois : le schema strict les declare, et
+ * `readArchitectProposal` les fait respecter. Deux listes concurrentes
+ * divergeraient au premier ajout de champ.
+ */
+function proposalFieldSchemas(): Record<string, Record<string, unknown>> {
+  return {
+    title: { type: ["string", "null"], description: "Titre court de la tache." },
+    priority: { type: ["string", "null"], enum: [...TASK_PRIORITIES, null] },
+    objective: { type: ["string", "null"], description: "Resultat attendu." },
+    context: { type: ["string", "null"], description: "Pourquoi la tache existe." },
+    acceptanceCriteria: shortStrings(
+      `Criteres verifiables, de ${String(ARCHITECT_LIMITS.criteria.min)} a ${String(ARCHITECT_LIMITS.criteria.max)}.`,
+    ),
+    outOfScope: shortStrings("Ce que l'implementeur ne doit pas faire."),
+    documentReferences: shortStrings("Chemins issus de la liste fermee fournie."),
+    validationCommands: shortStrings("Commandes simples, sans operateur shell."),
+    assumptions: shortStrings("Hypotheses produit prises faute d'information."),
+  };
+}
+
+/**
  * Schema JSON strict transmis au fournisseur.
  *
  * Construit ici, et nulle part ailleurs : le web l'envoie, les tests le
- * verifient, et il decrit exactement ce que `readArchitectProposal` accepte.
- * Deux definitions concurrentes divergeraient au premier ajout de champ.
+ * verifient, et il decrit exactement ce que `readArchitectTurn` accepte.
  *
  * Le mode strict d'OpenAI impose que **tous** les champs soient requis et que
  * chaque objet porte `additionalProperties: false`. Les champs facultatifs sont
- * donc exprimes par une union avec `null`, pas par leur absence.
+ * donc exprimes par une union avec `null`, pas par leur absence — y compris
+ * `proposal`, qui vaut `null` tant que la discussion continue.
  *
  * **Aucune borne de taille n'y figure.** Le sous-ensemble de JSON Schema accepte
  * en mode strict ignore `maxItems`, `minItems`, `maxLength` et `pattern` : les
  * declarer ferait echouer la requete entiere. Les bornes vivent donc a deux
  * endroits qui, eux, existent : les instructions du prompt les annoncent, et
- * `readArchitectProposal` les fait respecter. C'est exactement la raison pour
+ * `readArchitectTurn` les fait respecter. C'est exactement la raison pour
  * laquelle un schema strict ne dispense jamais d'une validation metier.
  */
-export function buildArchitectProposalSchema(): Record<string, unknown> {
-  const shortStrings = (description: string): Record<string, unknown> => ({
-    type: "array",
-    description,
-    items: { type: "string" },
-  });
+export function buildArchitectTurnSchema(): Record<string, unknown> {
+  const fields = proposalFieldSchemas();
 
   return {
     type: "object",
     additionalProperties: false,
-    required: [
-      "schemaVersion",
-      "status",
-      "title",
-      "priority",
-      "objective",
-      "context",
-      "acceptanceCriteria",
-      "outOfScope",
-      "documentReferences",
-      "validationCommands",
-      "assumptions",
-      "questions",
-    ],
+    required: ["schemaVersion", "state", "message", "questions", "proposal"],
     properties: {
-      schemaVersion: { type: "integer", enum: [ARCHITECT_SCHEMA_VERSION] },
-      status: { type: "string", enum: [...ARCHITECT_PROPOSAL_STATUSES] },
-      title: { type: ["string", "null"], description: "Titre court de la tache." },
-      priority: { type: ["string", "null"], enum: [...TASK_PRIORITIES, null] },
-      objective: { type: ["string", "null"], description: "Resultat attendu." },
-      context: { type: ["string", "null"], description: "Pourquoi la tache existe." },
-      acceptanceCriteria: shortStrings(
-        `Criteres verifiables, de ${String(ARCHITECT_LIMITS.criteria.min)} a ${String(ARCHITECT_LIMITS.criteria.max)}.`,
-      ),
-      outOfScope: shortStrings("Ce que l'implementeur ne doit pas faire."),
-      documentReferences: shortStrings("Chemins issus de la liste fermee fournie."),
-      validationCommands: shortStrings("Commandes simples, sans operateur shell."),
-      assumptions: shortStrings("Hypotheses produit prises faute d'information."),
+      schemaVersion: { type: "integer", enum: [ARCHITECT_TURN_SCHEMA_VERSION] },
+      state: { type: "string", enum: [...ARCHITECT_TURN_STATES] },
+      message: {
+        type: "string",
+        description:
+          "Reponse redigee pour l'utilisateur : options, compromis, recommandation. Jamais de raisonnement interne.",
+      },
       questions: shortStrings(
-        `Questions decisionnelles, au plus ${String(ARCHITECT_LIMITS.questions.max)}, uniquement si le statut est NEEDS_INPUT.`,
+        `Questions decisionnelles, au plus ${String(ARCHITECT_LIMITS.questions.max)}, uniquement si l'etat est ${ARCHITECT_TURN_STATE.CONTINUE}.`,
       ),
+      proposal: {
+        type: ["object", "null"],
+        description: `Proposition de tache, uniquement si l'etat est ${ARCHITECT_TURN_STATE.PROPOSAL_READY}.`,
+        additionalProperties: false,
+        required: Object.keys(fields),
+        properties: fields,
+      },
     },
   };
 }
 
 /** Nom du format transmis au fournisseur ; doit rester stable. */
-export const ARCHITECT_SCHEMA_NAME = "nox_task_proposal";
+export const ARCHITECT_SCHEMA_NAME = "nox_architect_turn";
 
 // --- Manifest du contexte ----------------------------------------------------
 
@@ -545,6 +785,14 @@ export const ARCHITECT_ERROR = {
   ARCHITECT_GENERATION_ACTIVE: "ARCHITECT_GENERATION_ACTIVE",
   /** La session a deja produit une tache. */
   ARCHITECT_ALREADY_APPLIED: "ARCHITECT_ALREADY_APPLIED",
+  /** Aucun tour prepare : il faut relire le contexte avant d'envoyer. */
+  ARCHITECT_NO_PENDING_TURN: "ARCHITECT_NO_PENDING_TURN",
+  /** Le contexte du projet a change depuis l'apercu. */
+  ARCHITECT_CONTEXT_CHANGED: "ARCHITECT_CONTEXT_CHANGED",
+  /** Le transcript depasse la borne : la conversation ne peut plus continuer. */
+  ARCHITECT_CONVERSATION_TOO_LARGE: "ARCHITECT_CONVERSATION_TOO_LARGE",
+  /** Session ouverte avant TASK-014 : consultable, jamais poursuivie. */
+  ARCHITECT_SESSION_LEGACY: "ARCHITECT_SESSION_LEGACY",
 } as const;
 
 export type ArchitectErrorCode = (typeof ARCHITECT_ERROR)[keyof typeof ARCHITECT_ERROR];

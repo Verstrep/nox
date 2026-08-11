@@ -110,6 +110,14 @@ export type ArchitectContextInput = {
   tasks: readonly DevelopmentTaskDetail[];
   /** Nettoyeur applique a **toute** chaine transmise. */
   sanitize: (value: string) => string;
+  /**
+   * Revision d'une tache, calculee sur ce qui est reellement envoye.
+   *
+   * Injectee plutot qu'importee : ce module reste pur et sans dependance Node,
+   * donc testable sans repository. La fonction de production vit dans
+   * `fingerprint.ts`, qui a le droit d'utiliser `node:crypto`.
+   */
+  taskRevision: (task: ArchitectPromptTask) => string;
 };
 
 export type ArchitectContextBundle = {
@@ -270,7 +278,10 @@ export function buildArchitectContext(input: ArchitectContextInput): ArchitectCo
     sources.push({
       kind: "TASK",
       identifier: task.code,
-      revision: task.documentRevision,
+      // La revision du **contenu envoye**, pas celle du document Markdown : ce
+      // dernier n'est pas transmis, et une specification modifiee sans
+      // synchronisation resterait invisible.
+      revision: input.taskRevision(summary),
       includedChars: chars,
       truncated: false,
     });

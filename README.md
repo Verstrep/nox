@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-013 — Architecte NOX et génération assistée de tâches**.
+Dernière étape terminée : **TASK-014 — conversation Architecte persistante et évolution explicite du contexte**.
 
 | Élément | État |
 | --- | --- |
@@ -35,10 +35,11 @@ Dernière étape terminée : **TASK-013 — Architecte NOX et génération assis
 | Review Git intégrée et validations structurées | ✅ fonctionnelles |
 | Feedback de review et reprise ciblée d'une session Claude | ✅ fonctionnelles |
 | Architecte OpenAI : contexte contrôlé, proposition de tâche | ✅ fonctionnel |
+| Conversation Architecte multi-tours, contexte comparé entre deux tours | ✅ fonctionnelle |
 | Renommage, déplacement d'un document | ⬜ non commencés |
 | Archivage, suppression d'une tâche avec exécutions | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
-| Conversation Architecte multi-tours | ⬜ non commencée |
+| Review Architecte assistée d'un run Claude | ⬜ non commencée |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
@@ -1235,21 +1236,40 @@ ne dépend d'aucun réseau.
 
 ## Concevoir une tâche : `Architect`
 
-Depuis la page d'un projet, `Architect` ouvre la page des demandes.
+Depuis la page d'un projet, `Architect` ouvre la liste des conversations.
 
 ```text
-Demande produit
+Nouvelle conversation
       ↓
-Prepare context      ← aucun appel au fournisseur
+Votre message
       ↓
-Generate proposal    ← un clic, un appel
+Review context       ← aucun appel au fournisseur
       ↓
-Questions ou proposition
+Send to Architect    ← un clic, un appel
+      ↓
+Réponse, questions, ou proposition
+      ↓
+  ⟳  autant de tours que nécessaire
       ↓
 Relecture et édition humaines
       ↓
-Create task          → tâche en brouillon
+Create task          → tâche en brouillon, conversation close
 ```
+
+### Une conversation, pas un formulaire
+
+La conception d'une fonctionnalité se fait rarement d'un coup. L'architecte peut répondre par une
+recommandation et deux questions plutôt que par une tâche approximative ; vous répondez dans le
+composer, comme dans une discussion normale.
+
+Une proposition **ne clôt pas** la discussion. Si vous la trouvez trop grosse, dites-le : le tour
+suivant en produira une autre, et l'ancienne restera consultable. Seule la plus récente peut être
+créée — et plus du tout si vous avez écrit quelque chose depuis, parce qu'elle ne tient alors plus
+compte de ce que vous venez de dire.
+
+La conversation vit **chez vous**, dans SQLite. Elle repart en entier à chaque tour, et OpenAI n'en
+conserve rien. Elle reste donc lisible après un changement de modèle, après un redémarrage, et même
+si plus aucune réponse n'est récupérable chez le fournisseur.
 
 ### Deux modèles, deux rôles
 
@@ -1267,16 +1287,17 @@ Entre les deux, il y a vous.
 
 ### Ce qui est envoyé, et ce qui ne l'est jamais
 
-Avant tout appel, `Prepare context` affiche exactement ce qui quittera votre machine : documents
-inclus, révisions courtes, tailles, troncatures, documents absents, nombre de tâches récentes. Un
-dépliant montre le **texte exact**.
+Avant chaque appel, `Review context` affiche exactement ce qui quittera votre machine : votre
+message, les documents inclus avec leurs révisions courtes et leurs tailles, les documents absents,
+le nombre de tâches récentes, la taille du transcript et le modèle utilisé. Un dépliant montre le
+**texte exact**.
 
 | Envoyé | Jamais envoyé |
 | --- | --- |
 | `CLAUDE.md`, `AGENTS.md` | tout fichier `.env` |
 | six documents `docs/` nommés | code source |
 | spécification des 10 dernières tâches | diffs Git, patches de review |
-| votre demande et vos précisions | prompts, timelines et sorties de Claude Code |
+| vos messages et les réponses de l'architecte | prompts, timelines et sorties de Claude Code |
 | | clé d'API, jeton du runner, chemins absolus |
 
 La colonne de droite n'est pas une liste de filtres : ces éléments **ne sont jamais candidats**.
@@ -1289,10 +1310,39 @@ fin les décisions récentes.
 ### Un clic, un appel
 
 Aucun appel n'est déclenché par l'ouverture d'une page, la saisie d'un champ, un minuteur ou un
-échec précédent. En cas d'erreur — quota, délai dépassé, panne —, NOX affiche le message et vous
-propose de relancer : c'est vous qui recliquez. NOX ne réessaie jamais tout seul.
+échec précédent. **Presser Entrée n'envoie rien** : il faut relire le contexte, puis cliquer.
 
-Une demande accepte au plus **dix générations**, échecs compris, et une seule à la fois.
+En cas d'erreur — quota, délai dépassé, panne —, NOX affiche le message, garde votre brouillon et
+vous propose de relancer : c'est vous qui recliquez. NOX ne réessaie jamais tout seul, et un
+message n'entre dans la conversation que si le tour a réellement abouti — vous ne verrez jamais
+votre message affiché deux fois parce qu'il n'était pas parti.
+
+Une conversation accepte au plus **vingt tours**, échecs compris, et un seul à la fois.
+
+### Quand le projet change entre deux tours
+
+Le contexte est comparé à celui du tour précédent, et NOX vous dit ce qui a bougé :
+
+```text
+docs/ARCHITECTURE.md    19ab8c3f2d41 → 91fe7b0a5c62    Modified
+TASK-014                                               Added to recent context
+```
+
+Des faits sûrs, jamais un diff de contenu : NOX ne conserve pas le texte des documents envoyés, et
+ne prétend donc pas savoir ce qui a changé dedans.
+
+Si le projet change **après** votre aperçu et avant votre clic — un fichier enregistré entre-temps
+—, l'envoi est refusé et aucun jeton n'est consommé. Relisez le contexte mis à jour, puis renvoyez.
+Il n'existe pas de bouton pour passer outre : ce serait vider l'aperçu de son sens.
+
+### Rien n'est résumé en silence
+
+Le transcript entier part à chaque tour. NOX ne coupe pas les premiers messages, ne fait aucun
+résumé automatique, et n'utilise aucune fenêtre glissante — une décision prise au deuxième message
+peut être essentielle au quinzième.
+
+Quand la conversation atteint sa borne, NOX le dit et vous invite à en ouvrir une nouvelle. C'est
+moins pratique qu'un oubli silencieux, et beaucoup plus honnête.
 
 ### Questions et précisions
 
@@ -1310,7 +1360,15 @@ elles servent à votre relecture, pas à la spécification.
 document `tasks/TASK-xxx.md`, même statut **brouillon**. Aucune exécution Claude Code ne démarre,
 et la mettre en file reste une décision séparée.
 
-Une demande ne crée **qu'une** tâche. Un second clic est refusé, y compris simultané.
+Une conversation ne crée **qu'une** tâche. Une fois créée, la conversation passe en lecture seule :
+l'historique et la proposition restent consultables, et `Start new conversation` en ouvre une autre.
+
+### Conversations d'avant TASK-014
+
+Les demandes créées par la version précédente de l'Architecte restent consultables — leur demande,
+leurs précisions, leurs générations, leur consommation, leur proposition et leur tâche. Elles ne se
+poursuivent pas : elles n'ont jamais enregistré de messages, et NOX préfère le dire plutôt que
+d'inventer des tours qui n'ont pas eu lieu.
 
 ### Consommation
 
@@ -1457,8 +1515,8 @@ NOX/
 │   │   │       └── [id]/       Page de détail d'un projet
 │   │   │           ├── documents/  Liste, lecteur, éditeur + Server Action
 │   │   │           │   └── new/    Formulaire de création + Server Action
-│   │   │           ├── architect/   Demandes Architecte
-│   │   │           │   └── [sessionId]/  Contexte, génération, proposition
+│   │   │           ├── architect/   Conversations Architecte
+│   │   │           │   └── [sessionId]/  Fil, contexte, tours, proposition
 │   │   │           └── tasks/      Backlog filtrable
 │   │   │               ├── new/        Formulaire de tâche + Server Action
 │   │   │               └── [taskId]/   Détail, transitions, reprise
@@ -1486,11 +1544,14 @@ NOX/
 │   │   │   ├── architect/       Architecte OpenAI, serveur uniquement
 │   │   │   │   ├── config.ts        Variables d'environnement, sans défaut
 │   │   │   │   ├── context.ts       Liste fermée, bornes, manifest
+│   │   │   │   ├── context-diff.ts  Comparaison de deux manifests
+│   │   │   │   ├── fingerprint.ts   Empreintes de contexte et de tâche
 │   │   │   │   ├── sanitize.ts      Nettoyage de ce qui quitte la machine
-│   │   │   │   ├── prepare.ts       Contexte + prompt + empreinte d'entrée
+│   │   │   │   ├── transcript.ts    Conversation locale, transmise en entier
+│   │   │   │   ├── prepare.ts       Contexte + transcript + prompt + empreintes
 │   │   │   │   ├── provider.ts      Interface étroite + faux fournisseur
 │   │   │   │   ├── openai.ts        Responses API, Structured Output strict
-│   │   │   │   ├── service.ts       Orchestration d'une génération
+│   │   │   │   ├── service.ts       Préparation d'un tour, puis envoi contrôlé
 │   │   │   │   └── apply.ts         Création par le pipeline de TASK-007
 │   │   │   ├── labels.ts           Seule couche de traduction des valeurs internes
 │   │   │   ├── runs.ts             Chargement et réconciliation des runs

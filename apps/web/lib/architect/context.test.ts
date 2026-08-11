@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 
 import type { DevelopmentTaskDetail, ProjectDocumentSummary } from "@nox/shared";
 
+import { architectTaskRevision } from "./fingerprint.ts";
 import {
   ARCHITECT_CONTEXT_LIMITS,
   ARCHITECT_DOCUMENT_ALLOWLIST,
@@ -60,7 +61,13 @@ function build(
   tasks: readonly DevelopmentTaskDetail[] = [],
   inventory: readonly ProjectDocumentSummary[] = [],
 ) {
-  return buildArchitectContext({ documents, inventory, tasks, sanitize: IDENTITY });
+  return buildArchitectContext({
+    documents,
+    inventory,
+    tasks,
+    sanitize: IDENTITY,
+    taskRevision: architectTaskRevision,
+  });
 }
 
 describe("buildArchitectContext — documents", () => {
@@ -271,6 +278,7 @@ describe("buildArchitectContext — sanitation", () => {
       inventory: [],
       tasks: [task("TASK-001", { objective: "SECRET", title: "SECRET" })],
       sanitize: (value) => value.replaceAll("SECRET", "<masque>"),
+      taskRevision: architectTaskRevision,
     });
 
     assert.equal(bundle.instructionDocuments[0]?.content, "<masque>");

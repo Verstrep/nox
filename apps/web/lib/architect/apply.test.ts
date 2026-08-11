@@ -30,6 +30,7 @@ import {
   getArchitectSession,
   getTaskById,
   listTasksByProject,
+  saveArchitectTurnDraft,
   startArchitectGeneration,
   toDatabaseFilePath,
   toSqliteUrl,
@@ -113,18 +114,30 @@ async function readySession(
   });
   assert.ok(session !== null);
 
+  await saveArchitectTurnDraft(db, {
+    sessionId: session.id,
+    messageText: "Propose-moi une tache.",
+    contextFingerprint: "f".repeat(64),
+    manifest: MANIFEST,
+  });
   const started = await startArchitectGeneration(db, {
     sessionId: session.id,
     model: "modele",
-    promptVersion: "architect/1",
+    promptVersion: "architect/2",
     inputHash: "a".repeat(64),
+    contextFingerprint: "f".repeat(64),
     manifest: MANIFEST,
   });
   assert.ok(started.ok);
   await finishArchitectGeneration(db, {
     generationId: started.generation.id,
     status: ARCHITECT_GENERATION_STATUS.PROPOSAL_READY,
+    turnState: "PROPOSAL_READY",
     proposal,
+    messages: [
+      { role: "USER", content: "Propose-moi une tache." },
+      { role: "ARCHITECT", content: "Voici le plus petit increment." },
+    ],
   });
 
   return { projectId: project.id, sessionId: session.id, repositoryPath };

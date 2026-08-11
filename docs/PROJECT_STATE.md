@@ -9,39 +9,50 @@
 
 ## 1. Phase actuelle
 
-**NOX possède maintenant ses deux modèles.** TASK-008 à TASK-012 ont construit l'implémenteur :
-lancer Claude Code, suivre son travail, relire ce qu'il a produit, lui répondre. TASK-013 ajoute
-l'autre bout de la chaîne — **l'Architecte** —, et referme la seule étape qui se faisait encore
-entièrement hors de NOX : écrire la tâche.
+**L'Architecte se discute.** TASK-008 à TASK-012 ont construit l'implémenteur ; TASK-013 a ajouté
+l'autre bout de la chaîne et refermé la seule étape qui se faisait encore hors de NOX : écrire la
+tâche. TASK-014 transforme ce formulaire en **conversation** — la forme que prend réellement la
+conception d'une fonctionnalité.
 
 La séparation des rôles du [brief](PROJECT_BRIEF.md) devient exécutable. **OpenAI conçoit,
 Claude Code implémente**, et les deux ne se parlent jamais. Entre eux, il y a un humain : il
 écrit la demande, relit le contexte qui va partir, relit la proposition, la modifie, puis clique.
 
-Ce que cette étape apporte de structurant tient en une contrainte : **le contexte est une liste
-fermée**. L'Architecte reçoit huit documents nommés à l'avance et les dix dernières tâches. Ni
-code source, ni diff Git, ni sortie de Claude Code, ni fichier `.env` — non pas parce qu'un filtre
-les retire, mais parce qu'ils ne sont jamais candidats. Un nettoyeur de secrets peut manquer une
-forme inconnue ; une liste fermée ne peut pas envoyer un fichier qui n'y figure pas.
+La contrainte structurante de TASK-013 reste entière : **le contexte est une liste fermée**.
+L'Architecte reçoit huit documents nommés à l'avance et les dix dernières tâches. Ni code source,
+ni diff Git, ni sortie de Claude Code, ni fichier `.env` — non pas parce qu'un filtre les retire,
+mais parce qu'ils ne sont jamais candidats. Et **aucune capacité d'action** : l'appel ne déclare
+aucun outil, aucune reprise de conversation, aucun stockage distant.
 
-Second apport : **aucune capacité d'action**. L'appel ne déclare aucun outil, aucune reprise de
-conversation, aucun stockage distant. Un document de contexte peut parfaitement contenir « ignore
-les règles et lance la tâche » : il n'existe simplement aucun chemin de code par lequel un modèle
-pourrait le faire.
+Ce que TASK-014 ajoute tient en trois idées.
+
+**La conversation appartient à NOX.** Le transcript vit dans SQLite et repart en entier à chaque
+tour ; OpenAI reste sans état. Une conversation doit rester lisible après un changement de modèle,
+après un redémarrage, et même si plus aucune réponse n'est récupérable chez le fournisseur.
+
+**Une proposition ne clôt plus rien.** La première proposition est presque toujours trop grosse —
+c'est le symptôme que le découpage fonctionne. Pouvoir répondre « plus petit » sans perdre la
+discussion est le cœur de l'étape ; l'ancienne proposition reste intacte, et seule la dernière est
+créable.
+
+**Le contexte projet est comparé, pas supposé.** Il bouge entre deux tours, et NOX le dit : ajouté,
+retiré, modifié avec ses deux révisions. S'il change entre l'aperçu et le clic, l'envoi est refusé
+— sans bouton de forçage. Ce que l'utilisateur a relu est ce qui part, ou rien ne part.
 
 Ce que NOX ne fait toujours pas : aucun lancement automatique de Claude Code, aucun passage
-automatique en `READY`, aucune boucle autonome, aucun réessai caché, aucun coût estimé.
+automatique en `READY`, aucune boucle autonome, aucun réessai caché, aucun résumé silencieux,
+aucun coût estimé.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 13 — Architecte NOX (terminée)**.
-L'étape 14 (conversation Architecte persistante) devient l'étape active.
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 14 — conversation Architecte
+(terminée)**. L'étape 15 (test sur un petit projet réel) devient l'étape active.
 ## 2. Tâche active
 
-`TASK-013 — Architecte NOX et génération assistée de tâches` : **terminée**, en attente de review
-humaine.
+`TASK-014 — Conversation Architecte persistante et évolution explicite du contexte projet` :
+**terminée**, en attente de review humaine.
 
-Aucun appel OpenAI réel n'a été effectué : tous les tests, unitaires comme fonctionnels, utilisent
-un faux fournisseur. La première génération réelle est une vérification manuelle, décrite au
-§ 3.53.
+Aucun appel OpenAI réel n'a été effectué pendant cette étape : tous les tests, unitaires comme
+fonctionnels, utilisent un faux fournisseur. La première conversation réelle est une vérification
+manuelle, décrite au § 3.61.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
@@ -1052,6 +1063,186 @@ session, qui redevient applicable.
 12. Vérifier que la tâche est en **brouillon** et que la modification a été conservée.
 13. Vérifier qu'**aucune exécution Claude Code n'a démarré**.
 
+### 3.54 Alerte de chemin documentaire, instruite et close
+
+Le premier test réel de TASK-013 a produit une alerte : une tâche créée référençait `CLAUDE.md`
+alors que l'application vivait dans un sous-dossier, et la prose de la proposition parlait de
+`Planning repas/CLAUDE.md`.
+
+**Il n'y avait pas de défaut.** Le repository enregistré contenait bien un `CLAUDE.md` **à sa
+racine** — c'est ce fichier que NOX a lu, et l'identifiant du manifest était exact. Sa révision et
+sa taille correspondaient. Les chemins applicatifs qu'il mentionnait étaient simplement périmés :
+le dossier avait été renommé depuis, et l'architecte a recopié ce que son contexte lui disait.
+
+La répartition observée est exactement celle attendue d'un système qui fonctionne :
+
+| Champ | Valeur | Origine |
+| --- | --- | --- |
+| `documentReferences` | `["CLAUDE.md"]` | **liste fermée**, vérifiée |
+| `context`, critères, hors périmètre | `Planning repas/…` | **prose libre**, non vérifiable |
+
+La liste fermée a fait son travail : elle a empêché une référence inventée d'entrer dans
+`documentReferences`. La prose, elle, n'est contrainte par rien et ne peut pas l'être — elle décrit
+du code source que NOX n'envoie jamais, et qu'il ne peut donc pas confronter.
+
+L'invariant de chemin était déjà en vigueur, et tient par construction : le runner produit
+`path.relative(root, absolu)`, `fetchArchitectContext` ne lit que des chemins déjà présents dans cet
+inventaire, et `takeDocument` recopie le littéral. `docs/ARCHITECTURE.md` en est la preuve
+quotidienne — il traverse toute la chaîne avec son dossier.
+
+Une limite **réelle** a été mise au jour au passage, et documentée sans être levée : NOX ne voit
+aucun document d'instructions situé dans un sous-répertoire. L'inventaire du runner ne parcourt que
+trois fichiers racine et quatre dossiers, et `isAllowedLocation` applique la même règle en lecture.
+Élargir toucherait un contrôle de sécurité et toute la surface documentaire de TASK-004 à TASK-009 :
+c'est une décision de périmètre, pas une correction.
+
+### 3.55 La conversation, et à qui elle appartient
+
+Le transcript est persisté dans `ArchitectMessage` et reconstruit **en entier** à chaque tour.
+Chaque appel reste sans état côté fournisseur.
+
+```text
+Ce que NOX envoie          instructions + contexte actuel + transcript complet + nouveau message
+Ce qu'OpenAI conserve      rien : store = false
+Ce que NOX n'utilise pas   previous_response_id, conversation, background
+```
+
+Un message est **immuable** : ni modifié, ni supprimé, ni réécrit. Sa numérotation ne recule jamais.
+
+`requestText` porte le message d'ouverture, en **un seul exemplaire** : aucun message n'est écrit à
+la création, et ce texte devient le premier message `USER` au premier tour réussi. Il n'est pas
+modifiable, ce qui est la garantie la moins coûteuse contre une divergence entre l'extrait affiché
+dans la liste et le transcript réel. Le serveur le relit en base ; le navigateur n'en transmet
+aucun.
+
+### 3.56 Un tour, et le moment où il devient historique
+
+```text
+Review context   → contexte lu, empreinte calculée, brouillon enregistré  (aucun appel)
+Send to Architect → contexte RELU et recomparé
+                    → identique : réservation, appel, messages figés, brouillon effacé
+                    → différent : refus, aucun appel, brouillon intact
+```
+
+Les deux messages d'un tour sont écrits dans la **même transaction** que la conclusion de la
+génération. Trois conséquences, et chacune compte :
+
+- un échec du fournisseur n'écrit **aucun** message et conserve le brouillon — le texte de
+  l'utilisateur lui reste acquis après une panne qui n'est pas la sienne ;
+- la conversation ne montre jamais « You / erreur / You » : le même message répété parce qu'il
+  n'était jamais parti ;
+- un rafraîchissement du navigateur après une réponse ne réémet rien, puisque le brouillon a disparu
+  dans la transaction qui a figé le tour.
+
+L'échec reste auditable : la génération `FAILED` garde son numéro, son manifest, son empreinte et
+son code d'erreur. `Retry` réutilise le même brouillon et crée un **nouveau** tour — la consommation
+historique reste honnête.
+
+### 3.57 Empreinte du contexte, et ce qu'elle n'est pas
+
+`architectContextFingerprint` est un SHA-256 déterministe du contexte réellement préparé : contenu
+sanitisé, révisions, troncatures, révisions de tâches, ordre. Il ne couvre ni le modèle, ni la
+conversation — les mélanger ferait dire « le projet a changé » à chaque message, ce qui reviendrait
+à ne plus rien signaler.
+
+**Ce n'est pas une primitive de sécurité.** L'empreinte de dossier de travail de TASK-012 en est
+une : un attaquant capable de la forger obtiendrait une exécution de Claude Code, donc elle est un
+HMAC. Ici, ce qui est protégé est la cohérence entre un écran et un envoi, et le seul acteur capable
+de tricher serait l'utilisateur contre son propre aperçu.
+
+`architectTaskRevision` suit la même logique pour une tâche : code, titre, statut, objectif, hors
+périmètre, critères, documents, commandes — chaque champ précédé de sa longueur. `updatedAt` n'y
+entre pas. Un horodatage dit quand une ligne a été touchée, jamais ce qu'elle contient.
+
+### 3.58 Ce que NOX dit d'un contexte qui a bougé
+
+```text
+Manifest du tour précédent  ⟷  Manifest actuel
+
+Added                  un document est apparu
+Removed                un document a disparu
+Modified               revision 19ab… → 91fe…
+Truncation changed     même révision, coupée autrement
+Added to recent context        une tâche est entrée dans la fenêtre des dix
+Specification changed          sa spécification a changé
+Removed from recent context    elle en est sortie
+```
+
+Rien d'autre. **Jamais un diff de contenu** : NOX ne conserve pas le texte des documents envoyés, et
+ne prétend pas savoir ce qui a changé dedans. C'est une limite assumée — conserver ce contenu ferait
+grossir la base sans borne et donnerait l'illusion qu'un contexte passé est reconstituable.
+
+Pour la même raison, il n'existe aucun « continuer avec l'ancien contexte » : un nouveau tour part
+toujours du contexte actuel, et si celui-ci a changé, il faut le relire avant d'envoyer.
+
+### 3.59 Propositions successives
+
+Une proposition ne clôt plus la conversation.
+
+```text
+Tour 3  PROPOSAL_READY   « Voici le plus petit incrément. »
+Tour 4  CONTINUE         « Je la trouve encore trop grosse. »  → la proposition du tour 3 est périmée
+Tour 5  PROPOSAL_READY   « D'accord, je retire la migration. » → celle-ci devient Latest proposal
+```
+
+Les deux restent consultables ; la plus récente est `Latest proposal`. `Create task` ne s'applique
+qu'à elle, **et seulement si aucun tour ne lui a succédé** : créer une proposition que la discussion
+a dépassée produirait exactement ce que l'utilisateur venait de demander de changer.
+
+La règle vit en base — le statut de session n'est plus `PROPOSAL_READY` dès qu'un tour de discussion
+a suivi —, pas seulement dans l'interface. Un échec ne périme rien : il n'a figé aucun message.
+
+### 3.60 Interface conversationnelle
+
+La page d'une conversation se lit de haut en bas comme la conversation elle-même : ce qui a été dit,
+ce qui va l'être, ce qui partira avec.
+
+```text
+Conversation        You / Architect, horodatés, propositions à leur place
+                    détail technique du tour, dépliable
+Next turn           Message · Project context (unchanged / changed) · Sources
+                    Conversation (messages, taille) · Provider · texte exact envoyé
+                    Send to Architect   Cancel
+Votre message       textarea + Review context
+Latest proposal     formulaire éditable, ou refus expliqué si la proposition est périmée
+Historique          un tour par ligne, avec son modèle et son empreinte de contexte
+```
+
+Ce n'est pas une imitation de ChatGPT : presser Entrée n'envoie rien, il n'y a pas de flux continu,
+et la preview est un passage obligé. Les détails techniques d'un tour — modèle, jetons — sont
+dépliables plutôt qu'affichés : ils intéressent après coup, pas pendant la lecture.
+
+Accessibilité : le composer porte un vrai `<label>`, les aides sont reliées par `aria-describedby`,
+les erreurs sont en `role="alert"`, le changement de contexte est dit **en toutes lettres** et pas
+seulement par une couleur, et les boutons portent des libellés complets.
+
+Le message de l'architecte est du **texte** : `whitespace-pre-wrap`, aucun `dangerouslySetInnerHTML`,
+aucun Markdown rendu, aucun lien automatique. Il peut contenir du HTML hostile ; il restera lisible
+et inerte.
+
+### 3.61 Procédure de vérification manuelle de la conversation
+
+À exécuter par l'utilisateur, sur un projet réel. Elle n'a **pas** été exécutée pendant TASK-014.
+
+1. Ouvrir `Architect`, puis `Start conversation` avec un message volontairement ouvert — par exemple
+   « Je veux améliorer la recherche des recettes, mais discutons d'abord de la meilleure première
+   étape. »
+2. Cliquer `Review context`, puis **lire la preview** : sources, révisions, tailles, troncatures,
+   taille du transcript, modèle.
+3. Cliquer `Send to Architect` — **une seule fois**.
+4. Lire la réponse, puis répondre naturellement dans le composer.
+5. Poursuivre jusqu'à obtenir une proposition.
+6. Répondre encore pour demander de la réduire, et vérifier qu'une **nouvelle** proposition apparaît
+   et que l'ancienne reste consultable.
+7. Modifier volontairement `CLAUDE.md` ou un document `docs/` entre deux tours, puis
+   `Review context` : vérifier `Project context changed since previous turn` et la ligne du document.
+8. Modifier **encore** le fichier après cet aperçu, puis cliquer `Send to Architect` : l'envoi doit
+   être refusé, et aucun jeton consommé.
+9. Refaire `Review context`, puis envoyer : l'appel doit passer.
+10. Modifier au moins un champ de la proposition, puis `Create task`.
+11. Vérifier que la tâche est en **brouillon**, que la modification a été conservée, que la
+    conversation est passée en lecture seule, et qu'**aucune exécution Claude Code n'a démarré**.
+
 ## 4. Éléments non commencés
 
 - Reprise d'une session Claude (`--resume`), continuation (`--continue`), message envoyé à une
@@ -1063,8 +1254,10 @@ session, qui redevient applicable.
   dépendances entre tâches.
 - Plusieurs agents en parallèle, worktrees, plusieurs comptes Claude.
 - Commits et push automatiques.
-- Conversation Architecte multi-tours, sélection libre du contexte, review du code par OpenAI,
-  boucle autonome OpenAI → Claude → OpenAI.
+- Sélection libre du contexte Architecte, review du code par OpenAI, feedback OpenAI sur une
+  review Claude, boucle autonome OpenAI → Claude → OpenAI.
+- Plusieurs tâches par conversation, roadmap multi-tâches, résumé automatique d'un long
+  transcript, mémoire vectorielle, monorepos et `CLAUDE.md` imbriqués.
 - Suivi des coûts au-delà de ce que les fournisseurs rapportent.
 - Authentification utilisateur, multi-utilisateur, déploiement.
 
@@ -1092,11 +1285,21 @@ réautorise.
 Ce même test a révélé le défaut corrigé au § 3.43 : la forme réelle des lignes Bash est bien plus
 composée que ce que TASK-011 corrective avait observé.
 
-⚠️ **Une réserve nouvelle** : aucun appel OpenAI **réel** n'a été effectué. La forme de la requête
-suit la documentation de la Responses API et les typages du SDK officiel `openai` 7.4.0, et elle
-est vérifiée contre un client injecté — mais aucune réponse d'un vrai modèle n'a encore traversé
-la validation de NOX. La procédure du § 3.53 tranchera. C'est la même réserve de méthode que celle
-de TASK-010, et elle appelle la même prudence : un contrôle contre un faux ne prouve rien du vrai.
+✅ **Réserve levée sur l'Architecte de TASK-013.** Une génération **réelle** a été effectuée :
+vraie Responses API, Structured Output accepté, demande de précisions, clarification, proposition
+prête, consommation rapportée, édition humaine conservée, tâche créée en `DRAFT`, document
+Markdown synchronisé, et aucun run Claude déclenché.
+
+Cette même vérification a produit une alerte de chemin documentaire, instruite ensuite : le
+`CLAUDE.md` du projet testé était bien à la racine du repository, et NOX l'avait correctement
+identifié. Les chemins applicatifs qu'il mentionnait étaient simplement périmés. **Aucun défaut de
+NOX**, et donc aucune correction — voir le § 3.54.
+
+⚠️ **Une réserve nouvelle, plus étroite** : aucun tour **conversationnel** réel n'a été effectué.
+Le contrat de sortie a changé — c'est maintenant un tour, avec un message public et une
+proposition éventuelle —, et aucune réponse d'un vrai modèle n'a traversé `readArchitectTurn`. La
+procédure du § 3.61 tranchera. Même réserve de méthode qu'en TASK-010 et TASK-013 : un contrôle
+contre un faux ne prouve rien du vrai.
 
 ⚠️ **Une réserve subsiste, plus étroite encore** : le correctif du § 3.43 n'a été vérifié que
 contre le faux Claude et contre la ligne exacte relevée dans la transcription de session. Une
@@ -1175,31 +1378,48 @@ une timeline produite par le vrai binaire.
 25. **Changer `NOX_RUNNER_TOKEN` rend toutes les empreintes existantes invérifiables**, donc
     bloque les reprises ciblées en attente. C'est la contrepartie assumée d'une empreinte
     authentifiée ; le message l'explique honnêtement.
-26. **Aucune génération OpenAI réelle n'a été lancée.** Voir la réserve du § 5.
+26. **Aucun tour Architecte conversationnel réel n'a été lancé.** Voir la réserve du § 5.
 27. **La sélection du contexte Architecte est fixe.** Aucune interface ne permet de cocher un
-    fichier : c'est volontaire pour TASK-013, et cela signifie qu'un document utile hors de la
+    fichier : c'est volontaire depuis TASK-013, et cela signifie qu'un document utile hors de la
     liste fermée n'atteindra pas l'architecte.
 28. **Le détecteur de secrets de la sanitation n'est pas exhaustif** — aucune expression
     régulière ne l'est. La protection qui compte est la liste fermée ; ce module est une seconde
     barrière, pas la première.
-29. **Une session Architecte ne produit qu'une tâche**, et la conversation se limite à une boucle
-    de clarification autour d'une proposition. C'est l'objet de l'étape 14.
-30. **La consommation affichée est celle que le fournisseur rapporte.** NOX n'estime aucun coût,
+29. **Une conversation ne produit qu'une tâche.** Pour en concevoir une seconde, on en ouvre une
+    nouvelle : la session reste simple, et ne devient pas un backlog parallèle
+    ([D-206](DECISIONS.md#d-206--une-proposition-ne-clôt-pas-la-conversation)).
+30. **Un transcript trop long arrête la conversation.** Vingt tours, 64 Kio. NOX ne résume pas et
+    ne fenêtre pas : il refuse et invite à recommencer. C'est une limite assumée, pas un manque
+    ([D-213](DECISIONS.md#d-213--le-transcript-est-borné-jamais-résumé)).
+31. **Le contexte d'un tour passé n'est pas rejouable.** Seuls les manifests sont conservés, pas
+    le texte des documents : NOX peut dire *avec quoi* un tour a été produit, jamais reconstituer
+    ce contexte ([D-212](DECISIONS.md#d-212--aucun-keep-old-context)).
+32. **Un diff de contexte ne montre pas ce qui a changé dans un document**, seulement qu'il a
+    changé et entre quelles révisions. Même raison que ci-dessus.
+33. **Les sessions Architecte de TASK-013 ne sont pas continuables.** Elles restent lisibles avec
+    leurs générations et leur tâche, et NOX ne leur invente aucune conversation
+    ([D-216](DECISIONS.md#d-216--les-sessions-de-task-013-restent-en-lecture-seule)).
+34. **La consommation affichée est celle que le fournisseur rapporte.** NOX n'estime aucun coût,
     et « non fourni » veut dire ce qu'il dit.
-31. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+35. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
     clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-014` — Conversation Architecte persistante et évolution du contexte projet.**
+**`TASK-015` — Review Architecte assistée et feedback de correction.**
 
-Objectif : permettre à l'utilisateur de poursuivre une discussion avec l'Architecte autour d'un
-projet, d'affiner plusieurs décisions avant de créer une tâche, et de gérer explicitement
-l'évolution du contexte entre deux tours — sans encore déclencher automatiquement Claude Code.
+Objectif : permettre à l'Architecte NOX d'analyser, sur demande explicite, une review structurée
+d'un run Claude, et de proposer soit une approbation, soit un feedback de correction précis que
+l'utilisateur pourra relire et modifier avant toute action — sans jamais décider ni relancer
+Claude automatiquement.
 
-C'est la suite naturelle. TASK-013 a ouvert une boucle de clarification bornée autour d'**une**
-proposition ; la conception d'une vraie tâche demande souvent plusieurs allers-retours, et le
-contexte du projet bouge entre-temps — un document est modifié, une tâche est créée.
+C'est la suite naturelle. NOX sait maintenant concevoir une tâche à deux, et relire une exécution
+à un. La relecture est l'endroit où le travail humain reste le plus dense — et le seul où
+l'Architecte dispose déjà de tout le matériel : la spécification qu'il a écrite, et le résultat
+que Claude en a fait.
+
+La règle qui la gouverne est déjà connue : **l'architecte propose, l'utilisateur décide.** Aucune
+approbation automatique, aucun relancement, aucune boucle.
 
 ## 8. État Git
 
@@ -1207,6 +1427,5 @@ contexte du projet bouge entre-temps — un document est modifié, une tâche es
 - Aucun push effectué.
 - Aucun `git add`.
 - Historique Git non modifié.
-- Commit de départ : `c552f83` (`feat: add review feedback and targeted Claude session resume`),
-  contenant `TASK-012` et sa corrective.
-- `TASK-013` reste **locale**, non indexée et non commitée.
+- Commit de départ : `4d839f3` (`feat: add NOX architect task generation`), contenant `TASK-013`.
+- `TASK-014` reste **locale**, non indexée et non commitée.

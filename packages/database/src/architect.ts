@@ -16,17 +16,23 @@
  */
 
 import {
+  ARCHITECT_CONVERSATION_VERSION,
   ARCHITECT_GENERATION_STATUS,
   ARCHITECT_LIMITS,
+  ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SESSION_STATUS,
   isArchitectErrorCode,
   isArchitectGenerationStatus,
+  isArchitectMessageRole,
   isArchitectSessionStatus,
+  isArchitectTurnState,
   type ArchitectContextManifest,
   type ArchitectErrorCode,
   type ArchitectGenerationStatus,
+  type ArchitectMessageRole,
   type ArchitectSessionStatus,
   type ArchitectTaskProposal,
+  type ArchitectTurnState,
   type ArchitectUsage,
 } from "@nox/shared";
 
@@ -40,6 +46,25 @@ export class InvalidArchitectRecordError extends Error {
   }
 }
 
+/** Un message de la conversation, tel que l'interface le lit. */
+export type ArchitectMessageView = {
+  id: string;
+  sequence: number;
+  role: ArchitectMessageRole;
+  content: string;
+  /** Generation du tour, lorsqu'elle est connue. */
+  generationId: string | null;
+  createdAt: string;
+};
+
+/** Un tour prepare mais pas encore envoye. */
+export type ArchitectPendingTurn = {
+  messageText: string;
+  contextFingerprint: string;
+  manifest: ArchitectContextManifest | null;
+  preparedAt: string;
+};
+
 /** Une generation, telle que l'interface la lit. */
 export type ArchitectGenerationView = {
   id: string;
@@ -49,6 +74,9 @@ export type ArchitectGenerationView = {
   promptVersion: string;
   inputHash: string;
   status: ArchitectGenerationStatus;
+  /** Issue du tour, `null` pour les generations d'avant TASK-014. */
+  turnState: ArchitectTurnState | null;
+  contextFingerprint: string | null;
   /** Manifest deserialise ; `null` si la ligne est illisible. */
   manifest: ArchitectContextManifest | null;
   /** Proposition deserialisee, sans revalidation metier. */
@@ -68,17 +96,25 @@ export type ArchitectSessionView = {
   requestText: string;
   clarificationText: string | null;
   status: ArchitectSessionStatus;
+  /** `1` avant TASK-014 : consultable, jamais poursuivie. */
+  conversationVersion: number;
+  /** Vrai lorsque la session peut encore recevoir un tour. */
+  conversational: boolean;
   appliedTaskId: string | null;
   /** Nombre de generations deja consommees, echecs compris. */
   generationCount: number;
   /** Generations restantes avant la borne de la session. */
   generationsLeft: number;
+  /** Tour prepare et pas encore envoye, le cas echeant. */
+  pendingTurn: ArchitectPendingTurn | null;
   createdAt: string;
   updatedAt: string;
   generations: ArchitectGenerationView[];
+  /** Messages du plus ancien au plus recent : c'est l'ordre de lecture. */
+  messages: ArchitectMessageView[];
 };
 
-export type ArchitectSessionSummary = Omit<ArchitectSessionView, "generations">;
+export type ArchitectSessionSummary = Omit<ArchitectSessionView, "generations" | "messages">;
 
 /** Code affiche d'une session : `ARCH-001`, derive de son numero. */
 export function formatArchitectSessionCode(sequence: number): string {
@@ -93,6 +129,8 @@ type GenerationRow = {
   promptVersion: string;
   inputHash: string;
   status: string;
+  turnState: string | null;
+  contextFingerprint: string | null;
   contextManifestJson: string;
   proposalJson: string | null;
   questionsJson: string | null;
@@ -112,10 +150,24 @@ type SessionRow = {
   requestText: string;
   clarificationText: string | null;
   status: string;
+  conversationVersion: number;
+  pendingMessageText: string | null;
+  pendingContextFingerprint: string | null;
+  pendingContextManifestJson: string | null;
+  pendingPreparedAt: Date | null;
   nextGenerationSequence: number;
   appliedTaskId: string | null;
   createdAt: Date;
   updatedAt: Date;
+};
+
+type MessageRow = {
+  id: string;
+  sequence: number;
+  role: string;
+  content: string;
+  generationId: string | null;
+  createdAt: Date;
 };
 
 /**
@@ -143,6 +195,10 @@ function toGeneration(row: GenerationRow): ArchitectGenerationView {
   if (errorCode !== null && !isArchitectErrorCode(errorCode)) {
     throw new InvalidArchitectRecordError(row.id, "code d'erreur", errorCode);
   }
+  const turnState = row.turnState;
+  if (turnState !== null && !isArchitectTurnState(turnState)) {
+    throw new InvalidArchitectRecordError(row.id, "issue de tour", turnState);
+  }
 
   return {
     id: row.id,
@@ -152,6 +208,8 @@ function toGeneration(row: GenerationRow): ArchitectGenerationView {
     promptVersion: row.promptVersion,
     inputHash: row.inputHash,
     status: row.status,
+    turnState,
+    contextFingerprint: row.contextFingerprint,
     manifest: readJson<ArchitectContextManifest>(row.contextManifestJson),
     proposal: readJson<ArchitectTaskProposal>(row.proposalJson),
     questions: readJson<string[]>(row.questionsJson) ?? [],
@@ -164,6 +222,43 @@ function toGeneration(row: GenerationRow): ArchitectGenerationView {
     },
     errorCode,
     createdAt: row.createdAt.toISOString(),
+  };
+}
+
+function toMessage(row: MessageRow): ArchitectMessageView {
+  if (!isArchitectMessageRole(row.role)) {
+    throw new InvalidArchitectRecordError(row.id, "role de message", row.role);
+  }
+  return {
+    id: row.id,
+    sequence: row.sequence,
+    role: row.role,
+    content: row.content,
+    generationId: row.generationId,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/**
+ * Relit le brouillon prepare.
+ *
+ * Les quatre champs vont ensemble : un brouillon dont l'empreinte manquerait ne
+ * pourrait pas etre compare au contexte actuel, et l'envoyer reviendrait a
+ * envoyer un contexte que personne n'a relu. Il est alors traite comme absent.
+ */
+function toPendingTurn(row: SessionRow): ArchitectPendingTurn | null {
+  if (
+    row.pendingMessageText === null ||
+    row.pendingContextFingerprint === null ||
+    row.pendingPreparedAt === null
+  ) {
+    return null;
+  }
+  return {
+    messageText: row.pendingMessageText,
+    contextFingerprint: row.pendingContextFingerprint,
+    manifest: readJson<ArchitectContextManifest>(row.pendingContextManifestJson),
+    preparedAt: row.pendingPreparedAt.toISOString(),
   };
 }
 
@@ -180,9 +275,12 @@ function toSummary(row: SessionRow): ArchitectSessionSummary {
     requestText: row.requestText,
     clarificationText: row.clarificationText,
     status: row.status,
+    conversationVersion: row.conversationVersion,
+    conversational: row.conversationVersion >= ARCHITECT_CONVERSATION_VERSION.CONVERSATION,
     appliedTaskId: row.appliedTaskId,
     generationCount: consumed,
     generationsLeft: Math.max(0, ARCHITECT_LIMITS.generations - consumed),
+    pendingTurn: toPendingTurn(row),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -190,12 +288,32 @@ function toSummary(row: SessionRow): ArchitectSessionSummary {
 
 const GENERATION_ORDER = { orderBy: { sequence: "desc" } } as const;
 
+/** Les messages se lisent toujours dans l'ordre ou ils ont ete ecrits. */
+const MESSAGE_ORDER = { orderBy: { sequence: "asc" } } as const;
+
+/** Efface le brouillon prepare, en une seule definition. */
+const CLEAR_PENDING_TURN = {
+  pendingMessageText: null,
+  pendingContextFingerprint: null,
+  pendingContextManifestJson: null,
+  pendingPreparedAt: null,
+} as const;
+
 /**
- * Cree une session pour une demande produit.
+ * Cree une conversation Architecte.
  *
  * Les sessions ont leur propre suite, independante de celle des taches : une
  * session peut n'en produire aucune, et deux sessions peuvent se suivre sans
  * qu'aucune tache soit creee entre elles.
+ *
+ * `requestText` porte le **message d'ouverture**, et il n'existe qu'un seul
+ * exemplaire de ce texte : aucun message n'est ecrit ici. Il le deviendra au
+ * premier tour reussi, comme tous les autres — un message n'entre dans la
+ * conversation que lorsqu'il a reellement ete envoye.
+ *
+ * Ce texte n'est jamais modifiable : c'est ce qui garantit qu'il ne peut pas
+ * diverger du premier message du transcript. Pour repartir d'autre chose, on
+ * ouvre une nouvelle conversation — cela ne consomme rien.
  *
  * Retourne `null` si le projet n'existe pas : il a pu disparaitre entre la
  * verification de l'appelant et cet appel.
@@ -225,6 +343,7 @@ export async function createArchitectSession(
         sequence: previous + 1,
         requestText: input.requestText,
         clarificationText: null,
+        conversationVersion: ARCHITECT_CONVERSATION_VERSION.CONVERSATION,
         status: ARCHITECT_SESSION_STATUS.OPEN,
       },
     });
@@ -233,19 +352,23 @@ export async function createArchitectSession(
   return row === null ? null : toSummary(row);
 }
 
-/** Retourne une session complete, generations comprises. */
+/** Retourne une session complete, generations et messages compris. */
 export async function getArchitectSession(
   db: DatabaseClient,
   sessionId: string,
 ): Promise<ArchitectSessionView | null> {
   const row = await db.architectSession.findUnique({
     where: { id: sessionId },
-    include: { generations: GENERATION_ORDER },
+    include: { generations: GENERATION_ORDER, messages: MESSAGE_ORDER },
   });
   if (row === null) {
     return null;
   }
-  return { ...toSummary(row), generations: row.generations.map(toGeneration) };
+  return {
+    ...toSummary(row),
+    generations: row.generations.map(toGeneration),
+    messages: row.messages.map(toMessage),
+  };
 }
 
 /** Sessions d'un projet, de la plus recente a la plus ancienne. */
@@ -260,22 +383,60 @@ export async function listArchitectSessions(
   return rows.map(toSummary);
 }
 
+export type SaveTurnDraftInput = {
+  sessionId: string;
+  messageText: string;
+  contextFingerprint: string;
+  manifest: ArchitectContextManifest;
+};
+
 /**
- * Enregistre les precisions apportees par l'utilisateur.
+ * Enregistre le tour prepare par `Review context`.
  *
- * Elles remplacent les precedentes : ce champ decrit l'etat courant de la
- * clarification, pas son historique. L'historique, lui, vit dans les generations
- * — chacune a ete produite avec les precisions du moment.
+ * Un seul brouillon par session : le nouveau remplace l'ancien. C'est
+ * exactement ce qu'on veut — l'utilisateur qui recommence son apercu apres avoir
+ * corrige son texte ne doit pas se retrouver avec deux tours en attente.
+ *
+ * Le brouillon vit en base plutot que dans le navigateur pour que l'apercu et
+ * l'envoi parlent du **meme** message : un champ recopie dans un formulaire
+ * cache pourrait etre modifie entre les deux.
  */
-export async function saveArchitectClarification(
+export async function saveArchitectTurnDraft(
   db: DatabaseClient,
-  sessionId: string,
-  clarificationText: string,
+  input: SaveTurnDraftInput,
 ): Promise<boolean> {
   const updated = await db.architectSession.updateMany({
-    // Une session appliquee ne se modifie plus : sa tache existe.
-    where: { id: sessionId, status: { not: ARCHITECT_SESSION_STATUS.APPLIED } },
-    data: { clarificationText },
+    // Ni une session appliquee, ni une session en cours de generation : la
+    // premiere a fini, la seconde a deja un tour en vol.
+    where: {
+      id: input.sessionId,
+      status: { notIn: [ARCHITECT_SESSION_STATUS.APPLIED, ARCHITECT_SESSION_STATUS.GENERATING] },
+      conversationVersion: { gte: ARCHITECT_CONVERSATION_VERSION.CONVERSATION },
+    },
+    data: {
+      pendingMessageText: input.messageText,
+      pendingContextFingerprint: input.contextFingerprint,
+      pendingContextManifestJson: JSON.stringify(input.manifest),
+      pendingPreparedAt: new Date(),
+    },
+  });
+  return updated.count === 1;
+}
+
+/**
+ * Abandonne le tour prepare.
+ *
+ * Un brouillon abandonne ne laisse **aucune** trace dans la conversation : il
+ * n'a jamais ete envoye, et l'inscrire comme message raconterait un echange qui
+ * n'a pas eu lieu.
+ */
+export async function clearArchitectTurnDraft(
+  db: DatabaseClient,
+  sessionId: string,
+): Promise<boolean> {
+  const updated = await db.architectSession.updateMany({
+    where: { id: sessionId, status: { not: ARCHITECT_SESSION_STATUS.GENERATING } },
+    data: CLEAR_PENDING_TURN,
   });
   return updated.count === 1;
 }
@@ -285,12 +446,23 @@ export type StartGenerationInput = {
   model: string;
   promptVersion: string;
   inputHash: string;
+  contextFingerprint: string;
   manifest: ArchitectContextManifest;
+  /**
+   * Empreinte que le brouillon doit encore porter.
+   *
+   * Fournie, elle est verifiee **dans la transaction** : si le contexte a change
+   * depuis l'apercu, aucune generation n'est reservee et aucun appel n'est fait.
+   */
+  expectedFingerprint?: string;
 };
 
 export type StartGenerationResult =
-  | { ok: true; generation: ArchitectGenerationView }
-  | { ok: false; reason: "not_found" | "already_applied" | "active" | "limit" };
+  | { ok: true; generation: ArchitectGenerationView; pendingMessage: string }
+  | {
+      ok: false;
+      reason: "not_found" | "already_applied" | "active" | "limit" | "legacy" | "no_draft" | "changed";
+    };
 
 /**
  * Reserve une generation, ou refuse.
@@ -315,13 +487,35 @@ export async function startArchitectGeneration(
   return db.$transaction(async (tx): Promise<StartGenerationResult> => {
     const session = await tx.architectSession.findUnique({
       where: { id: input.sessionId },
-      select: { id: true, status: true, nextGenerationSequence: true },
+      select: {
+        id: true,
+        status: true,
+        conversationVersion: true,
+        nextGenerationSequence: true,
+        pendingMessageText: true,
+        pendingContextFingerprint: true,
+      },
     });
     if (session === null) {
       return { ok: false, reason: "not_found" };
     }
     if (session.status === ARCHITECT_SESSION_STATUS.APPLIED) {
       return { ok: false, reason: "already_applied" };
+    }
+    if (session.conversationVersion < ARCHITECT_CONVERSATION_VERSION.CONVERSATION) {
+      return { ok: false, reason: "legacy" };
+    }
+    if (session.pendingMessageText === null || session.pendingContextFingerprint === null) {
+      return { ok: false, reason: "no_draft" };
+    }
+    if (
+      input.expectedFingerprint !== undefined &&
+      session.pendingContextFingerprint !== input.expectedFingerprint
+    ) {
+      // Le contexte n'est plus celui de l'apercu. Refuser ici, avant la
+      // reservation, garantit qu'aucun appel n'est facture et qu'aucune
+      // generation ne consomme le quota de la conversation.
+      return { ok: false, reason: "changed" };
     }
     if (session.nextGenerationSequence > ARCHITECT_LIMITS.generations) {
       return { ok: false, reason: "limit" };
@@ -345,23 +539,36 @@ export async function startArchitectGeneration(
         model: input.model,
         promptVersion: input.promptVersion,
         inputHash: input.inputHash,
+        contextFingerprint: input.contextFingerprint,
         contextManifestJson: JSON.stringify(input.manifest),
         status: ARCHITECT_GENERATION_STATUS.RUNNING,
       },
     });
 
-    return { ok: true, generation: toGeneration(row) };
+    return { ok: true, generation: toGeneration(row), pendingMessage: session.pendingMessageText };
   });
 }
 
 export type FinishGenerationInput = {
   generationId: string;
   status: Exclude<ArchitectGenerationStatus, "RUNNING">;
+  turnState?: ArchitectTurnState | null;
   proposal?: ArchitectTaskProposal | null;
   questions?: readonly string[];
   providerResponseId?: string | null;
   usage?: ArchitectUsage;
   errorCode?: ArchitectErrorCode | null;
+  /**
+   * Messages a figer dans la conversation, dans l'ordre.
+   *
+   * Fournis, ils sont ecrits et le brouillon est efface — dans la **meme**
+   * transaction que le changement de statut. Absents, le brouillon survit : le
+   * texte de l'utilisateur lui reste acquis, et il peut relancer.
+   *
+   * C'est ce qui definit le moment ou un message devient historique : un tour
+   * qui a reellement abouti, jamais une tentative.
+   */
+  messages?: readonly { role: ArchitectMessageRole; content: string }[];
 };
 
 /** Statut de session correspondant a l'issue d'une generation. */
@@ -370,6 +577,7 @@ const SESSION_STATUS_BY_GENERATION: Record<
   ArchitectSessionStatus
 > = {
   [ARCHITECT_GENERATION_STATUS.PROPOSAL_READY]: ARCHITECT_SESSION_STATUS.PROPOSAL_READY,
+  [ARCHITECT_GENERATION_STATUS.CONTINUE]: ARCHITECT_SESSION_STATUS.CONTINUE,
   [ARCHITECT_GENERATION_STATUS.NEEDS_INPUT]: ARCHITECT_SESSION_STATUS.NEEDS_INPUT,
   [ARCHITECT_GENERATION_STATUS.REFUSED]: ARCHITECT_SESSION_STATUS.FAILED,
   [ARCHITECT_GENERATION_STATUS.FAILED]: ARCHITECT_SESSION_STATUS.FAILED,
@@ -381,6 +589,10 @@ const SESSION_STATUS_BY_GENERATION: Record<
  * Refuse si la generation n'est plus `RUNNING` : une generation terminee est un
  * fait, et un second appel — reprise, double reponse — ne doit pas le reecrire.
  * La garantie vit dans le `where`, pas dans la politesse de l'appelant.
+ *
+ * C'est le **seul** ecrivain de messages de conversation en dehors de la
+ * creation d'une session. Les figer ici, sous la meme transaction que l'issue
+ * du tour, evite l'etat batard ou une reponse existerait sans sa generation.
  */
 export async function finishArchitectGeneration(
   db: DatabaseClient,
@@ -391,6 +603,7 @@ export async function finishArchitectGeneration(
       where: { id: input.generationId, status: ARCHITECT_GENERATION_STATUS.RUNNING },
       data: {
         status: input.status,
+        turnState: input.turnState ?? null,
         proposalJson: input.proposal === undefined || input.proposal === null
           ? null
           : JSON.stringify(input.proposal),
@@ -413,11 +626,38 @@ export async function finishArchitectGeneration(
       return null;
     }
 
+    if (input.messages !== undefined && input.messages.length > 0) {
+      const last = await tx.architectMessage.findFirst({
+        where: { sessionId: row.sessionId },
+        orderBy: { sequence: "desc" },
+        select: { sequence: true },
+      });
+      let sequence = (last?.sequence ?? 0) + 1;
+
+      for (const message of input.messages) {
+        await tx.architectMessage.create({
+          data: {
+            sessionId: row.sessionId,
+            sequence,
+            role: message.role,
+            content: message.content,
+            generationId: row.id,
+          },
+        });
+        sequence += 1;
+      }
+    }
+
     // La session suit l'issue de sa derniere generation — sauf si elle a ete
     // appliquee entre-temps, ce qui n'arrive pas mais coute une ligne a exclure.
     await tx.architectSession.updateMany({
       where: { id: row.sessionId, status: { not: ARCHITECT_SESSION_STATUS.APPLIED } },
-      data: { status: SESSION_STATUS_BY_GENERATION[input.status] },
+      data: {
+        status: SESSION_STATUS_BY_GENERATION[input.status],
+        // Le brouillon n'est efface que si le tour a abouti : sinon l'utilisateur
+        // perdrait son texte a cause d'une panne qui ne lui appartient pas.
+        ...(input.messages === undefined ? {} : CLEAR_PENDING_TURN),
+      },
     });
 
     return toGeneration(row);
@@ -525,6 +765,10 @@ export async function releaseArchitectSession(
  * Cherchee en base plutot que passee par le navigateur : la proposition affichee
  * dans le formulaire est editable, mais celle qui autorise la creation vient
  * toujours d'ici.
+ *
+ * Les generations sont triees du plus recent au plus ancien, donc la premiere
+ * trouvee est bien la derniere rendue. Les precedentes restent intactes et
+ * consultables : une proposition n'en efface jamais une autre.
  */
 export function latestArchitectProposal(
   session: ArchitectSessionView,
@@ -538,11 +782,69 @@ export function latestArchitectProposal(
   );
 }
 
-/** Questions de la derniere generation qui en a pose. */
+/**
+ * Issues de tour qui laissent une trace dans la conversation.
+ *
+ * Un echec n'en fait pas partie : il n'a fige aucun message, et ne peut donc
+ * pas rendre une proposition obsolete.
+ */
+const TURN_STATUSES: readonly ArchitectGenerationStatus[] = [
+  ARCHITECT_GENERATION_STATUS.PROPOSAL_READY,
+  ARCHITECT_GENERATION_STATUS.CONTINUE,
+  ARCHITECT_GENERATION_STATUS.NEEDS_INPUT,
+];
+
+/**
+ * La derniere proposition est-elle encore celle dont parle la conversation ?
+ *
+ * Elle ne l'est plus des qu'un tour lui a succede : l'utilisateur a ecrit
+ * quelque chose apres l'avoir lue, et l'architecte lui a repondu. Creer la tache
+ * a partir d'une proposition que la discussion a deja depassee produirait
+ * exactement ce que l'utilisateur venait de demander de changer.
+ */
+export function canCreateArchitectTask(session: ArchitectSessionView): boolean {
+  if (session.status === ARCHITECT_SESSION_STATUS.APPLIED || session.appliedTaskId !== null) {
+    return false;
+  }
+  const proposal = latestArchitectProposal(session);
+  if (proposal === null) {
+    return false;
+  }
+  const lastTurn = session.generations.find((generation) =>
+    TURN_STATUSES.includes(generation.status),
+  );
+  return lastTurn !== undefined && lastTurn.id === proposal.id;
+}
+
+/** Questions du dernier tour, lorsqu'il en a pose. */
 export function latestArchitectQuestions(session: ArchitectSessionView): string[] {
   return (
-    session.generations.find(
-      (generation) => generation.status === ARCHITECT_GENERATION_STATUS.NEEDS_INPUT,
-    )?.questions ?? []
+    session.generations.find((generation) => TURN_STATUSES.includes(generation.status))
+      ?.questions ?? []
   );
+}
+
+/**
+ * Proposition rendue au tour d'un message donne.
+ *
+ * Permet d'afficher une proposition **a sa place** dans le fil, et de la
+ * transmettre avec le message auquel elle appartient. Sans elle, un « fais-la
+ * plus petite » du tour suivant ne designerait rien.
+ */
+export function architectProposalOfMessage(
+  session: ArchitectSessionView,
+  message: ArchitectMessageView,
+): ArchitectTaskProposal | null {
+  if (message.role !== ARCHITECT_MESSAGE_ROLE.ARCHITECT || message.generationId === null) {
+    return null;
+  }
+  return (
+    session.generations.find((generation) => generation.id === message.generationId)?.proposal ??
+    null
+  );
+}
+
+/** Taille du transcript, mesuree sur ce qui partirait reellement. */
+export function architectTranscriptChars(session: ArchitectSessionView): number {
+  return session.messages.reduce((total, message) => total + message.content.length, 0);
 }

@@ -468,18 +468,34 @@ contexte, conversation générale.
 
 ---
 
-## 🟢 14. Conversation Architecte persistante et évolution du contexte
-
-**Étape active.**
+## ✅ 14. Conversation Architecte persistante et évolution du contexte — `TASK-014`
 
 **Objectif** : poursuivre une discussion avec l'Architecte autour d'un projet.
 
-- Plusieurs tours de discussion avant de créer une tâche.
-- Gestion explicite de l'évolution du contexte entre deux tours.
-- Affinage de plusieurs décisions dans une même session.
+- Conversation persistée dans SQLite, transmise **en entier** à chaque tour
+  ([D-204](DECISIONS.md#d-204--la-conversation-architecte-appartient-à-nox)). OpenAI reste sans état :
+  `store: false`, ni `previous_response_id`, ni `conversation`, ni mode background.
+- Réponse publique de l'architecte persistée et affichée, distincte de tout raisonnement interne
+  ([D-205](DECISIONS.md#d-205--la-réponse-publique-nest-pas-du-raisonnement)).
+- Une proposition ne clôt plus la discussion : demander « plus petit » produit une nouvelle
+  proposition, et l'ancienne reste intacte
+  ([D-206](DECISIONS.md#d-206--une-proposition-ne-clôt-pas-la-conversation)).
+- Seule la dernière proposition est créable, et plus du tout si la conversation l'a dépassée
+  ([D-207](DECISIONS.md#d-207--seule-la-dernière-proposition-est-créable)).
+- Empreinte du contexte projet, comparée entre deux tours **et** entre l'aperçu et l'envoi
+  ([D-208](DECISIONS.md#d-208--une-empreinte-de-contexte-et-ce-quelle-nest-pas)) ; un contexte
+  modifié après l'aperçu bloque l'appel, sans option de forçage
+  ([D-211](DECISIONS.md#d-211--un-contexte-modifié-après-laperçu-bloque-lenvoi)).
+- Diff de manifest : ajouté, retiré, modifié, troncature changée, tâche entrée ou sortie de la
+  fenêtre — jamais un diff de contenu.
+- Transcript borné à vingt tours et 64 Kio, sans résumé ni fenêtre silencieuse
+  ([D-213](DECISIONS.md#d-213--le-transcript-est-borné-jamais-résumé)).
+- Sessions de TASK-013 conservées en lecture seule, sans conversation inventée
+  ([D-216](DECISIONS.md#d-216--les-sessions-de-task-013-restent-en-lecture-seule)).
 
-**Fin d'étape** : le découpage d'un besoin se fait entièrement dans NOX, sans onglet séparé.
-Claude Code n'est toujours pas déclenché automatiquement.
+**Terminée.** La boucle conversationnelle est disponible : le découpage d'un besoin se fait
+entièrement dans NOX, sans onglet séparé. Claude Code n'est toujours **pas** déclenché
+automatiquement, et la boucle autonome OpenAI ↔ Claude reste hors périmètre.
 
 ---
 

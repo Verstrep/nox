@@ -33,7 +33,12 @@ import {
 } from "@nox/database";
 
 import { FakeArchitectProvider, type ArchitectProviderResult } from "./provider.ts";
-import { fetchArchitectContext, runArchitectGeneration, type ArchitectRepositoryPorts } from "./service.ts";
+import {
+  fetchArchitectContext,
+  reviewArchitectTurn,
+  sendArchitectTurn,
+  type ArchitectRepositoryPorts,
+} from "./service.ts";
 
 const MIGRATIONS_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -56,31 +61,32 @@ const ENVIRONMENT: Record<string, string | undefined> = {
   NOX_RUNNER_TOKEN: "jeton-runner-de-test-0123456789",
 };
 
-const PROPOSAL_JSON = {
-  schemaVersion: 1,
-  status: "PROPOSAL_READY",
-  title: "Exporter les taches",
-  priority: "MEDIUM",
-  objective: "Un objectif.",
-  context: null,
-  acceptanceCriteria: ["Un critere."],
-  outOfScope: [],
-  documentReferences: ["docs/ARCHITECTURE.md"],
-  validationCommands: ["npm run test"],
-  assumptions: [],
-  questions: [],
+/** Tour de discussion : une reponse, des questions, aucune proposition. */
+const CONTINUE_JSON = {
+  schemaVersion: 2,
+  state: "CONTINUE",
+  message: "Deux options se presentent. Je recommande la seconde.",
+  questions: ["La fonctionnalite couvre-t-elle tous les projets ?"],
+  proposal: null,
 };
 
-const QUESTIONS_JSON = {
-  ...PROPOSAL_JSON,
-  status: "NEEDS_INPUT",
-  title: null,
-  priority: null,
-  objective: null,
-  acceptanceCriteria: [],
-  documentReferences: [],
-  validationCommands: [],
-  questions: ["La fonctionnalite couvre-t-elle tous les projets ?"],
+/** Tour portant une proposition complete. */
+const READY_JSON = {
+  schemaVersion: 2,
+  state: "PROPOSAL_READY",
+  message: "Voici le plus petit increment que je recommande.",
+  questions: [],
+  proposal: {
+    title: "Exporter les taches",
+    priority: "MEDIUM",
+    objective: "Un objectif.",
+    context: null,
+    acceptanceCriteria: ["Un critere."],
+    outOfScope: [],
+    documentReferences: ["docs/ARCHITECTURE.md"],
+    validationCommands: ["npm run test"],
+    assumptions: [],
+  },
 };
 
 function success(raw: unknown): ArchitectProviderResult {
@@ -94,8 +100,19 @@ function success(raw: unknown): ArchitectProviderResult {
   };
 }
 
-/** Ports simules : un inventaire et deux documents, sans runner. */
-function ports(overrides: Partial<ArchitectRepositoryPorts> = {}): ArchitectRepositoryPorts {
+/** Documents relus apres modification du projet. */
+const REVISED = { revision: "b".repeat(64) };
+
+/**
+ * Ports simules : un inventaire et deux documents, sans runner.
+ *
+ * `revision` permet de rejouer un projet modifie entre deux tours sans
+ * toucher au disque.
+ */
+function ports(
+  overrides: Partial<ArchitectRepositoryPorts> & { revision?: string } = {},
+): ArchitectRepositoryPorts {
+  const revision = overrides.revision ?? "a".repeat(64);
   return {
     listDocuments: () =>
       Promise.resolve({
@@ -120,7 +137,11 @@ function ports(overrides: Partial<ArchitectRepositoryPorts> = {}): ArchitectRepo
     readDocument: (_repository, documentPath) =>
       Promise.resolve({
         ok: true,
-        value: { path: documentPath, content: `# ${documentPath}`, revision: "a".repeat(64) },
+        value: {
+          path: documentPath,
+          content: `# ${documentPath}\n\nRevision ${revision.slice(0, 4)}.`,
+          revision,
+        },
       }),
     ...overrides,
   };
@@ -158,25 +179,54 @@ async function newSession(): Promise<{ projectId: string; sessionId: string }> {
   return { projectId: project.id, sessionId: session.id };
 }
 
-function generate(
-  sessionId: string,
-  provider: FakeArchitectProvider,
-  overrides: Partial<Parameters<typeof runArchitectGeneration>[1]> = {},
-) {
-  return runArchitectGeneration(db, {
-    sessionId,
+type TurnOverrides = { ports?: ArchitectRepositoryPorts };
+
+/** Prepare un tour : c'est `Review context`, et il n'appelle personne. */
+async function review(sessionId: string, message: string, overrides: TurnOverrides = {}) {
+  const session = await getArchitectSession(db, sessionId);
+  assert.ok(session !== null);
+  return reviewArchitectTurn(db, {
+    session,
     projectName: "NOX",
     repositoryPath: path.join(workspace, "depot"),
-    request: "Je veux exporter les taches en JSON.",
-    clarification: null,
-    previousQuestions: [],
+    message,
+    tasks: [],
+    model: "modele-de-test",
+    environment: ENVIRONMENT,
+    ports: overrides.ports ?? ports(),
+  });
+}
+
+/** Envoie le tour prepare : c'est `Send to Architect`. */
+async function send(
+  sessionId: string,
+  provider: FakeArchitectProvider,
+  overrides: TurnOverrides = {},
+) {
+  const session = await getArchitectSession(db, sessionId);
+  assert.ok(session !== null);
+  return sendArchitectTurn(db, {
+    session,
+    projectName: "NOX",
+    repositoryPath: path.join(workspace, "depot"),
     tasks: [],
     model: "modele-de-test",
     provider,
     environment: ENVIRONMENT,
-    ports: ports(),
-    ...overrides,
+    ports: overrides.ports ?? ports(),
   });
+}
+
+/** Un tour complet : les deux clics, dans l'ordre. */
+async function turn(
+  sessionId: string,
+  provider: FakeArchitectProvider,
+  message = "Un message.",
+  overrides: TurnOverrides = {},
+) {
+  const reviewed = await review(sessionId, message, overrides);
+  assert.ok(reviewed.ok, "preparation refusee");
+  return send(sessionId, provider, overrides);
 }
 
 before(async () => {
@@ -247,40 +297,159 @@ describe("fetchArchitectContext", () => {
   });
 });
 
-describe("runArchitectGeneration — succes", () => {
-  it("enregistre une proposition et fait suivre la session", async () => {
+describe("reviewArchitectTurn — preparation", () => {
+  it("n'appelle jamais le fournisseur", async () => {
     const { sessionId } = await newSession();
-    const provider = new FakeArchitectProvider([success(PROPOSAL_JSON)]);
+    const provider = new FakeArchitectProvider([]);
 
-    const outcome = await generate(sessionId, provider);
+    const reviewed = await review(sessionId, "Je veux ameliorer la recherche.");
+
+    assert.ok(reviewed.ok);
+    assert.equal(provider.calls.length, 0);
+  });
+
+  it("enregistre le brouillon et son empreinte", async () => {
+    const { sessionId } = await newSession();
+    const reviewed = await review(sessionId, "Je veux ameliorer la recherche.");
+    assert.ok(reviewed.ok);
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.pendingTurn?.messageText, "Je veux ameliorer la recherche.");
+    assert.equal(
+      session?.pendingTurn?.contextFingerprint,
+      reviewed.turn.prepared.contextFingerprint,
+    );
+  });
+
+  it("ne compare rien au premier tour", async () => {
+    const { sessionId } = await newSession();
+    const reviewed = await review(sessionId, "Premier message.");
+
+    assert.ok(reviewed.ok);
+    assert.equal(reviewed.turn.comparable, false);
+    assert.deepEqual(reviewed.turn.changes, []);
+  });
+
+  it("annonce un contexte inchange au tour suivant", async () => {
+    const { sessionId } = await newSession();
+    await turn(sessionId, new FakeArchitectProvider([success(CONTINUE_JSON)]), "Premier.");
+
+    const reviewed = await review(sessionId, "Second.");
+    assert.ok(reviewed.ok);
+    assert.equal(reviewed.turn.comparable, true);
+    assert.deepEqual(reviewed.turn.changes, []);
+  });
+
+  it("annonce un document modifie depuis le tour precedent", async () => {
+    const { sessionId } = await newSession();
+    await turn(sessionId, new FakeArchitectProvider([success(CONTINUE_JSON)]), "Premier.");
+
+    const reviewed = await review(sessionId, "Second.", { ports: ports(REVISED) });
+    assert.ok(reviewed.ok);
+    assert.equal(reviewed.turn.comparable, true);
+    assert.deepEqual(
+      reviewed.turn.changes.map((change) => [change.identifier, change.kind]),
+      [
+        ["CLAUDE.md", "MODIFIED"],
+        ["docs/ARCHITECTURE.md", "MODIFIED"],
+      ],
+    );
+  });
+
+  it("refuse un transcript au-dela de la borne", async () => {
+    // Aucun resume, aucune fenetre : la conversation s'arrete, et le dit.
+    const { sessionId } = await newSession();
+    const reviewed = await review(sessionId, "x".repeat(ARCHITECT_LIMITS.transcript + 1));
+
+    assert.equal(reviewed.ok, false);
+    assert.equal(
+      "code" in reviewed ? reviewed.code : null,
+      ARCHITECT_ERROR.ARCHITECT_CONVERSATION_TOO_LARGE,
+    );
+  });
+});
+
+describe("sendArchitectTurn — succes", () => {
+  it("enregistre une proposition et fait suivre la conversation", async () => {
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([success(READY_JSON)]);
+
+    const outcome = await turn(sessionId, provider, "Propose-moi une tache.");
 
     assert.ok(outcome.ok);
-    assert.equal(outcome.proposal.title, "Exporter les taches");
+    assert.equal(outcome.turn.proposal?.title, "Exporter les taches");
     assert.equal(outcome.generation.status, ARCHITECT_GENERATION_STATUS.PROPOSAL_READY);
+    assert.equal(outcome.generation.turnState, "PROPOSAL_READY");
     assert.equal(outcome.generation.usage.totalTokens, 120);
 
     const session = await getArchitectSession(db, sessionId);
     assert.equal(session?.status, ARCHITECT_SESSION_STATUS.PROPOSAL_READY);
   });
 
-  it("enregistre une demande de precisions", async () => {
+  it("enregistre un tour de discussion et ses questions", async () => {
     const { sessionId } = await newSession();
-    const provider = new FakeArchitectProvider([success(QUESTIONS_JSON)]);
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
 
-    const outcome = await generate(sessionId, provider);
+    const outcome = await turn(sessionId, provider, "Je ne sais pas encore.");
 
     assert.ok(outcome.ok);
-    assert.equal(outcome.generation.status, ARCHITECT_GENERATION_STATUS.NEEDS_INPUT);
+    assert.equal(outcome.generation.status, ARCHITECT_GENERATION_STATUS.CONTINUE);
     assert.deepEqual(outcome.generation.questions, [
       "La fonctionnalite couvre-t-elle tous les projets ?",
     ]);
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.status, ARCHITECT_SESSION_STATUS.CONTINUE);
+  });
+
+  it("fige les deux messages du tour", async () => {
+    const { sessionId } = await newSession();
+    await turn(
+      sessionId,
+      new FakeArchitectProvider([success(CONTINUE_JSON)]),
+      "Je veux ameliorer la recherche.",
+    );
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.deepEqual(
+      session?.messages.map((message) => [message.role, message.content]),
+      [
+        ["USER", "Je veux ameliorer la recherche."],
+        ["ARCHITECT", "Deux options se presentent. Je recommande la seconde."],
+      ],
+    );
+  });
+
+  it("transmet la conversation entiere au tour suivant", async () => {
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON), success(READY_JSON)]);
+
+    await turn(sessionId, provider, "Premier message.");
+    await turn(sessionId, provider, "Second message.");
+
+    const call = provider.calls[1];
+    assert.ok(call);
+    assert.ok(call.input.includes("Premier message."));
+    assert.ok(call.input.includes("Deux options se presentent."));
+    assert.ok(call.input.includes("Second message."));
+  });
+
+  it("rappelle la proposition d'un tour precedent", async () => {
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([success(READY_JSON), success(READY_JSON)]);
+
+    await turn(sessionId, provider, "Propose-moi une tache.");
+    await turn(sessionId, provider, "Fais-la plus petite.");
+
+    const call = provider.calls[1];
+    assert.ok(call);
+    assert.ok(call.input.includes("Proposition rendue a ce tour : Exporter les taches"));
   });
 
   it("transmet un contexte nettoye et un schema strict", async () => {
     const { sessionId } = await newSession();
-    const provider = new FakeArchitectProvider([success(PROPOSAL_JSON)]);
+    const provider = new FakeArchitectProvider([success(READY_JSON)]);
 
-    await generate(sessionId, provider);
+    await turn(sessionId, provider, "Je veux exporter les taches en JSON.");
 
     const call = provider.calls[0];
     assert.ok(call);
@@ -293,36 +462,124 @@ describe("runArchitectGeneration — succes", () => {
     assert.equal(JSON.stringify(call).includes(workspace), false);
   });
 
-  it("enregistre le manifest du contexte envoye", async () => {
+  it("enregistre le manifest et l'empreinte du contexte envoye", async () => {
     const { sessionId } = await newSession();
-    await generate(sessionId, new FakeArchitectProvider([success(PROPOSAL_JSON)]));
+    await turn(sessionId, new FakeArchitectProvider([success(READY_JSON)]), "Un message.");
 
     const session = await getArchitectSession(db, sessionId);
-    const manifest = session?.generations[0]?.manifest;
+    const generation = session?.generations[0];
 
-    assert.ok(manifest);
+    assert.ok(generation?.manifest);
     assert.deepEqual(
-      manifest.sources.map((source) => source.identifier),
+      generation.manifest.sources.map((source) => source.identifier),
       ["CLAUDE.md", "docs/ARCHITECTURE.md"],
     );
-    assert.ok(manifest.missing.includes("docs/DECISIONS.md"));
+    assert.ok(generation.manifest.missing.includes("docs/DECISIONS.md"));
+    assert.match(generation.contextFingerprint ?? "", /^[0-9a-f]{64}$/u);
   });
 });
 
-describe("runArchitectGeneration — refus", () => {
-  it("conclut une generation en echec sans laisser le verrou pose", async () => {
+describe("sendArchitectTurn — contexte change", () => {
+  it("refuse l'envoi et n'appelle pas le fournisseur", async () => {
+    // Entre l'apercu et le clic, un fichier a ete enregistre.
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([success(READY_JSON)]);
+
+    assert.ok((await review(sessionId, "Un message.")).ok);
+    const outcome = await send(sessionId, provider, { ports: ports(REVISED) });
+
+    assert.equal(outcome.ok, false);
+    assert.equal(
+      "code" in outcome ? outcome.code : null,
+      ARCHITECT_ERROR.ARCHITECT_CONTEXT_CHANGED,
+    );
+    assert.equal(provider.calls.length, 0);
+
+    const session = await getArchitectSession(db, sessionId);
+    // Aucun tour reserve, aucun quota consomme, brouillon intact.
+    assert.equal(session?.generationCount, 0);
+    assert.equal(session?.pendingTurn?.messageText, "Un message.");
+  });
+
+  it("accepte apres une nouvelle relecture du contexte", async () => {
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([success(READY_JSON)]);
+
+    assert.ok((await review(sessionId, "Un message.")).ok);
+    assert.equal((await send(sessionId, provider, { ports: ports(REVISED) })).ok, false);
+
+    // L'utilisateur relit le contexte mis a jour, puis renvoie.
+    const again = await review(sessionId, "Un message.", { ports: ports(REVISED) });
+    assert.ok(again.ok);
+    const outcome = await send(sessionId, provider, { ports: ports(REVISED) });
+
+    assert.ok(outcome.ok);
+    assert.equal(provider.calls.length, 1);
+  });
+
+  it("refuse un envoi sans brouillon prepare", async () => {
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([success(READY_JSON)]);
+
+    const outcome = await send(sessionId, provider);
+
+    assert.equal(outcome.ok, false);
+    assert.equal(
+      "code" in outcome ? outcome.code : null,
+      ARCHITECT_ERROR.ARCHITECT_NO_PENDING_TURN,
+    );
+    assert.equal(provider.calls.length, 0);
+  });
+
+  it("ne reemet rien apres un tour reussi", async () => {
+    // Le brouillon est consomme dans la transaction qui fige le tour : un
+    // rafraichissement du navigateur ne peut pas relancer l'appel.
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+
+    await turn(sessionId, provider, "Un message.");
+    const again = await send(sessionId, provider);
+
+    assert.equal(again.ok, false);
+    assert.equal(provider.calls.length, 1);
+  });
+});
+
+describe("sendArchitectTurn — refus", () => {
+  it("conclut un tour en echec sans laisser le verrou pose", async () => {
     const { sessionId } = await newSession();
     const provider = new FakeArchitectProvider([
       { ok: false, code: ARCHITECT_ERROR.ARCHITECT_TIMEOUT },
-      success(PROPOSAL_JSON),
+      success(READY_JSON),
     ]);
 
-    const failed = await generate(sessionId, provider);
-    assert.equal(failed.ok, false);
+    assert.ok((await review(sessionId, "Un message.")).ok);
+    assert.equal((await send(sessionId, provider)).ok, false);
 
-    // Le verrou doit etre rendu : sinon la session serait bloquee pour toujours.
-    const retried = await generate(sessionId, provider);
+    // Le verrou doit etre rendu, et le brouillon survivre : l'utilisateur
+    // reclique sans avoir a reecrire son message.
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.pendingTurn?.messageText, "Un message.");
+    assert.equal(session?.messages.length, 0);
+
+    const retried = await send(sessionId, provider);
     assert.ok(retried.ok);
+  });
+
+  it("n'ecrit aucun faux message d'architecte", async () => {
+    const { sessionId } = await newSession();
+    const provider = new FakeArchitectProvider([
+      { ok: false, code: ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR },
+    ]);
+
+    assert.ok((await review(sessionId, "Un message.")).ok);
+    await send(sessionId, provider);
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.deepEqual(session?.messages, []);
+    // L'echec reste historique, et auditable.
+    assert.equal(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.FAILED);
+    assert.equal(session?.generations[0]?.errorCode, ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR);
   });
 
   it("distingue un refus du modele d'une panne", async () => {
@@ -331,7 +588,8 @@ describe("runArchitectGeneration — refus", () => {
       { ok: false, code: ARCHITECT_ERROR.ARCHITECT_REFUSED },
     ]);
 
-    await generate(sessionId, provider);
+    assert.ok((await review(sessionId, "Un message.")).ok);
+    await send(sessionId, provider);
 
     const session = await getArchitectSession(db, sessionId);
     assert.equal(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.REFUSED);
@@ -341,10 +599,14 @@ describe("runArchitectGeneration — refus", () => {
   it("refuse une reponse qui ne passe pas la validation NOX", async () => {
     const { sessionId } = await newSession();
     const provider = new FakeArchitectProvider([
-      success({ ...PROPOSAL_JSON, documentReferences: ["docs/INVENTED.md"] }),
+      success({
+        ...READY_JSON,
+        proposal: { ...READY_JSON.proposal, documentReferences: ["docs/INVENTED.md"] },
+      }),
     ]);
 
-    const outcome = await generate(sessionId, provider);
+    assert.ok((await review(sessionId, "Un message.")).ok);
+    const outcome = await send(sessionId, provider);
 
     assert.equal(outcome.ok, false);
     assert.equal(
@@ -355,47 +617,56 @@ describe("runArchitectGeneration — refus", () => {
     const session = await getArchitectSession(db, sessionId);
     // La consommation est enregistree malgre tout : l'appel a bien eu lieu.
     assert.equal(session?.generations[0]?.usage.totalTokens, 120);
+    assert.deepEqual(session?.messages, []);
   });
 
   it("refuse une commande de validation dangereuse", async () => {
     const { sessionId } = await newSession();
     const provider = new FakeArchitectProvider([
-      success({ ...PROPOSAL_JSON, validationCommands: ["npm run test && rm -rf /"] }),
+      success({
+        ...READY_JSON,
+        proposal: { ...READY_JSON.proposal, validationCommands: ["npm run test && rm -rf /"] },
+      }),
     ]);
 
-    const outcome = await generate(sessionId, provider);
-    assert.equal(outcome.ok, false);
+    assert.ok((await review(sessionId, "Un message.")).ok);
+    assert.equal((await send(sessionId, provider)).ok, false);
   });
 
   it("n'appelle pas le fournisseur quand le contexte est illisible", async () => {
     const { sessionId } = await newSession();
-    const provider = new FakeArchitectProvider([success(PROPOSAL_JSON)]);
-
-    const outcome = await generate(sessionId, provider, {
+    const provider = new FakeArchitectProvider([success(READY_JSON)]);
+    const broken = {
       ports: ports({
-        listDocuments: () => Promise.resolve({ ok: false, failure: { kind: "unreachable" } }),
+        listDocuments: () => Promise.resolve({ ok: false as const, failure: { kind: "unreachable" as const } }),
       }),
-    });
+    };
 
-    assert.equal(outcome.ok, false);
-    // Aucun appel, aucune generation consommee : la session est intacte.
+    const reviewed = await review(sessionId, "Un message.", broken);
+
+    assert.equal(reviewed.ok, false);
+    // Aucun appel, aucun tour consomme : la conversation est intacte.
     assert.equal(provider.calls.length, 0);
     const session = await getArchitectSession(db, sessionId);
     assert.equal(session?.generationCount, 0);
     assert.equal(session?.status, ARCHITECT_SESSION_STATUS.OPEN);
   });
 
-  it("refuse au-dela de la borne de generations", async () => {
+  it("refuse au-dela de la borne de tours", async () => {
     const { sessionId } = await newSession();
     const provider = new FakeArchitectProvider(
-      Array.from({ length: ARCHITECT_LIMITS.generations + 1 }, () => success(PROPOSAL_JSON)),
+      Array.from({ length: ARCHITECT_LIMITS.generations + 1 }, () => success(CONTINUE_JSON)),
     );
 
     for (let index = 0; index < ARCHITECT_LIMITS.generations; index += 1) {
-      assert.ok((await generate(sessionId, provider)).ok, `generation ${String(index + 1)}`);
+      assert.ok(
+        (await turn(sessionId, provider, `Message ${String(index)}.`)).ok,
+        `tour ${String(index + 1)}`,
+      );
     }
 
-    const extra = await generate(sessionId, provider);
+    assert.ok((await review(sessionId, "Un de trop.")).ok);
+    const extra = await send(sessionId, provider);
     assert.equal(
       "code" in extra ? extra.code : null,
       ARCHITECT_ERROR.ARCHITECT_GENERATION_LIMIT,
@@ -403,13 +674,14 @@ describe("runArchitectGeneration — refus", () => {
     assert.equal(provider.calls.length, ARCHITECT_LIMITS.generations);
   });
 
-  it("ne lance qu'un appel sur double clic concurrent", async () => {
+  it("ne lance qu'un appel sur double envoi concurrent", async () => {
     const { sessionId } = await newSession();
-    const provider = new FakeArchitectProvider([success(PROPOSAL_JSON), success(PROPOSAL_JSON)]);
+    const provider = new FakeArchitectProvider([success(READY_JSON), success(READY_JSON)]);
 
+    assert.ok((await review(sessionId, "Un message.")).ok);
     const [left, right] = await Promise.all([
-      generate(sessionId, provider),
-      generate(sessionId, provider),
+      send(sessionId, provider),
+      send(sessionId, provider),
     ]);
 
     assert.equal([left, right].filter((outcome) => outcome.ok).length, 1);

@@ -398,6 +398,41 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   « non fourni » veut dire ce qu'il dit.
 - **Aucun appel réel au fournisseur dans les tests.** Tous les tests — unitaires, intégration,
   fonctionnels — utilisent un faux fournisseur ; aucun ne joint `api.openai.com`.
+- **La conversation Architecte appartient à NOX.** Le transcript vit dans SQLite et est reconstruit
+  **en entier** à chaque tour. Aucune conversation distante : ni `previous_response_id`, ni
+  `conversation`, ni mode background, et `store` reste `false`. Une conversation doit rester lisible
+  après un changement de modèle, un redémarrage, ou la disparition des réponses chez le fournisseur.
+- **La réponse publique de l'architecte n'est pas du raisonnement.** `message` est un artefact
+  destiné à l'utilisateur : il est persisté et affiché. Aucun raisonnement interne n'est demandé,
+  reçu, stocké, journalisé ni résumé — la règle de TASK-010 sur les blocs `thinking` reste sans
+  exception, et celle-ci ne l'assouplit pas.
+- **Chaque tour reconstruit son contexte**, à partir du projet **actuel**. Il n'existe aucun
+  « continuer avec l'ancien contexte » : NOX ne conserve que les manifests, pas le texte des
+  documents, et un bouton qui prétendrait rejouer un contexte passé serait un mensonge.
+- **Un contexte modifié après l'aperçu bloque l'appel.** Le contexte est relu et son empreinte
+  recomparée juste avant le spawn de la requête ; si elles diffèrent, aucune génération n'est
+  réservée et aucun appel n'est fait. Il n'existe ni `Send anyway`, ni option de forçage, et il ne
+  doit pas en exister.
+- **L'empreinte de contexte n'est pas une primitive de sécurité.** SHA-256 nu, contrairement à
+  l'empreinte de dossier de travail de TASK-012, qui est un HMAC parce qu'elle décide d'une
+  exécution. Ne jamais confondre les deux, ni faire dépendre une autorisation de la première.
+- **La révision d'une tâche se calcule sur ce qui est envoyé**, jamais sur `updatedAt` : un
+  horodatage dit quand une ligne a été touchée, pas ce qu'elle contient.
+- **Un message n'entre dans la conversation que si le tour a abouti.** Les deux messages sont écrits
+  dans la même transaction que la conclusion de la génération, et le brouillon y est effacé. Un
+  échec n'écrit aucun message et conserve le brouillon ; un rafraîchissement ne réémet jamais un
+  appel.
+- **Seule la dernière proposition est créable**, et plus du tout si un tour lui a succédé. La règle
+  est vérifiée en base, pas seulement dans l'interface.
+- **Le transcript est borné, jamais résumé.** Vingt tours, 64 Kio. Au-delà, NOX refuse et invite à
+  ouvrir une nouvelle conversation. Aucun résumé par un second appel, aucune fenêtre glissante,
+  aucune suppression silencieuse des premiers messages.
+- **Le message d'ouverture n'existe qu'en un exemplaire.** `requestText` le porte, il devient le
+  premier message au premier tour réussi, et il n'est pas modifiable. Le navigateur n'en transmet
+  jamais le texte : le serveur le relit en base.
+- **Une session ouverte avant TASK-014 ne se poursuit pas.** Elle reste consultable avec ses
+  générations, sa consommation et sa tâche ; aucune conversation n'est reconstruite à partir de sa
+  demande et de ses précisions.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
   documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code
