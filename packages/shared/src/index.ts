@@ -370,6 +370,42 @@ export type {
 } from "./architect-review-prompt.js";
 
 export {
+  GUIDED_ACTION,
+  GUIDED_ACTION_KINDS,
+  GUIDED_BLOCKER,
+  GUIDED_BLOCKER_CODES,
+  GUIDED_PROGRESS_STEP,
+  GUIDED_PROGRESS_STEPS,
+  GUIDED_STAGE,
+  GUIDED_STAGES,
+  deriveGuidedWorkflowState,
+  guidedActionCallsOpenAI,
+  guidedActionStartsClaude,
+  isGuidedBlockerCode,
+  isGuidedWorkflowStage,
+  selectGuidedCurrentRun,
+} from "./guided-workflow.js";
+
+export type {
+  GuidedAction,
+  GuidedActionKind,
+  GuidedAnalysisFact,
+  GuidedArchitectFact,
+  GuidedBlocker,
+  GuidedBlockerCode,
+  GuidedCorrectionFact,
+  GuidedCorrectionReadiness,
+  GuidedLaunchReadiness,
+  GuidedProgressEntry,
+  GuidedProgressState,
+  GuidedProgressStep,
+  GuidedRunFact,
+  GuidedWorkflowFacts,
+  GuidedWorkflowStage,
+  GuidedWorkflowState,
+} from "./guided-workflow.js";
+
+export {
   PROJECT_DOCUMENT_CATEGORIES,
   PROJECT_DOCUMENT_CATEGORY,
   isCreateProjectDocumentSuccess,

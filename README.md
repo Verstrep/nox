@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-015 — review Architecte assistée et feedback de correction**.
+Dernière étape terminée : **TASK-016 — boucle de développement guidée avec checkpoints humains**.
 
 | Élément | État |
 | --- | --- |
@@ -37,10 +37,11 @@ Dernière étape terminée : **TASK-015 — review Architecte assistée et feedb
 | Architecte OpenAI : contexte contrôlé, proposition de tâche | ✅ fonctionnel |
 | Conversation Architecte multi-tours, contexte comparé entre deux tours | ✅ fonctionnelle |
 | Review Architecte assistée d'un run, feedback de correction suggéré | ✅ fonctionnelle |
+| Workflow guidé : étape courante, prochaine étape recommandée, blocages | ✅ fonctionnel |
 | Renommage, déplacement d'un document | ⬜ non commencés |
 | Archivage, suppression d'une tâche avec exécutions | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
-| Boucle de développement guidée avec checkpoints humains | ⬜ non commencée |
+| Mémoire projet structurée et décisions durables | ⬜ non commencée |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
@@ -706,6 +707,102 @@ se répare d'un second clic ; un fichier orphelin que plus rien ne désigne ne s
   listes. Seul le statut change.
 - Ni renumérotation, ni duplication, ni dépendances entre tâches.
 - Ni archivage, ni suppression d'une tâche possédant un historique d'exécution.
+
+## Savoir quoi faire ensuite : `Development workflow`
+
+La page d'une tâche s'ouvre sur une section **`Development workflow`**. Elle répond à une seule
+question — **où en sommes-nous, et quelle étape a du sens maintenant ?** — et elle ne fait rien
+d'autre.
+
+```text
+Development workflow                                    Reviewing
+
+▸ Specification  ✓   Claude execution  ✓   Review  ▸   Correction  —   Done  —
+
+Current
+RUN-001 s'est terminée et sa review est disponible.
+RUN-001 · Initial
+
+Recommended next step
+Aucune analyse Architecte n'existe pour RUN-001. Cette seconde lecture est
+facultative : vous pouvez tout aussi bien relire vous-même, puis approuver
+ou demander des corrections.
+
+[Analyze with Architect]   This action will call OpenAI
+
+Other options
+[Review changes]  [Request changes]  [Approve]
+```
+
+### Rien n'est stocké
+
+L'étape affichée n'existe nulle part en base. Elle est **dérivée** de ce que NOX enregistre déjà :
+le statut de la tâche, celui de ses exécutions, la présence d'un instantané de review, les
+analyses de l'Architecte, les demandes de correction, l'état du document Markdown.
+
+Une colonne « étape courante » aurait paru plus simple. Elle aurait surtout fini par mentir : deux
+représentations d'une même réalité finissent toujours par diverger, et c'est celle qui est écrite
+qu'on croit.
+
+### Les dix étapes
+
+| Étape | Ce qu'elle veut dire |
+| --- | --- |
+| `Drafting` | la spécification s'écrit encore |
+| `Ready to run` | elle est arrêtée, Claude Code n'est pas encore passé |
+| `Running` | une exécution est en cours |
+| `Run failed` | la dernière exécution n'a pas abouti |
+| `Reviewing` | un travail attend votre décision |
+| `Architect review` | une analyse terminée éclaire cette décision |
+| `Changes requested` | un feedback est enregistré |
+| `Correction ready` | toutes les préconditions de reprise sont tenues |
+| `Done` | le travail a été accepté |
+| `Blocked` | quelque chose empêche d'avancer, et il faut regarder |
+
+### NOX propose, vous décidez
+
+**Aucune recommandation ne se déclenche seule.** Ni au chargement de la page, ni après un délai, ni
+parce que l'étape précédente vient de se terminer. Chaque bouton du guide est un **lien** vers la
+page où la décision se prend déjà — celle du lancement, celle de la review, celle de la
+correction — et c'est là que le vrai bouton se trouve.
+
+Cela veut aussi dire qu'une recommandation n'autorise rien. Si vous laissez la page ouverte et que
+l'état change ailleurs, l'action refusera d'elle-même : le guide n'a aucun pouvoir de contournement,
+parce qu'il n'a aucun pouvoir tout court.
+
+### Quand une IA va être appelée, c'est écrit
+
+```text
+Analyze with Architect   This action will call OpenAI
+Run Claude Code          This action will start Claude Code
+Resume Claude Code       This action will start Claude Code
+```
+
+Et nulle part ailleurs. `Mark ready`, `Approve`, `Reopen`, `Use as feedback` et
+`Prepare correction` ne portent aucun avertissement : elles n'appellent rien. Un avertissement posé
+partout n'avertirait plus de rien.
+
+### Ce qui bloque est dit
+
+Quand la suite n'est pas possible, le guide le dit plutôt que de faire disparaître un bouton :
+document Markdown désynchronisé, runner arrêté, Claude Code introuvable, repository non propre,
+exécution déjà en cours, configuration OpenAI incomplète, précondition de correction non tenue.
+
+Chaque blocage reprend le message que la couche concernée avait déjà formulé — le guide traduit des
+faits, il n'en invente pas.
+
+### Sans Architecte, et sans runner
+
+Si `NOX_OPENAI_API_KEY` ou `NOX_ARCHITECT_MODEL` manque, l'étape recommandée devient
+`Review manually`, et `Approve` comme `Request changes` restent parfaitement utilisables. Si le
+runner est arrêté, aucune recommandation de lancement n'est affichée — NOX ne prétend pas qu'un
+lancement est possible — mais tout ce qui ne dépend pas du runner continue de fonctionner.
+
+### Une progression, pas un historique
+
+La bande à cinq étapes ne grandit pas avec le nombre d'exécutions. Trois corrections successives ne
+produisent pas trois lignes : elle répond « où en sommes-nous », pas « qu'a-t-on fait ». La timeline
+détaillée d'une exécution a déjà sa page, et l'historique des exécutions sa section.
 
 ## Lancer une tâche dans Claude Code
 
@@ -1659,6 +1756,9 @@ NOX/
 │   │   │   │   ├── openai.ts        Responses API, Structured Output strict
 │   │   │   │   ├── service.ts       Préparation d'un tour, puis envoi contrôlé
 │   │   │   │   └── apply.ts         Création par le pipeline de TASK-007
+│   │   │   ├── guided-workflow.ts  Faits du workflow guidé : base + sondes en lecture
+│   │   │   ├── guided-workflow-display.ts
+│   │   │   │                   URL des surfaces existantes, ancres, progression
 │   │   │   ├── labels.ts           Seule couche de traduction des valeurs internes
 │   │   │   ├── runs.ts             Chargement et réconciliation des runs
 │   │   │   └── ...             Validation métier et lecture des données

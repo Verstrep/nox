@@ -159,6 +159,11 @@ des tâches, utilitaires de validation.
 Règles : aucune dépendance runtime, aucun accès au système de fichiers ou au réseau, aucun
 code spécifique à React ou à Node. Ce package doit rester importable des deux côtés.
 
+C'est aussi pour cette raison que la **projection du workflow guidé** y vit depuis TASK-016 :
+un module qui ne peut importer ni Node, ni Prisma, ni un client HTTP ne peut pas non plus,
+par accident, déclencher une exécution ou un appel au fournisseur. La pureté n'y est pas une
+convention, elle est structurelle.
+
 ### 3.4 `packages/database` — accès aux données
 
 **Aujourd'hui** :
@@ -1477,3 +1482,122 @@ Le nettoyage des patches diffère de celui du contexte : les lignes d'en-tête d
 subissent que le masquage des secrets. Réécrire un chemin dans un diff produirait un diff faux —
 `+++ /dev/null` deviendrait `+++ <chemin externe>`, et le fichier supprimé n'aurait plus l'air
 supprimé.
+
+### 5.17 Boucle de développement guidée
+
+Depuis TASK-016, la page d'une tâche répond à une question que NOX laissait à l'utilisateur :
+**où en sommes-nous, et quelle étape a du sens maintenant ?**
+
+```text
+Persistent domain state
+       ↓
+Guided workflow projection
+       ↓
+Current stage
+Recommended action
+Alternative actions
+Blockers
+       ↓
+Existing human-controlled surfaces
+```
+
+#### Une projection, pas un état
+
+La source de vérité ne change pas : `Task.status`, `Run.status`, `Run.kind`,
+`reviewCapturedAt`, `ArchitectRunReview`, `ReviewFeedback`, l'état de synchronisation du
+document. TASK-016 n'ajoute **aucune** colonne, **aucune** table et **aucune** migration.
+
+Une colonne `currentStep` aurait paru plus simple. Elle serait devenue une seconde source de
+vérité, et deux représentations d'une même réalité divergent toujours — un statut change sans
+que le champ dérivé suive, un processus s'arrête entre deux écritures. C'est alors la valeur
+écrite qu'on croit, et elle a tort
+([D-228](DECISIONS.md#d-228--le-workflow-guidé-est-dérivé-jamais-persisté)).
+
+#### Trois couches, et une seule décide
+
+```text
+guided-workflow.ts        (@nox/shared)   pure : stages, actions, blocages, priorités
+guided-workflow.ts        (apps/web/lib)  lit la base, sonde le runner en lecture seule
+guided-workflow-display.ts (apps/web/lib) pure : URL des surfaces existantes
+GuidedWorkflow.tsx        (components)    affiche, et rien d'autre
+```
+
+La décision vit dans un module sans dépendance : elle se teste sans base, sans runner et sans
+réseau, par une table de cas. Le chargeur, lui, ne décide de rien — il constate.
+
+#### Ordre de priorité
+
+```text
+1. exécution active            rien d'autre n'a de sens tant qu'un processus écrit
+2. tâche terminée              plus rien n'est attendu
+3. tâche bloquée               un humain doit regarder avant toute suite
+4. tâche échouée               la dernière exécution n'a pas abouti
+5. tâche en review
+   5a. correction en attente   un feedback enregistré prime sur une nouvelle analyse
+   5b. verdict Architecte      une seconde lecture existe : elle oriente la décision
+   5c. review disponible       sinon, la relecture — assistée ou non — est l'étape
+6. tâche prête                 la spécification est arrêtée
+7. tâche brouillon             elle s'écrit encore
+```
+
+L'ordre est fixe et documenté parce qu'il décide de ce que l'utilisateur lit en premier. Un
+ordre implicite se serait mis à dépendre de l'ordre des `if`.
+
+#### Recommander n'est pas autoriser
+
+Le guide ne décide jamais qu'une action est permise. Chaque action est un **lien** vers la
+surface où la décision se prend déjà : `Mark ready` descend à la section Statut de la page,
+`Analyze with Architect` ouvre la préparation de TASK-015, `Resume Claude Code` ouvre celle de
+TASK-012. Aucune Server Action n'est appelée depuis le guide, et aucune n'est redéclarée.
+
+C'est ce qui rend un affichage périmé inoffensif : si une exécution démarre dans un autre
+onglet entre l'affichage et le clic, c'est l'action existante qui refuse. Le guide n'a rien
+contourné — il n'a rien à contourner
+([D-229](DECISIONS.md#d-229--une-recommandation-nautorise-rien)).
+
+#### Déterministe, hors ligne, gratuit
+
+Le choix de la prochaine étape ne demande rien à personne : ni à OpenAI, ni à Claude Code, ni au
+disque, ni à la base. La machine d'état locale connaît déjà tous les faits, et un modèle à qui
+l'on poserait la question coûterait de l'argent pour produire une réponse moins fiable — qui
+cesserait de fonctionner hors ligne
+([D-230](DECISIONS.md#d-230--aucun-appel-ia-pour-choisir-la-prochaine-étape)).
+
+La garantie est vérifiée sur le **source** du module partagé : ni `await`, ni `async`, ni
+`fetch`, ni `process.env`, ni aucune fonction d'action. Une régression y serait invisible à
+l'exécution — la fonction rendrait toujours un état correct tout en ayant déclenché un appel —
+et parfaitement lisible dans le texte.
+
+#### Ce que le rendu d'une page de tâche fait, et ne fait pas
+
+| Fait | Ne fait pas |
+| --- | --- |
+| lit la tâche, ses exécutions, ses analyses, ses feedbacks | aucun appel OpenAI |
+| interroge le preflight de TASK-008 si la tâche est prête | aucun lancement de Claude Code |
+| interroge le preflight de TASK-012 si un feedback attend | aucune transition de statut |
+| relit la configuration de l'Architecte | aucun `ReviewFeedback` créé |
+| — | aucune écriture Git |
+
+Les deux sondes sont celles de TASK-008 et TASK-012, appelées telles quelles : NOX n'a pas de
+seconde sonde du runner, ni de seconde sonde de Claude Code. Elles ne sont faites que lorsque
+leur réponse sert.
+
+#### « Je ne sais pas » n'est pas « non »
+
+Un runner injoignable ne dit rien de l'état du dossier de travail. Un refus explicite du runner
+produit `Blocked` avec sa raison ; une absence de réponse produit `Changes requested`, qui
+renvoie vers la page de préparation. Afficher « le repository a changé » alors que personne n'a
+regardé serait la même faute que reconstruire un diff historique depuis le disque actuel
+([D-236](DECISIONS.md#d-236--une-précondition-non-vérifiée-nest-pas-une-précondition-manquante)).
+
+#### Sans Architecte, et sans runner
+
+```text
+OpenAI non configuré   → Review manually, et le blocage est nommé
+runner arrêté          → aucune recommandation de lancement, et le blocage est nommé
+```
+
+Dans les deux cas, ce qui ne dépend pas du service manquant reste utilisable : `Approve`,
+`Request changes`, la lecture de la review, la modification du statut. Recommander une action
+impossible est pire que ne rien recommander — l'utilisateur clique, échoue, et cesse de faire
+confiance au guide ([D-235](DECISIONS.md#d-235--nox-reste-utilisable-sans-openai-et-sans-runner)).

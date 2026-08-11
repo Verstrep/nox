@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { SectionCard } from "@/components/SectionCard";
+import { WorkflowLink } from "@/components/WorkflowLink";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatIsoDateTime } from "@/lib/format";
 import { runStatusLabel } from "@/lib/labels";
@@ -172,6 +173,7 @@ export default async function RunPage({
         >
           &larr; Retour a la tache
         </Link>
+        <WorkflowLink projectId={project.id} taskId={task.id} />
 
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">

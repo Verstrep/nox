@@ -8,6 +8,7 @@ import {
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { GuidedWorkflow } from "@/components/GuidedWorkflow";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
@@ -18,6 +19,8 @@ import {
   taskPriorityLabel,
   taskStatusLabel,
 } from "@/lib/labels";
+import { loadGuidedWorkflow } from "@/lib/guided-workflow";
+import { TASK_SECTION_ANCHOR } from "@/lib/guided-workflow-display";
 import { loadProject } from "@/lib/projects";
 import { formatDuration, newRunUrl, runStatusTone, runUrl } from "@/lib/run-display";
 import { loadTaskRuns } from "@/lib/runs";
@@ -284,6 +287,9 @@ export default async function TaskDetailPage({
   }
 
   const runs = await loadTaskRuns(task.id);
+  // Une projection, pas une machine d'etat : elle se recalcule entierement a
+  // chaque rendu, et ne declenche ni appel IA, ni execution, ni transition.
+  const workflow = await loadGuidedWorkflow({ project, task });
   const createdAt = formatIsoDateTime(task.createdAt);
   const updatedAt = formatIsoDateTime(task.updatedAt);
 
@@ -313,6 +319,15 @@ export default async function TaskDetailPage({
       </header>
 
       <main className="flex flex-col gap-6">
+        <GuidedWorkflow
+          projectId={project.id}
+          taskId={task.id}
+          state={workflow.state}
+          architectSession={workflow.architectSession}
+          pendingFeedbackExcerpt={workflow.pendingFeedbackExcerpt}
+          anchorId={TASK_SECTION_ANCHOR.workflow}
+        />
+
         <p className="rounded-lg border-l-2 border-zinc-700 bg-zinc-950/40 py-3 pl-4 pr-4 text-xs leading-relaxed text-zinc-500">
           Les informations structurees de cette page sont actuellement la source de verite. La
           modification directe du fichier Markdown ne met pas encore a jour la tache NOX.
@@ -359,10 +374,15 @@ export default async function TaskDetailPage({
           </SectionCard>
         )}
 
-        <DocumentSection projectId={project.id} task={task} />
+        <div id={TASK_SECTION_ANCHOR.document} className="scroll-mt-6">
+          <DocumentSection projectId={project.id} task={task} />
+        </div>
 
-        <RunsSection projectId={project.id} task={task} runs={runs} />
+        <div id={TASK_SECTION_ANCHOR.runs} className="scroll-mt-6">
+          <RunsSection projectId={project.id} task={task} runs={runs} />
+        </div>
 
+        <div id={TASK_SECTION_ANCHOR.status} className="scroll-mt-6">
         <SectionCard
           title="Statut"
           description="Les transitions proposees sont les seules autorisees depuis l'etat actuel."
@@ -379,13 +399,16 @@ export default async function TaskDetailPage({
             cree aucun commit.
           </p>
         </SectionCard>
+        </div>
 
-        <DangerSection
-          projectId={project.id}
-          task={task}
-          runCount={runs.length}
-          confirming={confirmingDelete}
-        />
+        <div id={TASK_SECTION_ANCHOR.danger} className="scroll-mt-6">
+          <DangerSection
+            projectId={project.id}
+            task={task}
+            runCount={runs.length}
+            confirming={confirmingDelete}
+          />
+        </div>
 
         <SectionCard title="Dates">
           <dl className="grid gap-4 sm:grid-cols-2">

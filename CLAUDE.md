@@ -477,6 +477,44 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
   automatiquement.
 - **Une analyse de review et une conversation Architecte ne se parlent pas.** Une recommandation
   n'est jamais injectée dans une conversation, et une conversation ne lit aucune review.
+- **Le workflow guidé est dérivé, jamais persisté.** Aucune colonne `currentStep`, `nextAction` ou
+  équivalente n'existe en base, et aucune ne doit y apparaître. L'étape courante, la recommandation,
+  les alternatives et les blocages se recalculent entièrement à chaque rendu à partir de
+  `Task.status`, `Run.status`, `Run.kind`, `reviewCapturedAt`, des analyses Architecte, des
+  `ReviewFeedback` et de l'état de synchronisation du document. Une seconde représentation d'une
+  même vérité finit toujours par diverger, et c'est celle qui est écrite qu'on croit.
+- **Une recommandation n'autorise rien.** Le guide dit ce qui a du sens ; les Server Actions, les
+  transitions de `tasks.ts`, le preflight du runner et les gardes de TASK-011 à TASK-015 restent les
+  seules autorités. Un affichage périmé ne contourne donc rien : l'action existante refuse d'elle-même.
+- **Aucune action guidée ne recopie un formulaire existant.** Chaque `GuidedAction` porte un `kind`
+  et des identifiants ; son URL est reconstruite côté serveur et mène à la surface où la décision se
+  prend déjà. Aucune Server Action n'est appelée depuis le guide, aucune n'est redéclarée.
+- **Aucun appel IA pour choisir la prochaine étape.** `deriveGuidedWorkflowState` est pure et
+  déterministe : elle ne lit ni base, ni disque, ni Git, n'interroge ni le runner ni un fournisseur,
+  et ne modifie rien. Un test lit la **source** du module — ni `await`, ni `async`, ni `fetch`, ni
+  `process.env`, ni fonction d'action — parce qu'une régression y serait invisible à l'exécution.
+- **Le rendu d'une page de tâche ne déclenche rien.** Zéro appel OpenAI, zéro lancement de Claude
+  Code, zéro transition de statut, zéro `ReviewFeedback`, zéro écriture Git. Les seules sondes
+  autorisées sont les preflights **existants** de TASK-008 et TASK-012, en lecture seule, et
+  uniquement quand leur réponse sert.
+- **L'exécution regardée est la seule active, sinon la plus récente.** Une seule implémentation de
+  cette sélection, partagée par le chargeur de faits et par la dérivation.
+- **Le verdict exploitable est la dernière analyse terminée** de l'exécution courante. Une tentative
+  ratée ne l'efface pas, et l'analyse d'une exécution parente n'est jamais attribuée à sa correction.
+- **La review Architecte reste facultative.** Le guide peut la recommander, jamais l'imposer :
+  `Approve`, `Request changes` et la relecture manuelle restent accessibles, et le workflow doit
+  rester complet sans OpenAI comme sans runner.
+- **Une action qui engage une IA est annoncée, et elle seule.** « This action will call OpenAI » pour
+  l'analyse Architecte ; « This action will start Claude Code » pour un lancement ou une reprise.
+  Aucun avertissement sur `Mark ready`, `Approve`, `Reopen`, `Use as feedback` ou
+  `Prepare correction` : un avertissement posé partout n'avertit plus de rien.
+- **Une précondition non vérifiée n'est pas une précondition manquante.** Un refus explicite du
+  runner produit un blocage nommé ; une absence de réponse produit « je ne sais pas », jamais
+  « le repository a changé ». Affirmer un fait que personne n'a constaté est la même faute que
+  reconstruire un diff historique depuis le disque actuel.
+- **La progression affichée compte cinq étapes fixes**, jamais une par exécution. Elle répond « où en
+  sommes-nous », pas « qu'a-t-on fait » : l'historique des exécutions et la timeline d'un run
+  existent déjà, et ne doivent pas être dupliqués.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
   documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code

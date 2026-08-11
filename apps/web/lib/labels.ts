@@ -36,6 +36,10 @@ import {
   ARCHITECT_REVIEW_VERDICT,
   ARCHITECT_SESSION_STATUS,
   CLAUDE_RUN_EVENT_KIND,
+  GUIDED_ACTION,
+  GUIDED_BLOCKER,
+  GUIDED_PROGRESS_STEP,
+  GUIDED_STAGE,
   REVIEW_PATCH_STATE,
   RUN_CHANGE_TYPE,
   RUN_STATUS,
@@ -52,6 +56,10 @@ import {
   type ArchitectReviewVerdict,
   type ArchitectSessionStatus,
   type ClaudeRunEventKind,
+  type GuidedActionKind,
+  type GuidedBlockerCode,
+  type GuidedProgressStep,
+  type GuidedWorkflowStage,
   type ReviewPatchState,
   type RunChangeType,
   type RunStatus,
@@ -397,6 +405,121 @@ const ARCHITECT_REVIEW_BLOCKER_LABELS: Record<ArchitectReviewBlocker, string> = 
   [ARCHITECT_REVIEW_BLOCKER.VALIDATION_NOT_RUN]:
     "Une commande de validation attendue n'a jamais ete lancee.",
 };
+
+/**
+ * Etapes du workflow guide.
+ *
+ * Les memes mots que les statuts techniques voisins, parce qu'ils decrivent la
+ * meme realite vue autrement : `Reviewing` est ce que fait l'utilisateur pendant
+ * qu'une tache porte le statut `Review`.
+ */
+const GUIDED_STAGE_LABELS: Record<GuidedWorkflowStage, string> = {
+  [GUIDED_STAGE.DRAFTING]: "Drafting",
+  [GUIDED_STAGE.READY_TO_RUN]: "Ready to run",
+  [GUIDED_STAGE.RUNNING]: "Running",
+  [GUIDED_STAGE.RUN_FAILED]: "Run failed",
+  [GUIDED_STAGE.REVIEWING]: "Reviewing",
+  [GUIDED_STAGE.ARCHITECT_REVIEW]: "Architect review",
+  [GUIDED_STAGE.CHANGES_REQUESTED]: "Changes requested",
+  [GUIDED_STAGE.CORRECTION_READY]: "Correction ready",
+  [GUIDED_STAGE.DONE]: "Done",
+  [GUIDED_STAGE.BLOCKED]: "Blocked",
+};
+
+/**
+ * Actions proposees par le guide.
+ *
+ * Trois d'entre elles menent a la page de review sous trois libelles :
+ * `Review changes` quand c'est l'etape neutre, `Review manually` quand
+ * l'Architecte ne peut pas aider, `Review and approve` quand il recommande
+ * d'approuver. Le libelle porte **pourquoi** on y va — et c'est precisement ce
+ * que le guide ajoute a un simple lien.
+ *
+ * `Resume Claude Code` et `Prepare correction` menent, elles, a la meme page de
+ * preparation : la premiere dit que toutes les preconditions sont tenues, la
+ * seconde qu'il faut aller voir. Aucune des deux ne lance quoi que ce soit.
+ */
+const GUIDED_ACTION_LABELS: Record<GuidedActionKind, string> = {
+  [GUIDED_ACTION.OPEN_DOCUMENT]: "Open document",
+  [GUIDED_ACTION.RESOLVE_DOCUMENT_SYNC]: "Resolve document sync",
+  [GUIDED_ACTION.MARK_READY]: "Mark ready",
+  [GUIDED_ACTION.BACK_TO_DRAFT]: "Back to draft",
+  [GUIDED_ACTION.RETRY]: "Retry",
+  [GUIDED_ACTION.RUN_CLAUDE]: "Run Claude Code",
+  [GUIDED_ACTION.OPEN_RUN]: "Open run",
+  [GUIDED_ACTION.OPEN_RUN_HISTORY]: "Open run history",
+  [GUIDED_ACTION.OPEN_REVIEW]: "Review changes",
+  [GUIDED_ACTION.REVIEW_MANUALLY]: "Review manually",
+  [GUIDED_ACTION.REVIEW_AND_APPROVE]: "Review and approve",
+  [GUIDED_ACTION.ANALYZE_WITH_ARCHITECT]: "Analyze with Architect",
+  [GUIDED_ACTION.OPEN_ARCHITECT_ANALYSIS]: "Open analysis",
+  [GUIDED_ACTION.USE_AS_FEEDBACK]: "Use as feedback",
+  [GUIDED_ACTION.REQUEST_CHANGES]: "Request changes",
+  [GUIDED_ACTION.PREPARE_CORRECTION]: "Prepare correction",
+  [GUIDED_ACTION.RESUME_CLAUDE]: "Resume Claude Code",
+  [GUIDED_ACTION.APPROVE]: "Approve",
+  [GUIDED_ACTION.REOPEN]: "Reopen",
+  [GUIDED_ACTION.DELETE_TASK]: "Delete task",
+};
+
+/**
+ * Ce qui empeche d'avancer.
+ *
+ * Chaque phrase dit un fait **et** ce qu'il reste possible de faire. Un blocage
+ * qu'on ne sait pas lever se lit comme une panne ; un blocage qui semble tout
+ * arreter alors que la moitie des actions restent ouvertes se lit comme un bug.
+ */
+const GUIDED_BLOCKER_LABELS: Record<GuidedBlockerCode, string> = {
+  [GUIDED_BLOCKER.DOCUMENT_NOT_SYNCED]:
+    "Le document Markdown de cette tache n'est pas synchronise avec sa specification. Le lancement d'une execution l'exige.",
+  [GUIDED_BLOCKER.ACCEPTANCE_CRITERIA_MISSING]:
+    "Cette tache ne porte aucun critere d'acceptation : rien ne permettrait de dire « c'est fait ».",
+  [GUIDED_BLOCKER.RUNNER_UNAVAILABLE]:
+    "Le runner local ne repond pas. Les operations de NOX qui ne touchent pas au repository restent disponibles.",
+  [GUIDED_BLOCKER.CLAUDE_UNAVAILABLE]:
+    "Claude Code n'est pas disponible sur cette machine. NOX ne le suppose pas installe.",
+  [GUIDED_BLOCKER.REPOSITORY_NOT_READY]:
+    "Le repository n'est pas dans un etat permettant de lancer une execution.",
+  [GUIDED_BLOCKER.RUN_ACTIVE]:
+    "Une execution est en cours. NOX n'en lance qu'une a la fois, tous projets confondus.",
+  [GUIDED_BLOCKER.REVIEW_UNAVAILABLE]:
+    "Aucun instantane de review n'est enregistre pour cette execution.",
+  [GUIDED_BLOCKER.OPENAI_UNAVAILABLE]:
+    "La configuration OpenAI est incomplete : l'Architecte ne peut pas etre sollicite. Approve et Request changes restent utilisables.",
+  [GUIDED_BLOCKER.ARCHITECT_ANALYSIS_ACTIVE]:
+    "Une analyse Architecte est deja en cours sur cette execution.",
+  [GUIDED_BLOCKER.ARCHITECT_LIMIT_REACHED]:
+    "Le nombre maximal d'analyses est atteint pour cette execution. Les analyses deja produites restent consultables.",
+  [GUIDED_BLOCKER.CORRECTION_PRECONDITION_FAILED]:
+    "Une precondition de la correction ciblee n'est pas tenue.",
+  [GUIDED_BLOCKER.TASK_BLOCKED]:
+    "Cette tache est bloquee : un humain doit regarder le repository avant toute suite.",
+};
+
+/** Etapes de la bande de progression. */
+const GUIDED_PROGRESS_STEP_LABELS: Record<GuidedProgressStep, string> = {
+  [GUIDED_PROGRESS_STEP.SPECIFICATION]: "Specification",
+  [GUIDED_PROGRESS_STEP.EXECUTION]: "Claude execution",
+  [GUIDED_PROGRESS_STEP.REVIEW]: "Review",
+  [GUIDED_PROGRESS_STEP.CORRECTION]: "Correction",
+  [GUIDED_PROGRESS_STEP.DONE]: "Done",
+};
+
+export function guidedStageLabel(stage: GuidedWorkflowStage): string {
+  return GUIDED_STAGE_LABELS[stage];
+}
+
+export function guidedActionLabel(kind: GuidedActionKind): string {
+  return GUIDED_ACTION_LABELS[kind];
+}
+
+export function guidedBlockerLabel(code: GuidedBlockerCode): string {
+  return GUIDED_BLOCKER_LABELS[code];
+}
+
+export function guidedProgressStepLabel(step: GuidedProgressStep): string {
+  return GUIDED_PROGRESS_STEP_LABELS[step];
+}
 
 export function architectReviewVerdictLabel(verdict: ArchitectReviewVerdict): string {
   return ARCHITECT_REVIEW_VERDICT_LABELS[verdict];

@@ -3,7 +3,7 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 11 août 2026, à l'issue de `TASK-015`.
+**Dernière mise à jour** : 11 août 2026, à l'issue de `TASK-016`.
 
 ---
 
@@ -43,20 +43,40 @@ binaire, un patch tronqué, une validation échouée ou jamais lancée : onze fa
 dégradent une recommandation d'approbation en `Human review required`. Le verdict du modèle est
 conservé à côté du verdict retenu — NOX ne réécrit pas ce qui avait été proposé.
 
+TASK-015 a refermé la chaîne. **TASK-016 la rend lisible** : toutes les briques existaient et
+fonctionnaient isolément, mais l'utilisateur devait savoir lui-même où aller, quelle page ouvrir
+et quelle action avait du sens. La page d'une tâche répond désormais à cette question.
+
+Ce que TASK-016 ajoute tient en trois idées.
+
+**L'étape est dérivée, jamais stockée.** Aucune colonne, aucune table, aucune migration : le
+stage, la recommandation, les alternatives et les blocages se recalculent entièrement à chaque
+rendu à partir de l'état déjà enregistré. Une seconde source de vérité aurait fini par mentir.
+
+**Recommander n'est pas autoriser.** Chaque action est un lien vers la surface où la décision se
+prend déjà. Aucune Server Action n'est redéclarée, et un affichage périmé ne contourne rien : si
+l'état a changé entre l'affichage et le clic, c'est l'action existante qui refuse.
+
+**Le choix de l'étape est 100 % déterministe.** Aucun appel IA n'est fait pour décider de la
+suite : la machine d'état locale connaît déjà tous les faits, et le guide fonctionne hors ligne,
+sans OpenAI et sans coût.
+
 Ce que NOX ne fait toujours pas : aucun lancement automatique de Claude Code, aucun passage
 automatique en `READY`, aucune boucle autonome OpenAI ↔ Claude, aucun réessai caché, aucun résumé
-silencieux, aucune review déclenchée en arrière-plan, aucun coût estimé.
+silencieux, aucune review déclenchée en arrière-plan, aucune exécution automatique de l'étape
+suivante, aucun coût estimé.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 15 — review Architecte assistée
-(terminée)**. L'étape 16 (test sur un petit projet réel) devient l'étape active.
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 16 — boucle de développement guidée
+(terminée)**. L'étape 17 (test sur un petit projet réel) devient l'étape active.
 ## 2. Tâche active
 
-`TASK-015 — Review Architecte assistée et feedback de correction` : **terminée**, en attente de
-review humaine.
+`TASK-016 — Boucle de développement guidée avec checkpoints humains` : **terminée**, en attente
+de review humaine.
 
-Aucun appel OpenAI réel n'a été effectué pendant cette étape : tous les tests, unitaires comme
-fonctionnels, utilisent un faux fournisseur. Aucun test ne lance le vrai binaire Claude Code. La
-première analyse réelle est une vérification manuelle, décrite au § 3.69.
+Aucune migration n'a été ajoutée : le schéma Prisma est inchangé, et `prisma migrate diff`
+confirme une migration vide. Aucun appel OpenAI réel, aucun appel Claude réel : tous les tests,
+unitaires comme fonctionnels, utilisent un faux fournisseur et un faux Claude. Le premier
+parcours guidé réel est une vérification manuelle, décrite au § 3.79.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
@@ -1417,6 +1437,179 @@ et c'est un clic distinct — il n'existe pas de `Approve with Architect`.
 10. Rejouer une analyse sur une review comportant un fichier sensible, binaire ou tronqué, et
     vérifier que le verdict retenu devient `Human review required` — quel que soit celui du modèle.
 
+### 3.70 Le workflow guidé est une projection
+
+La page d'une tâche répond désormais à une question que NOX laissait à l'utilisateur : **où en
+sommes-nous, et quelle étape a du sens maintenant ?**
+
+```text
+Persistent domain state
+       ↓
+Guided workflow projection
+       ↓
+Current stage · Recommended action · Alternatives · Blockers
+       ↓
+Existing human-controlled surfaces
+```
+
+Rien n'est stocké. `Task.status`, `Run.status`, `Run.kind`, `reviewCapturedAt`, les analyses
+Architecte, les `ReviewFeedback` et l'état de synchronisation du document restent la seule source
+de vérité ; l'étape courante s'en dérive à chaque rendu. Aucune colonne, aucune table, **aucune
+migration** — le schéma Prisma est inchangé.
+
+Une colonne `currentStep` aurait paru plus simple, et c'est exactement le problème : deux
+représentations d'une même réalité divergent toujours, et c'est celle qui est écrite qu'on croit.
+
+### 3.71 Dix étapes, dérivées
+
+```text
+Drafting · Ready to run · Running · Run failed · Reviewing
+Architect review · Changes requested · Correction ready · Done · Blocked
+```
+
+L'ordre de priorité est fixe et documenté, parce qu'il décide de ce que l'utilisateur lit en
+premier :
+
+```text
+1. exécution active            rien d'autre n'a de sens tant qu'un processus écrit
+2. tâche terminée              plus rien n'est attendu
+3. tâche bloquée               un humain doit regarder avant toute suite
+4. tâche échouée               la dernière exécution n'a pas abouti
+5. tâche en review
+   5a. correction en attente   un feedback enregistré prime sur une nouvelle analyse
+   5b. verdict Architecte      une seconde lecture existe : elle oriente la décision
+   5c. review disponible       sinon, la relecture — assistée ou non — est l'étape
+6. tâche prête                 la spécification est arrêtée
+7. tâche brouillon             elle s'écrit encore
+```
+
+Le guide regarde **une** exécution : la seule active s'il y en a une, la plus récente sinon. Il ne
+prend jamais `RUN-001` quand `RUN-003` existe, et l'analyse d'une exécution parente n'est jamais
+attribuée à sa correction.
+
+### 3.72 Recommander n'est pas autoriser
+
+Chaque action guidée est un **lien** vers la surface où la décision se prend déjà :
+
+```text
+Mark ready              → section Statut de la page de la tâche
+Run Claude Code         → préparation d'exécution (TASK-008)
+Open run                → page de l'exécution (TASK-010)
+Review changes          → review intégrée (TASK-011)
+Analyze with Architect  → préparation d'analyse (TASK-015)
+Use as feedback         → formulaire de correction, prérempli (TASK-012 + TASK-015)
+Resume Claude Code      → préparation de correction (TASK-012)
+Approve                 → review, à l'endroit de la décision
+```
+
+Aucune Server Action n'est appelée depuis le guide, et aucune n'est redéclarée. C'est ce qui rend
+un affichage périmé inoffensif : si une exécution démarre dans un autre onglet entre l'affichage et
+le clic, c'est l'action existante qui refuse — le guide n'a rien contourné, parce qu'il n'a rien à
+contourner.
+
+Trois libellés mènent à la même page de review — `Review changes`, `Review manually`,
+`Review and approve` — et ce n'est pas une redondance : le libellé porte **pourquoi** on y va, ce
+qui est précisément l'information que le guide ajoute à un lien.
+
+### 3.73 Le choix de l'étape ne coûte rien
+
+`deriveGuidedWorkflowState` est pure : elle ne lit ni la base, ni le disque, ni Git, n'appelle ni
+OpenAI ni Claude Code, et ne modifie rien. Cent appels produisent cent fois le même résultat.
+
+La question « que devrait faire l'utilisateur maintenant ? » n'est jamais posée à un modèle. La
+machine d'état locale connaît déjà tous les faits ; un modèle coûterait de l'argent pour produire
+une réponse moins fiable, et cesserait de répondre hors ligne.
+
+La garantie est vérifiée sur le **source** du module : ni `await`, ni `async`, ni `fetch`, ni
+`process.env`, ni aucune fonction d'action. Une régression y serait invisible à l'exécution — la
+fonction rendrait toujours un état correct tout en ayant déclenché un appel.
+
+### 3.74 Ce que le rendu d'une page de tâche fait, et ne fait pas
+
+| Fait | Ne fait pas |
+| --- | --- |
+| lit la tâche, ses exécutions, ses analyses, ses feedbacks | aucun appel OpenAI |
+| interroge le preflight de TASK-008 si la tâche est prête | aucun lancement de Claude Code |
+| interroge le preflight de TASK-012 si un feedback attend | aucune transition de statut |
+| relit la configuration de l'Architecte | aucun `ReviewFeedback` créé |
+| — | aucune écriture Git |
+
+Les deux sondes sont celles de TASK-008 et TASK-012, appelées telles quelles : il n'existe ni
+seconde sonde du runner, ni seconde sonde de Claude Code. Elles ne sont faites que lorsque leur
+réponse sert — une tâche en brouillon, en cours ou en review ne déclenche aucun aller-retour.
+
+### 3.75 « Je ne sais pas » n'est pas « non »
+
+```text
+runner répond « non »   → Blocked, avec la raison exacte de TASK-012
+runner ne répond pas    → Changes requested, qui renvoie à la page de préparation
+```
+
+Un runner injoignable ne dit rien de l'état du dossier de travail. Afficher « le repository a
+changé » alors que personne n'a regardé serait une affirmation inventée — la même faute que
+reconstruire un diff historique depuis le disque actuel.
+
+### 3.76 Checkpoints IA visibles
+
+```text
+Analyze with Architect  → This action will call OpenAI
+Run Claude Code         → This action will start Claude Code
+Resume Claude Code      → This action will start Claude Code
+```
+
+Et nulle part ailleurs. `Mark ready`, `Approve`, `Reopen`, `Use as feedback` et
+`Prepare correction` n'en portent aucun : un avertissement ne vaut que s'il est rare, et
+`Prepare correction` ouvre une page où le lancement reste un second clic.
+
+### 3.77 NOX reste utilisable sans Architecte et sans runner
+
+```text
+OpenAI non configuré   Recommended : Review manually
+                       Approve et Request changes restent utilisables
+
+runner arrêté          aucune recommandation de lancement
+                       « Le runner local ne répond pas » prend sa place
+```
+
+Vérifié par HTTP dans le test fonctionnel, sur un second serveur web démarré sans configuration
+OpenAI puis avec le runner arrêté. Recommander une action impossible est pire que ne rien
+recommander : l'utilisateur clique, échoue, et cesse de faire confiance au guide.
+
+### 3.78 Progression, et non historique
+
+```text
+Specification  ✓    Claude execution  ✓    Review  ▸    Correction  —    Done  —
+```
+
+Cinq étapes fixes, quel que soit le nombre d'exécutions. Trois corrections successives ne
+produisent pas trois lignes : la bande répond « où en sommes-nous », pas « qu'a-t-on fait ». La
+timeline détaillée d'une exécution a déjà sa page, et l'historique des exécutions sa section.
+
+Chaque étape porte un mot **et** un signe : une progression qui ne se lirait qu'à la couleur ne se
+lirait pas du tout pour une partie des lecteurs.
+
+### 3.79 Procédure de vérification manuelle du workflow guidé
+
+À exécuter par l'utilisateur, sur un projet réel. Elle n'a **pas** été exécutée pendant TASK-016.
+
+1. Créer une tâche, ouvrir sa page, vérifier `Drafting` et la recommandation `Mark ready`.
+2. Cliquer `Mark ready`, recharger : `Ready to run`, `Run Claude Code`, et l'avertissement
+   « This action will start Claude Code ».
+3. Arrêter le runner, recharger : aucune recommandation de lancement, et la raison est nommée.
+   Le redémarrer.
+4. Lancer l'exécution, revenir sur la tâche pendant qu'elle tourne : `Running`, `Open run`, et
+   aucun second `Run Claude Code`.
+5. À la fin, revenir : `Reviewing`, `Analyze with Architect`, l'avertissement OpenAI, et la
+   mention que cette seconde lecture est facultative.
+6. Analyser explicitement, revenir : l'étape recommandée doit correspondre au verdict retenu.
+7. Si `Changes recommended` : `Use as feedback`, modifier le texte, enregistrer, revenir —
+   `Correction ready` et `Resume Claude Code`, ou un blocage nommé si le repository a bougé.
+8. Reprendre, laisser la correction se terminer, revenir : `Reviewing` de nouveau, et l'analyse
+   proposée doit viser la **correction**, pas son parent.
+9. Approuver, revenir : `Done`, aucune étape recommandée, aucun avertissement IA.
+10. À chaque étape, vérifier que rien ne s'est déclenché tout seul : aucune exécution nouvelle,
+    aucune analyse nouvelle, aucun changement de statut non demandé.
+
 ## 4. Éléments non commencés
 
 - Reprise d'une session Claude (`--resume`), continuation (`--continue`), message envoyé à une
@@ -1433,6 +1626,11 @@ et c'est un clic distinct — il n'existe pas de `Approve with Architect`.
   arrière-plan ou à chaque fin de run.
 - Scan IA de secrets, commentaires inline éditables dans un diff, génération d'un message de
   commit ou d'une PR, analyse de plusieurs exécutions à la fois.
+- Exécution automatique de l'étape recommandée, planification de plusieurs tâches, cron,
+  scheduler, notifications, queue globale multi-projets, orchestration parallèle, agent
+  supervisant plusieurs repositories, politique de coût, sélection automatique de modèle.
+- Indicateur « prochaine étape » dans le backlog ou sur la page d'un projet, tableau de bord
+  global.
 - Plusieurs tâches par conversation, roadmap multi-tâches, résumé automatique d'un long
   transcript, mémoire vectorielle, monorepos et `CLAUDE.md` imbriqués.
 - Suivi des coûts au-delà de ce que les fournisseurs rapportent.
@@ -1593,25 +1791,40 @@ une timeline produite par le vrai binaire.
     ([D-217](DECISIONS.md#d-217--la-review-architecte-est-un-objet-distinct-de-la-conversation)).
 39. **Cinq analyses par exécution.** Au-delà, il faut se contenter des analyses existantes — elles
     restent toutes consultables.
-40. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+40. **Le workflow guidé ne vit que sur la page d'une tâche.** Le backlog et la page d'un projet
+    n'affichent aucune prochaine étape. C'est une décision, pas un oubli : une colonne « Next »
+    exigerait, pour chaque tâche, ses exécutions, ses analyses, ses feedbacks et une sonde du
+    runner — sans quoi elle contredirait la page de la tâche
+    ([D-237](DECISIONS.md#d-237--le-guide-vit-sur-la-page-dune-tâche-et-nulle-part-ailleurs)).
+41. **Deux allers-retours vers le runner au rendu d'une page de tâche**, dans deux cas seulement :
+    une tâche prête, et une tâche dont un feedback attend une correction. Ce sont les preflights
+    existants, en lecture seule, mais ils rendent ces deux pages dépendantes du runner pour
+    afficher une recommandation exacte.
+42. **Le stage `Changes requested` n'apparaît que lorsque le runner ne répond pas.** Dès qu'il
+    répond, le guide sait trancher entre `Correction ready` et `Blocked`. C'est le comportement
+    voulu, mais cela rend ce stage rare en usage normal.
+43. **Les Server Actions ne sont toujours pas couvertes par un test fonctionnel HTTP** : le test
+    appelle les mêmes fonctions serveur qu'elles. Les pages, elles, sont bien lues par HTTP.
+    Réserve inchangée depuis TASK-010.
+44. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
     clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-016` — Boucle de développement guidée avec checkpoints humains.**
+**`TASK-017` — Mémoire projet structurée et décisions durables.**
 
-Objectif : relier explicitement les briques déjà construites — conversation Architecte, création
-de tâche, exécution Claude, review Architecte et correction ciblée — dans un workflow guidé de
-bout en bout, où NOX propose automatiquement la prochaine étape mais exige toujours un clic
-humain avant tout appel IA, toute exécution Claude ou toute décision de review.
+Objectif : ajouter une mémoire projet locale, structurée et explicitement contrôlée, permettant à
+NOX de conserver les décisions importantes, contraintes, conventions et connaissances durables
+validées par l'utilisateur, puis de les injecter de façon bornée et traçable dans le contexte
+Architecte — sans transformer chaque conversation passée en mémoire implicite.
 
-Toutes les pièces existent désormais et fonctionnent isolément. Ce qui manque n'est pas une
-capacité de plus : c'est le fil qui les relie. Aujourd'hui, l'utilisateur sait ce qu'il peut
-faire ensuite parce qu'il connaît NOX — un nouvel arrivant, ou lui-même dans trois semaines, ne
-le saurait pas.
+C'est la suite naturelle. Le contexte de l'Architecte est une liste fermée de documents entiers :
+précis, mais coûteux, et incapable de retenir « on a décidé de ne pas faire X, et voici pourquoi »
+autrement qu'en relisant tout `DECISIONS.md`. Une mémoire explicite dit ce qui compte, et
+seulement ce qui compte.
 
-La règle qui la gouverne ne change pas : **NOX propose, l'utilisateur décide.** Proposer la
-prochaine étape n'est pas la déclencher.
+La règle qui la gouverne est déjà connue : **rien n'entre en mémoire sans validation humaine.**
+Une mémoire implicite serait une source de vérité que personne n'a relue.
 
 ## 8. État Git
 
@@ -1619,6 +1832,6 @@ prochaine étape n'est pas la déclencher.
 - Aucun push effectué.
 - Aucun `git add`.
 - Historique Git non modifié.
-- Commit de départ : `528528b` (`feat: add persistent architect conversations`), contenant
-  `TASK-014`.
-- `TASK-015` reste **locale**, non indexée et non commitée.
+- Commit de départ : `91862a5` (`feat: add architect-assisted run review`), contenant
+  `TASK-015`.
+- `TASK-016` reste **locale**, non indexée et non commitée.

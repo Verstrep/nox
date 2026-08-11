@@ -19,6 +19,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { SectionCard } from "@/components/SectionCard";
+import { WorkflowLink } from "@/components/WorkflowLink";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatIsoDateTime } from "@/lib/format";
 import {
@@ -245,9 +246,12 @@ export default async function ReviewPage({
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-4 border-b border-zinc-800 pb-6">
-        <Link href={page} className="text-xs text-zinc-500 hover:text-zinc-300">
-          &larr; Retour a l&apos;execution
-        </Link>
+        <div className="flex flex-wrap items-center gap-4">
+          <Link href={page} className="text-xs text-zinc-500 hover:text-zinc-300">
+            &larr; Retour a l&apos;execution
+          </Link>
+          <WorkflowLink projectId={project.id} taskId={task.id} />
+        </div>
 
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">

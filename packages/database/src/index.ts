@@ -43,6 +43,7 @@ export {
   getRunById,
   hasActiveRun,
   listRunsByTask,
+  listTaskRunFacts,
   markRunCancelling,
   markRunRunning,
   startTaskExecution,
@@ -51,6 +52,7 @@ export {
   type RunGitInput,
   type RunOutcomeInput,
   type RunnerRunReport,
+  type TaskRunFact,
 } from "./runs.js";
 
 export {
@@ -80,6 +82,7 @@ export {
   claimArchitectSession,
   clearArchitectTurnDraft,
   createArchitectSession,
+  findArchitectSessionForTask,
   finishArchitectGeneration,
   formatArchitectSessionCode,
   getArchitectSession,

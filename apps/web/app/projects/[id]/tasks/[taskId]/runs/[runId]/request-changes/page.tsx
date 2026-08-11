@@ -9,6 +9,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { SectionCard } from "@/components/SectionCard";
+import { WorkflowLink } from "@/components/WorkflowLink";
 import { resumeRefusalMessage } from "@/lib/correction-display";
 import { loadProject } from "@/lib/projects";
 import { reviewUrl } from "@/lib/review-display";
@@ -83,9 +84,12 @@ export default async function RequestChangesPage({
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-3 border-b border-zinc-800 pb-6">
-        <Link href={back} className="text-xs text-zinc-500 hover:text-zinc-300">
-          &larr; Retour a la review
-        </Link>
+        <div className="flex flex-wrap items-center gap-4">
+          <Link href={back} className="text-xs text-zinc-500 hover:text-zinc-300">
+            &larr; Retour a la review
+          </Link>
+          <WorkflowLink projectId={project.id} taskId={task.id} />
+        </div>
         <div>
           <p className="font-mono text-xs text-zinc-500">
             {task.code} · {run.code}

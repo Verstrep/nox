@@ -383,6 +383,27 @@ export async function listArchitectSessions(
   return rows.map(toSummary);
 }
 
+/**
+ * Session Architecte a l'origine d'une tache, s'il y en a une.
+ *
+ * `appliedTaskId` porte un index unique : la relation est donc au plus un a un,
+ * et le guide peut afficher « Designed with Architect » sans risquer de choisir
+ * arbitrairement parmi plusieurs sessions.
+ *
+ * Retourne `null` pour une tache creee a la main — ce qui reste le cas ordinaire,
+ * et n'a rien d'un defaut.
+ */
+export async function findArchitectSessionForTask(
+  db: DatabaseClient,
+  taskId: string,
+): Promise<{ id: string; code: string } | null> {
+  const row = await db.architectSession.findFirst({
+    where: { appliedTaskId: taskId },
+    select: { id: true, sequence: true },
+  });
+  return row === null ? null : { id: row.id, code: formatArchitectSessionCode(row.sequence) };
+}
+
 export type SaveTurnDraftInput = {
   sessionId: string;
   messageText: string;

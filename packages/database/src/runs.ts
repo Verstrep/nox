@@ -275,6 +275,81 @@ export async function listRunsByTask(
   return rows.map(toSummary);
 }
 
+/**
+ * Ce qu'il faut savoir de chaque execution d'une tache pour situer le travail.
+ *
+ * ## Une seule requete, et aucune empreinte
+ *
+ * Le workflow guide a besoin, pour chaque execution, de savoir si un instantane
+ * de review existe, si une session Claude a ete rapportee, si une empreinte de
+ * dossier de travail a ete enregistree, et si une correction en est deja nee.
+ * Les demander une execution a la fois produirait une requete par ligne sur une
+ * page qui en affiche parfois dix.
+ *
+ * `hasFingerprint` et `hasSession` sont des **booleens**, jamais les valeurs.
+ * L'empreinte est un secret derive : elle n'a aucune raison de circuler, et une
+ * valeur qu'on n'expose pas ne peut pas fuir.
+ */
+export type TaskRunFact = {
+  id: string;
+  /** Derive de `sequence` : `RUN-001`. */
+  code: string;
+  status: RunStatus;
+  /** Valeur de `RunKind`, telle qu'elle est stockee. */
+  kind: string;
+  parentRunId: string | null;
+  errorCode: string | null;
+  hasReview: boolean;
+  hasSession: boolean;
+  hasFingerprint: boolean;
+  /** Une correction a deja ete lancee depuis cette execution. */
+  hasCorrection: boolean;
+};
+
+/** Executions d'une tache, de la plus recente a la plus ancienne. */
+export async function listTaskRunFacts(
+  db: DatabaseClient,
+  taskId: string,
+): Promise<TaskRunFact[]> {
+  const rows = await db.run.findMany({
+    where: { taskId },
+    orderBy: { sequence: "desc" },
+    select: {
+      id: true,
+      sequence: true,
+      status: true,
+      kind: true,
+      parentRunId: true,
+      errorCode: true,
+      reviewCapturedAt: true,
+      claudeSessionId: true,
+      workspaceFingerprint: true,
+    },
+  });
+
+  const parents = new Set(
+    rows.map((row) => row.parentRunId).filter((value): value is string => value !== null),
+  );
+
+  return rows.map((row) => {
+    if (!Number.isInteger(row.sequence) || row.sequence < 1) {
+      throw new InvalidRunRecordError(row.id, "numero", String(row.sequence));
+    }
+    return {
+      id: row.id,
+      code: formatRunCode(row.sequence),
+      status: readStatus(row),
+      kind: row.kind,
+      parentRunId: row.parentRunId,
+      errorCode: row.errorCode,
+      hasReview: row.reviewCapturedAt !== null,
+      hasSession: row.claudeSessionId !== null && row.claudeSessionId.trim() !== "",
+      hasFingerprint: row.workspaceFingerprint !== null,
+      hasCorrection: parents.has(row.id),
+    };
+  });
+}
+
 /** Retourne une execution complete, ou `null` si elle n'existe pas. */
 export async function getRunById(
   db: DatabaseClient,

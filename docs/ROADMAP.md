@@ -528,8 +528,11 @@ tâche finale créée en brouillon, session de TASK-013 toujours lisible.
   ([D-227](DECISIONS.md#d-227--cinq-analyses-par-exécution-et-une-seule-à-la-fois)).
 
 **Terminée.** Aucun appel OpenAI réel n'a été effectué pendant l'implémentation : tous les tests
-utilisent un faux fournisseur, et aucun ne lance le vrai binaire Claude Code. La première
-analyse réelle est une vérification manuelle décrite dans [PROJECT_STATE.md](PROJECT_STATE.md).
+utilisent un faux fournisseur, et aucun ne lance le vrai binaire Claude Code.
+
+**Validée avec un vrai appel OpenAI** : review Claude réelle capturée, preview exacte, Structured
+Output `architect-review/1`, verdict réel `APPROVE_RECOMMENDED`, observations rattachées à de vrais
+fichiers et critères, tâche restée en `REVIEW`, aucune approbation ni aucun lancement automatique.
 
 **Toujours hors périmètre** : approbation automatique, `Request changes` automatique, lancement
 automatique de Claude, review OpenAI à chaque fin de run, review en arrière-plan, outils OpenAI,
@@ -538,7 +541,36 @@ plusieurs runs simultanément.
 
 ---
 
-## ⬜ 16. Test sur un petit projet réel
+
+## ✅ 16. Boucle de développement guidée avec checkpoints humains — `TASK-016`
+
+**Objectif** : relier les briques existantes en un parcours lisible, sans en automatiser aucune.
+
+- La page d'une tâche répond à « où en sommes-nous, et quelle étape a du sens maintenant ».
+- L'étape est **dérivée** de l'état déjà enregistré : aucune colonne, aucune migration
+  ([D-228](DECISIONS.md#d-228--le-workflow-guidé-est-dérivé-jamais-persisté)).
+- Chaque recommandation porte sa raison, ses alternatives et ses blocages.
+- Une recommandation n'autorise rien : les Server Actions restent la seule frontière
+  ([D-229](DECISIONS.md#d-229--une-recommandation-nautorise-rien)).
+- Le choix de l'étape est 100 % déterministe et local : aucun appel IA
+  ([D-230](DECISIONS.md#d-230--aucun-appel-ia-pour-choisir-la-prochaine-étape)).
+- La review Architecte reste facultative ; NOX fonctionne sans OpenAI et sans runner
+  ([D-231](DECISIONS.md#d-231--la-review-architecte-reste-facultative),
+  [D-235](DECISIONS.md#d-235--nox-reste-utilisable-sans-openai-et-sans-runner)).
+- Les actions qui engagent une IA sont annoncées, et elles seules
+  ([D-234](DECISIONS.md#d-234--les-checkpoints-ia-sont-visibles-et-seulement-là-où-ils-existent)).
+
+**Terminée.** Aucune étape ne se déclenche seule : ni au chargement d'une page, ni après un délai,
+ni parce que l'étape précédente vient de se terminer. Le premier parcours réel est une vérification
+manuelle décrite dans [PROJECT_STATE.md](PROJECT_STATE.md).
+
+**Toujours hors périmètre** : exécution automatique de l'étape suivante, appel OpenAI ou lancement
+Claude automatique, `Approve` ou `Request changes` automatique, boucle autonome OpenAI ↔ Claude,
+planification de plusieurs tâches, cron, scheduler, notifications, queue multi-projets,
+orchestration parallèle, politique de coût, intégration GitHub.
+
+---
+## ⬜ 17. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -550,7 +582,7 @@ plusieurs runs simultanément.
 
 ---
 
-## ⬜ 17. Fonctionnalités avancées
+## ⬜ 18. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -559,4 +591,4 @@ plusieurs runs simultanément.
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 16.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 17.**

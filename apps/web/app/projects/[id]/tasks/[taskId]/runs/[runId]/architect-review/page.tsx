@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import process from "node:process";
 
 import { SectionCard } from "@/components/SectionCard";
+import { WorkflowLink } from "@/components/WorkflowLink";
 import { ARCHITECT_ENVIRONMENT_VARIABLES, loadArchitectConfig } from "@/lib/architect/config";
 import { formatChars } from "@/lib/architect/display";
 import {
@@ -51,7 +52,7 @@ export default async function ArchitectReviewPage({
 
   if (eligibility !== "eligible") {
     return (
-      <Shell projectName={context.project.name} taskCode={context.task.code} runCode={context.run.code} title={context.task.title} back={back}>
+      <Shell projectName={context.project.name} taskCode={context.task.code} runCode={context.run.code} title={context.task.title} back={back} projectId={context.project.id} taskId={context.task.id}>
         <SectionCard title="Analyse indisponible">
           <p role="alert" className="text-sm leading-relaxed text-amber-200">
             {architectReviewIneligibleMessage(eligibility)}
@@ -88,7 +89,7 @@ export default async function ArchitectReviewPage({
   const bundle = prepared.bundle;
 
   return (
-    <Shell projectName={context.project.name} taskCode={context.task.code} runCode={context.run.code} title={context.task.title} back={back}>
+    <Shell projectName={context.project.name} taskCode={context.task.code} runCode={context.run.code} title={context.task.title} back={back} projectId={context.project.id} taskId={context.task.id}>
       <SectionCard
         title="Review sent to Architect"
         description="Ce que NOX enverra, exactement. Aucun appel n'a encore ete fait."
@@ -334,6 +335,8 @@ function Shell({
   runCode,
   title,
   back,
+  projectId,
+  taskId,
   children,
 }: {
   projectName: string;
@@ -341,14 +344,19 @@ function Shell({
   runCode: string;
   title: string;
   back: string;
+  projectId: string;
+  taskId: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-3 border-b border-zinc-800 pb-6">
-        <Link href={back} className="text-xs text-zinc-500 hover:text-zinc-300">
-          &larr; Retour a la review
-        </Link>
+        <div className="flex flex-wrap items-center gap-4">
+          <Link href={back} className="text-xs text-zinc-500 hover:text-zinc-300">
+            &larr; Retour a la review
+          </Link>
+          <WorkflowLink projectId={projectId} taskId={taskId} />
+        </div>
         <div>
           <p className="font-mono text-xs text-zinc-500">
             {taskCode} · {runCode}

@@ -2993,3 +2993,137 @@ lecture demandée —, et comparer deux analyses est précisément l'intérêt. 
 permettre une boucle accidentelle, et compter les échecs est indispensable : une analyse ratée a
 quand même joint le fournisseur. Le verrou est un échange conditionnel sur le compteur, pas une
 vérification suivie d'une écriture — c'est ce qu'un double clic exploiterait.
+
+### D-228 — Le workflow guidé est dérivé, jamais persisté
+
+**Décision.** L'étape courante, l'étape recommandée, les alternatives et les blocages sont
+recalculés à chaque rendu par une fonction pure, à partir de l'état déjà enregistré :
+`Task.status`, `Run.status`, `Run.kind`, `reviewCapturedAt`, les analyses Architecte, les
+`ReviewFeedback`, l'état de synchronisation du document. Aucune colonne, aucune table, aucune
+migration.
+
+**Justification.** Une colonne `currentStep` aurait paru plus simple, et c'est exactement le
+problème : elle serait devenue une seconde source de vérité. Deux représentations d'une même
+réalité divergent toujours — un statut change sans que le champ dérivé soit mis à jour, un
+processus s'arrête entre deux écritures — et c'est celle qui est écrite qu'on croit. Une projection
+ne peut pas se désynchroniser de ce qu'elle projette.
+
+Le coût de la dérivation est un calcul en mémoire sur des faits déjà chargés. Le coût d'une
+divergence est un utilisateur qui suit une recommandation fausse.
+
+### D-229 — Une recommandation n'autorise rien
+
+**Décision.** Le guide ne décide jamais qu'une action est permise. Les Server Actions, la table de
+transitions de `tasks.ts`, le preflight du runner et les gardes de TASK-011 à TASK-015 restent les
+seules autorités. Chaque action guidée est un **lien** vers la surface où la décision se prend, et
+non un second bouton appelant la même Server Action.
+
+**Justification.** Deux endroits qui décident de la même chose finissent par ne plus décider
+pareil, et c'est l'affichage qui aurait raison à tort. Un affichage périmé devient alors inoffensif :
+si une exécution démarre dans un autre onglet entre l'affichage et le clic, c'est l'action existante
+qui refuse — le guide n'a rien contourné, parce qu'il n'a rien à contourner.
+
+C'est aussi ce qui rend le guide bon marché à faire évoluer : ajouter une recommandation n'ajoute
+aucune surface d'exécution.
+
+### D-230 — Aucun appel IA pour choisir la prochaine étape
+
+**Décision.** `deriveGuidedWorkflowState` est déterministe et locale. Elle n'interroge ni OpenAI, ni
+Claude Code, ni le disque, ni la base. La question « que devrait faire l'utilisateur maintenant ? »
+n'est jamais posée à un modèle.
+
+**Justification.** La machine d'état locale connaît déjà tous les faits. Demander à un modèle de les
+relire coûterait de l'argent pour produire une réponse moins fiable, qui pourrait halluciner une
+étape inexistante — et qui cesserait de fonctionner hors ligne ou pendant une panne du fournisseur.
+Un guide dont la disponibilité dépend d'un tiers n'est pas un guide.
+
+La pureté est vérifiée par un test qui lit le **source** du module : une régression y serait
+invisible à l'exécution — la fonction continuerait de rendre un état correct tout en ayant déclenché
+un appel — et parfaitement lisible dans le texte.
+
+### D-231 — La review Architecte reste facultative
+
+**Décision.** Sur une tâche en review sans analyse, le guide recommande `Analyze with Architect`,
+mais l'annonce explicitement comme une **seconde lecture facultative** et laisse `Approve`,
+`Request changes` et `Review changes` immédiatement accessibles.
+
+**Justification.** Rendre l'analyse obligatoire transformerait un outil d'aide en péage : chaque
+review coûterait un appel facturé, et une panne du fournisseur bloquerait la décision. Le workflow
+doit rester complet sans Architecte — pour le coût, pour la disponibilité, et parce que relire
+soi-même reste une manière parfaitement valable de faire une review.
+
+### D-232 — L'exécution courante est l'active, sinon la plus récente
+
+**Décision.** Le guide regarde une seule exécution : la première non terminée s'il y en a une, la
+plus récente sinon. La sélection est exportée et utilisée aussi bien par le chargeur de faits que
+par la dérivation.
+
+**Justification.** Une tâche accumule les exécutions — une initiale, puis des corrections. Prendre
+arbitrairement `RUN-001` raconterait un travail vieux de trois corrections ; prendre la plus récente
+même quand une autre tourne cacherait le processus en cours. Une seule implémentation de la
+sélection, parce que deux — une pour charger les faits, une pour décider — finiraient par désigner
+deux exécutions différentes.
+
+### D-233 — Le verdict exploitable est la dernière analyse terminée
+
+**Décision.** Le guide se fonde sur la dernière analyse **terminée** de l'exécution courante, pas
+sur la dernière tentative. Une tentative ratée est signalée dans l'explication, sans effacer le
+verdict déjà rendu.
+
+**Justification.** Une analyse qui échoue apprend qu'un appel a échoué, pas que la précédente était
+fausse. Effacer un verdict valable parce qu'un réseau a coupé obligerait à racheter une analyse pour
+retrouver une information déjà payée.
+
+L'analyse d'une exécution parente n'est jamais attribuée à sa correction : le diff a changé, les
+validations ont été relancées, et le verdict portait sur un autre travail.
+
+### D-234 — Les checkpoints IA sont visibles, et seulement là où ils existent
+
+**Décision.** `Analyze with Architect` porte « This action will call OpenAI ». `Run Claude Code` et
+`Resume Claude Code` portent « This action will start Claude Code ». `Mark ready`, `Approve`,
+`Reopen`, `Use as feedback` et `Prepare correction` n'en portent aucun.
+
+**Justification.** Un avertissement ne vaut que s'il est rare. Le poser sur toute action apprendrait
+à ne plus le lire, et le poser sur `Prepare correction` — qui ouvre une page où le lancement reste
+un second clic — serait faux. `Use as feedback` non plus ne déclenche rien : il préremplit un
+formulaire.
+
+### D-235 — NOX reste utilisable sans OpenAI et sans runner
+
+**Décision.** Sans configuration OpenAI, le guide recommande `Review manually` et dit pourquoi ;
+`Approve` et `Request changes` restent utilisables. Sans runner, une tâche prête n'affiche aucune
+recommandation de lancement, un blocage explicite prend sa place, et le reste de la page continue de
+fonctionner.
+
+**Justification.** Recommander une action impossible est pire que ne rien recommander : l'utilisateur
+clique, échoue, et cesse de faire confiance au guide. Dire ce qui manque le laisse agir. Les
+opérations purement documentaires ne dépendent d'aucun des deux, et rien ne justifie de les cacher
+parce qu'un processus voisin est arrêté.
+
+### D-236 — Une précondition non vérifiée n'est pas une précondition manquante
+
+**Décision.** Le guide interroge le runner pour connaître l'état réel des préconditions de
+correction. Un refus explicite du runner produit `Blocked` avec sa raison ; une absence de réponse
+produit `Changes requested`, qui renvoie vers la page de préparation.
+
+**Justification.** Un runner injoignable ne dit **rien** de l'état du dossier de travail. Afficher
+« le repository a changé » alors que personne n'a regardé serait une affirmation inventée — la même
+faute que reconstruire un diff historique depuis le disque actuel. Le guide distingue donc « non » de
+« je ne sais pas », et ne fait jamais passer le second pour le premier.
+
+Vérifier plutôt que supposer est ce qui rend `Correction ready` utile : sans cela, le guide dirait la
+même chose que le dossier de travail soit intact ou modifié entre-temps.
+
+### D-237 — Le guide vit sur la page d'une tâche, et nulle part ailleurs
+
+**Décision.** Aucun indicateur « prochaine étape » n'est ajouté au backlog ni à la page d'un projet.
+Les autres surfaces — exécution, review, review Architecte, demande de correction — reçoivent
+seulement un lien de retour vers le guide.
+
+**Justification.** Une colonne « Next » dans le backlog exigerait, pour chaque tâche, ses exécutions,
+ses analyses, ses feedbacks et une sonde du runner. Sans ces faits, elle afficherait une
+recommandation approximative — « Run Claude Code » alors que le runner est arrêté — qui
+contredirait la page de la tâche. Une même tâche ne doit pas dire deux choses différentes selon
+l'endroit où on la regarde.
+
+Un tableau de bord global reste possible plus tard, avec les requêtes qui le rendraient honnête.

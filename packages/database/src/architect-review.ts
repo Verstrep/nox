@@ -342,6 +342,14 @@ export async function getArchitectRunReview(
 export type ArchitectReviewSummary = {
   /** Analyse la plus recente, quelle que soit son issue. */
   latest: ArchitectRunReviewView | null;
+  /**
+   * Derniere analyse **terminee**, porteuse d'un verdict.
+   *
+   * Distincte de `latest`, et la distinction compte : une tentative ratee ne
+   * doit pas effacer un verdict deja rendu. Une analyse qui echoue apprend
+   * qu'un appel a echoue, pas que la precedente etait fausse.
+   */
+  latestCompleted: ArchitectRunReviewView | null;
   count: number;
   analysesLeft: number;
   /** Vrai lorsqu'une analyse est en cours pour cette execution. */
@@ -354,14 +362,28 @@ export async function getArchitectReviewSummary(
 ): Promise<ArchitectReviewSummary> {
   const [run, rows] = await Promise.all([
     db.run.findUnique({ where: { id: runId }, select: { nextArchitectReviewSequence: true } }),
-    db.architectRunReview.findMany({ where: { runId }, orderBy: REVIEW_ORDER, take: 1 }),
+    // La borne d'analyses par execution est deja une constante : lire toutes
+    // les lignes d'un run reste donc une lecture bornee, et c'est elle qui
+    // permet de distinguer la derniere tentative de la derniere analyse
+    // exploitable.
+    db.architectRunReview.findMany({
+      where: { runId },
+      orderBy: REVIEW_ORDER,
+      take: ARCHITECT_REVIEW_LIMITS.analyses,
+    }),
   ]);
 
   const consumed = (run?.nextArchitectReviewSequence ?? 1) - 1;
-  const latest = rows[0] === undefined ? null : toView(rows[0]);
+  const views = rows.map(toView);
+  const latest = views[0] ?? null;
+  const latestCompleted =
+    views.find(
+      (view) => view.status === ARCHITECT_REVIEW_STATUS.COMPLETED && view.finalVerdict !== null,
+    ) ?? null;
 
   return {
     latest,
+    latestCompleted,
     count: consumed,
     analysesLeft: Math.max(0, ARCHITECT_REVIEW_LIMITS.analyses - consumed),
     active: latest !== null && latest.status === ARCHITECT_REVIEW_STATUS.RUNNING,
