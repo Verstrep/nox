@@ -78,7 +78,7 @@ function provider(response: unknown, captures: Capture[] = []): OpenAIArchitectP
 describe("OpenAIArchitectProvider — forme de la requete", () => {
   it("n'y declare aucun outil", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "resp_1", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(
+    await provider({ id: "resp_1", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(
       INPUT,
     );
 
@@ -90,14 +90,14 @@ describe("OpenAIArchitectProvider — forme de la requete", () => {
 
   it("demande explicitement de ne rien stocker", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(INPUT);
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
 
     assert.equal(captures[0]!.body["store"], false);
   });
 
   it("ne reprend aucune conversation precedente", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(INPUT);
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
 
     assert.equal("previous_response_id" in captures[0]!.body, false);
     assert.equal("conversation" in captures[0]!.body, false);
@@ -106,7 +106,7 @@ describe("OpenAIArchitectProvider — forme de la requete", () => {
 
   it("impose le Structured Output strict", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(INPUT);
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
 
     const format = (captures[0]!.body["text"] as { format: Record<string, unknown> }).format;
     assert.equal(format["type"], "json_schema");
@@ -116,14 +116,14 @@ describe("OpenAIArchitectProvider — forme de la requete", () => {
 
   it("utilise le modele fourni par le serveur", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(INPUT);
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
 
     assert.equal(captures[0]!.body["model"], "modele-de-test");
   });
 
   it("desactive tout reessai automatique", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(INPUT);
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
 
     // Chaque generation est facturee : un reessai invisible transformerait un
     // clic en plusieurs appels.
@@ -133,7 +133,7 @@ describe("OpenAIArchitectProvider — forme de la requete", () => {
 
   it("separe instructions et contexte", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(INPUT);
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
 
     assert.equal(captures[0]!.body["instructions"], INPUT.instructions);
     assert.equal(captures[0]!.body["input"], INPUT.input);
@@ -141,7 +141,7 @@ describe("OpenAIArchitectProvider — forme de la requete", () => {
 
   it("ne transmet jamais la cle dans le corps", async () => {
     const captures: Capture[] = [];
-    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskProposal(INPUT);
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
 
     assert.equal(JSON.stringify(captures[0]!.body).includes("cle-de-test"), false);
   });
@@ -152,7 +152,7 @@ describe("OpenAIArchitectProvider — reponses", () => {
     const result = await provider({
       id: "resp_abc",
       output_text: VALID_PROPOSAL,
-    }).generateTaskProposal(INPUT);
+    }).generateTaskTurn(INPUT);
 
     assert.ok(result.ok);
     assert.equal(result.value.responseId, "resp_abc");
@@ -169,7 +169,7 @@ describe("OpenAIArchitectProvider — reponses", () => {
         total_tokens: 1_500,
         input_tokens_details: { cached_tokens: 800 },
       },
-    }).generateTaskProposal(INPUT);
+    }).generateTaskTurn(INPUT);
 
     assert.ok(result.ok);
     assert.deepEqual(result.value.usage, {
@@ -185,7 +185,7 @@ describe("OpenAIArchitectProvider — reponses", () => {
       id: "r",
       output_text: VALID_PROPOSAL,
       usage: { input_tokens: 10 },
-    }).generateTaskProposal(INPUT);
+    }).generateTaskTurn(INPUT);
 
     assert.ok(result.ok);
     // Rien n'est reconstitue : un total deduit serait un chiffre invente.
@@ -198,7 +198,7 @@ describe("OpenAIArchitectProvider — reponses", () => {
   });
 
   it("laisse nulle une consommation absente", async () => {
-    const result = await provider({ id: "r", output_text: VALID_PROPOSAL }).generateTaskProposal(
+    const result = await provider({ id: "r", output_text: VALID_PROPOSAL }).generateTaskTurn(
       INPUT,
     );
     assert.ok(result.ok);
@@ -210,19 +210,19 @@ describe("OpenAIArchitectProvider — reponses", () => {
       id: "r",
       output_text: "",
       output: [{ content: [{ type: "refusal", refusal: "Je ne peux pas repondre." }] }],
-    }).generateTaskProposal(INPUT);
+    }).generateTaskTurn(INPUT);
 
     assert.equal(result.ok, false);
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_REFUSED);
   });
 
   it("refuse une sortie vide", async () => {
-    const result = await provider({ id: "r", output_text: "   " }).generateTaskProposal(INPUT);
+    const result = await provider({ id: "r", output_text: "   " }).generateTaskTurn(INPUT);
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
   });
 
   it("refuse une sortie qui n'est pas du JSON", async () => {
-    const result = await provider({ id: "r", output_text: "pas du json" }).generateTaskProposal(
+    const result = await provider({ id: "r", output_text: "pas du json" }).generateTaskTurn(
       INPUT,
     );
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
@@ -231,31 +231,31 @@ describe("OpenAIArchitectProvider — reponses", () => {
 
 describe("OpenAIArchitectProvider — erreurs", () => {
   it("classe un delai depasse", async () => {
-    const result = await provider(new APIConnectionTimeoutError({})).generateTaskProposal(INPUT);
+    const result = await provider(new APIConnectionTimeoutError({})).generateTaskTurn(INPUT);
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_TIMEOUT);
   });
 
   it("classe une limite d'utilisation", async () => {
     const error = APIError.generate(429, { error: { message: "rate" } }, "rate", new Headers());
-    const result = await provider(error).generateTaskProposal(INPUT);
+    const result = await provider(error).generateTaskTurn(INPUT);
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_RATE_LIMITED);
   });
 
   it("classe une cle refusee", async () => {
     const error = APIError.generate(401, { error: { message: "auth" } }, "auth", new Headers());
-    const result = await provider(error).generateTaskProposal(INPUT);
+    const result = await provider(error).generateTaskTurn(INPUT);
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_AUTH_FAILED);
   });
 
   it("classe une requete refusee pour sa taille", async () => {
     const error = APIError.generate(400, { error: { message: "too long" } }, "long", new Headers());
-    const result = await provider(error).generateTaskProposal(INPUT);
+    const result = await provider(error).generateTaskTurn(INPUT);
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_CONTEXT_TOO_LARGE);
   });
 
   it("classe une panne serveur", async () => {
     const error = APIError.generate(500, { error: { message: "boom" } }, "boom", new Headers());
-    const result = await provider(error).generateTaskProposal(INPUT);
+    const result = await provider(error).generateTaskTurn(INPUT);
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR);
   });
 
@@ -266,7 +266,7 @@ describe("OpenAIArchitectProvider — erreurs", () => {
       "boom",
       new Headers({ authorization: "Bearer cle-de-test" }),
     );
-    const result = await provider(error).generateTaskProposal(INPUT);
+    const result = await provider(error).generateTaskTurn(INPUT);
 
     const serialized = JSON.stringify(result);
     assert.equal(serialized.includes("openai.com"), false);
@@ -282,10 +282,65 @@ describe("FakeArchitectProvider", () => {
       { ok: true, value: { raw: {}, responseId: "r", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cachedInputTokens: null } } },
     ]);
 
-    assert.equal((await fake.generateTaskProposal(INPUT)).ok, false);
-    assert.equal((await fake.generateTaskProposal(INPUT)).ok, true);
+    assert.equal((await fake.generateTaskTurn(INPUT)).ok, false);
+    assert.equal((await fake.generateTaskTurn(INPUT)).ok, true);
     assert.equal(fake.calls.length, 2);
     assert.equal(fake.calls[0]?.model, "modele-de-test");
+  });
+
+  it("separe les appels de conversation et ceux de review", async () => {
+    const response = {
+      ok: true as const,
+      value: {
+        raw: {},
+        responseId: "r",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cachedInputTokens: null },
+      },
+    };
+    const fake = new FakeArchitectProvider([response, response]);
+
+    await fake.generateTaskTurn(INPUT);
+    await fake.analyzeRunReview(INPUT);
+
+    // Un test qui veut prouver « zero appel de review » ne doit pas avoir a
+    // filtrer lui-meme la liste commune.
+    assert.equal(fake.turnCalls.length, 1);
+    assert.equal(fake.reviewCalls.length, 1);
+    assert.equal(fake.calls.length, 2);
+  });
+});
+
+describe("OpenAIArchitectProvider — les deux surfaces", () => {
+  it("envoie le meme corps minimal pour une review que pour un tour", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const provider = new OpenAIArchitectProvider({
+      apiKey: "cle",
+      client: {
+        responses: {
+          create: (body: Record<string, unknown>) => {
+            bodies.push(body);
+            return Promise.resolve({ id: "resp", output_text: "{}", output: [] });
+          },
+        },
+      } as never,
+    });
+
+    await provider.generateTaskTurn(INPUT);
+    await provider.analyzeRunReview({ ...INPUT, schemaName: "nox_architect_run_review" });
+
+    assert.equal(bodies.length, 2);
+    for (const body of bodies) {
+      assert.equal(body["store"], false);
+      assert.ok(!Object.hasOwn(body, "tools"));
+      assert.ok(!Object.hasOwn(body, "tool_choice"));
+      assert.ok(!Object.hasOwn(body, "previous_response_id"));
+      assert.ok(!Object.hasOwn(body, "conversation"));
+      assert.ok(!Object.hasOwn(body, "background"));
+    }
+    // Chaque surface porte son propre schema.
+    const first = bodies[0]?.["text"] as { format: { name: string } };
+    const second = bodies[1]?.["text"] as { format: { name: string } };
+    assert.notEqual(first.format.name, second.format.name);
   });
 });
 

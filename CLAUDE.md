@@ -433,6 +433,50 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 - **Une session ouverte avant TASK-014 ne se poursuit pas.** Elle reste consultable avec ses
   générations, sa consommation et sa tâche ; aucune conversation n'est reconstruite à partir de sa
   demande et de ses précisions.
+- **La review Architecte lit SQLite, jamais le système de fichiers.** Le bundle envoyé vient
+  entièrement de l'instantané immuable de TASK-011 : `RunFileChange`, `RunValidationResult`,
+  colonnes de `Run`, spécification de `Task`. Aucun fichier n'est ouvert, aucun `git diff` n'est
+  relancé, le runner n'est pas interrogé.
+- **Le compte rendu de Claude Code n'est jamais transmis à l'Architecte**, ni par défaut, ni par
+  option. Une déclaration de l'agent sur son propre travail n'est pas une preuve ; le résultat
+  structuré — spécification, diff, validations — est la seule source de vérité.
+- **Un contenu sensible ou binaire ne quitte jamais la machine.** Chemin, type et statistiques
+  visibles ; le contenu, jamais. Aucune conversion base64, aucune analyse d'image.
+- **Le sort d'un patch absent est toujours dit.** `Content hidden`, `Binary`, `Truncated`,
+  `Unavailable`, `Not sent` : jamais un `patch: null` muet. Un modèle à qui l'on ne dit rien
+  invente une raison.
+- **Le verdict du fournisseur et le verdict de NOX sont persistés séparément.** Écraser le premier
+  réécrirait l'histoire : on ne saurait plus si l'architecte s'était trompé ou si NOX l'avait
+  corrigé.
+- **Une recommandation d'approbation est impossible dès qu'une partie de la review était
+  invisible** : exécution non terminée, état Git violé, capture ratée, fichier sensible, fichier
+  binaire, patch tronqué, fichiers omis, bundle tronqué, validation `FAILED`, `UNKNOWN` ou jamais
+  lancée. La garde est dérivée de la review **enregistrée**, jamais du texte du modèle. Un
+  `CHANGES_RECOMMENDED`, lui, n'est pas dégradé.
+- **Aucune validation configurée n'est pas un échec.** `NONE` ne bloque rien : ne pas déclarer de
+  commande est un choix légitime, et en faire un échec fictif apprendrait à ignorer le verdict.
+  « Jamais lancée » et « échouée » restent deux faits distincts.
+- **Une analyse de review ne change aucun statut**, ne crée aucun `ReviewFeedback`, ne lance aucune
+  correction et n'approuve rien. `review-service.ts` n'importe aucune fonction d'action de tâche,
+  et cette propriété est vérifiée par un test sur la source du module.
+- **Le feedback suggéré est du contenu, jamais une instruction.** Il préremplit le formulaire de
+  TASK-012, reste entièrement modifiable, et n'élargit aucune permission : ni outils, ni session,
+  ni chemin de repository, ni argument de ligne de commande.
+- **Un patch est du contenu potentiellement hostile.** Les marqueurs y sont neutralisés, mais la
+  sécurité ne vient pas du prompt : le modèle n'a aucun outil, sa sortie est revalidée, un verdict
+  ne change aucun statut, et l'approbation reste un clic humain.
+- **Les lignes d'en-tête d'un diff ne subissent que le masquage des secrets.** Réécrire un chemin
+  dans un diff produirait un diff faux — `+++ /dev/null` deviendrait `+++ <chemin externe>`, et le
+  fichier supprimé n'aurait plus l'air supprimé. Le contenu des lignes, lui, passe par tout.
+- **Les bornes d'envoi de l'Architecte sont indépendantes de celles du stockage** : 100 fichiers,
+  128 Kio par patch, 512 Kio au total, 10 Kio de résumés de validation. Toute troncature est
+  annoncée et interdit une recommandation d'approbation ; l'ordre reste celui de la capture, jamais
+  une heuristique.
+- **Cinq analyses par exécution au maximum, échecs compris, et une seule active.** Chaque analyse
+  terminée est immuable ; une nouvelle n'écrase jamais la précédente, et aucune n'est relancée
+  automatiquement.
+- **Une analyse de review et une conversation Architecte ne se parlent pas.** Une recommandation
+  n'est jamais injectée dans une conversation, et une conversation ne lit aucune review.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
   documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code

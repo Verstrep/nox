@@ -363,7 +363,7 @@ export async function sendArchitectTurn(
 
   let result;
   try {
-    result = await input.provider.generateTaskProposal({
+    result = await input.provider.generateTaskTurn({
       model: input.model,
       instructions: prepared.turn.prepared.prompt.instructions,
       input: prepared.turn.prepared.prompt.input,

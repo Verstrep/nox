@@ -30,8 +30,13 @@ import type { ArchitectContextChangeKind } from "./architect/context-diff.ts";
 import {
   ARCHITECT_GENERATION_STATUS,
   ARCHITECT_MESSAGE_ROLE,
+  ARCHITECT_REVIEW_BLOCKER,
+  ARCHITECT_REVIEW_SEVERITY,
+  ARCHITECT_REVIEW_STATUS,
+  ARCHITECT_REVIEW_VERDICT,
   ARCHITECT_SESSION_STATUS,
   CLAUDE_RUN_EVENT_KIND,
+  REVIEW_PATCH_STATE,
   RUN_CHANGE_TYPE,
   RUN_STATUS,
   RUN_VALIDATION_STATUS,
@@ -41,8 +46,13 @@ import {
   TASK_STATUS,
   type ArchitectGenerationStatus,
   type ArchitectMessageRole,
+  type ArchitectReviewBlocker,
+  type ArchitectReviewSeverity,
+  type ArchitectReviewStatus,
+  type ArchitectReviewVerdict,
   type ArchitectSessionStatus,
   type ClaudeRunEventKind,
+  type ReviewPatchState,
   type RunChangeType,
   type RunStatus,
   type RunValidationStatus,
@@ -311,6 +321,101 @@ export function architectGenerationStatusLabel(status: ArchitectGenerationStatus
 
 export function architectSourceStatusLabel(status: ArchitectSourceStatus): string {
   return ARCHITECT_SOURCE_STATUS_LABELS[status];
+}
+
+/**
+ * Verdicts d'une review Architecte.
+ *
+ * Les trois libelles portent le mot « recommended » ou « required » : aucun ne
+ * doit pouvoir se lire comme une decision. « Approved » tout court laisserait
+ * croire que quelque chose a ete approuve, alors que rien ne l'a ete.
+ */
+const ARCHITECT_REVIEW_VERDICT_LABELS: Record<ArchitectReviewVerdict, string> = {
+  [ARCHITECT_REVIEW_VERDICT.APPROVE_RECOMMENDED]: "Approve recommended",
+  [ARCHITECT_REVIEW_VERDICT.CHANGES_RECOMMENDED]: "Changes recommended",
+  [ARCHITECT_REVIEW_VERDICT.HUMAN_REVIEW_REQUIRED]: "Human review required",
+};
+
+const ARCHITECT_REVIEW_SEVERITY_LABELS: Record<ArchitectReviewSeverity, string> = {
+  [ARCHITECT_REVIEW_SEVERITY.BLOCKER]: "Blocker",
+  [ARCHITECT_REVIEW_SEVERITY.MAJOR]: "Major",
+  [ARCHITECT_REVIEW_SEVERITY.MINOR]: "Minor",
+  [ARCHITECT_REVIEW_SEVERITY.NOTE]: "Note",
+};
+
+const ARCHITECT_REVIEW_STATUS_LABELS: Record<ArchitectReviewStatus, string> = {
+  [ARCHITECT_REVIEW_STATUS.RUNNING]: "Running",
+  [ARCHITECT_REVIEW_STATUS.COMPLETED]: "Completed",
+  [ARCHITECT_REVIEW_STATUS.REFUSED]: "Refused",
+  [ARCHITECT_REVIEW_STATUS.FAILED]: "Failed",
+};
+
+/**
+ * Sort du patch d'un fichier dans le bundle.
+ *
+ * Cinq libelles distincts, parce que les cinq situations demandent cinq
+ * conclusions differentes. « Contenu indisponible » partout laisserait croire a
+ * une panne la ou il y a une decision — masquer un `.env` en est une.
+ */
+const REVIEW_PATCH_STATE_LABELS: Record<ReviewPatchState, string> = {
+  [REVIEW_PATCH_STATE.INCLUDED]: "Included",
+  [REVIEW_PATCH_STATE.SENSITIVE_HIDDEN]: "Content hidden",
+  [REVIEW_PATCH_STATE.BINARY_UNAVAILABLE]: "Binary",
+  [REVIEW_PATCH_STATE.TRUNCATED]: "Truncated",
+  [REVIEW_PATCH_STATE.UNAVAILABLE]: "Unavailable",
+  [REVIEW_PATCH_STATE.OMITTED_BY_LIMIT]: "Not sent",
+};
+
+/**
+ * Faits qui interdisent une recommandation d'approbation.
+ *
+ * Chaque phrase decrit ce que l'architecte **n'a pas pu voir**, ou ce que la
+ * review dit de certain. Aucune ne porte de jugement sur le travail : ce n'est
+ * pas le role de la garde, et ce serait exactement l'endroit ou une machine
+ * n'aurait pas a en avoir.
+ */
+const ARCHITECT_REVIEW_BLOCKER_LABELS: Record<ArchitectReviewBlocker, string> = {
+  [ARCHITECT_REVIEW_BLOCKER.RUN_NOT_COMPLETED]:
+    "Cette execution ne s'est pas terminee normalement : les changements peuvent etre partiels.",
+  [ARCHITECT_REVIEW_BLOCKER.REVIEW_UNRELIABLE]:
+    "L'etat Git a ete modifie d'une facon interdite pendant l'execution : la review ne decrit plus seulement ce que l'agent a produit.",
+  [ARCHITECT_REVIEW_BLOCKER.REVIEW_ERROR]:
+    "La capture de review a rencontre une erreur : son contenu peut etre incomplet.",
+  [ARCHITECT_REVIEW_BLOCKER.SENSITIVE_FILE]:
+    "Un fichier sensible a ete modifie et son contenu n'est jamais transmis.",
+  [ARCHITECT_REVIEW_BLOCKER.BINARY_FILE]:
+    "Un fichier binaire a ete modifie et son contenu n'est pas disponible.",
+  [ARCHITECT_REVIEW_BLOCKER.TRUNCATED_PATCH]:
+    "Au moins un diff a ete tronque a la capture : l'architecte n'en a lu qu'une partie.",
+  [ARCHITECT_REVIEW_BLOCKER.OMITTED_FILES]:
+    "Des fichiers changes ne figurent pas dans la review enregistree.",
+  [ARCHITECT_REVIEW_BLOCKER.ARCHITECT_TRUNCATED]:
+    "Cette review contient plus d'informations que NOX n'en a envoyees a l'architecte.",
+  [ARCHITECT_REVIEW_BLOCKER.VALIDATION_FAILED]: "Une commande de validation a echoue.",
+  [ARCHITECT_REVIEW_BLOCKER.VALIDATION_UNKNOWN]:
+    "Une commande de validation a demarre sans qu'un resultat exploitable arrive.",
+  [ARCHITECT_REVIEW_BLOCKER.VALIDATION_NOT_RUN]:
+    "Une commande de validation attendue n'a jamais ete lancee.",
+};
+
+export function architectReviewVerdictLabel(verdict: ArchitectReviewVerdict): string {
+  return ARCHITECT_REVIEW_VERDICT_LABELS[verdict];
+}
+
+export function architectReviewSeverityLabel(severity: ArchitectReviewSeverity): string {
+  return ARCHITECT_REVIEW_SEVERITY_LABELS[severity];
+}
+
+export function architectReviewStatusLabel(status: ArchitectReviewStatus): string {
+  return ARCHITECT_REVIEW_STATUS_LABELS[status];
+}
+
+export function reviewPatchStateLabel(state: ReviewPatchState): string {
+  return REVIEW_PATCH_STATE_LABELS[state];
+}
+
+export function architectReviewBlockerLabel(blocker: ArchitectReviewBlocker): string {
+  return ARCHITECT_REVIEW_BLOCKER_LABELS[blocker];
 }
 
 export function taskStatusLabel(status: TaskStatus): string {

@@ -13,6 +13,14 @@ type RequestChangesFormProps = {
   /** Retour vers la review, pour le bouton `Cancel`. */
   cancelHref: string;
   maxLength: number;
+  /**
+   * Texte propose par une analyse Architecte, ou `null`.
+   *
+   * Une valeur par defaut, jamais une valeur imposee : le champ reste
+   * entierement modifiable, et l'utilisateur peut l'effacer. C'est **son** texte
+   * qui sera enregistre, quelle qu'en soit l'origine.
+   */
+  suggestedFeedback?: string | null;
 };
 
 /**
@@ -32,6 +40,7 @@ export function RequestChangesForm({
   runId,
   cancelHref,
   maxLength,
+  suggestedFeedback = null,
 }: RequestChangesFormProps) {
   const [state, formAction, pending] = useActionState(
     requestChangesAction,
@@ -73,7 +82,7 @@ export function RequestChangesForm({
           rows={10}
           required
           maxLength={maxLength}
-          defaultValue={state.text}
+          defaultValue={state.text === "" ? (suggestedFeedback ?? "") : state.text}
           aria-describedby={state.error === null ? helpId : `${errorId} ${helpId}`}
           placeholder="Explique precisement ce qui doit etre corrige dans cette review…"
           className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm leading-relaxed text-zinc-200 placeholder:text-zinc-700 focus-visible:border-zinc-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"

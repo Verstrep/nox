@@ -15,6 +15,7 @@ import {
   EXTERNAL_PATH_PLACEHOLDER,
   SECRET_PLACEHOLDER,
   collectArchitectSecrets,
+  createArchitectPatchSanitizer,
   sanitizeArchitectContext,
 } from "./sanitize.ts";
 
@@ -158,5 +159,63 @@ describe("sanitizeArchitectContext — Markdown preserve", () => {
 
   it("rend la chaine vide telle quelle", () => {
     assert.equal(clean(""), "");
+  });
+});
+
+describe("createArchitectPatchSanitizer", () => {
+  const cleanPatch = createArchitectPatchSanitizer({
+    repositoryRoot: ROOT,
+    environment: ENVIRONMENT,
+    caseInsensitivePaths: true,
+  });
+
+  it("preserve les en-tetes d'un diff, y compris /dev/null", () => {
+    const patch = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "deleted file mode 100644",
+      "index 1234567..0000000",
+      "--- a/src/a.ts",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-const a = 1;",
+      "",
+    ].join("\n");
+
+    // Reecrire un chemin dans un diff produirait un diff faux : le fichier
+    // supprime n'aurait plus l'air supprime.
+    assert.equal(cleanPatch(patch), patch);
+  });
+
+  it("preserve les signes, les espaces et l'indentation", () => {
+    const patch = "@@ -1,3 +1,3 @@\n   const a = 1;\n-  const b = 2;\n+  const b = 3;\n";
+    assert.equal(cleanPatch(patch), patch);
+  });
+
+  it("masque un chemin absolu exterieur present dans le contenu", () => {
+    const cleaned = cleanPatch('@@ -1 +1 @@\n+const p = "/etc/nox/config.json";\n');
+    assert.ok(cleaned.includes(EXTERNAL_PATH_PLACEHOLDER));
+    assert.ok(!cleaned.includes("/etc/nox"));
+  });
+
+  it("rend relatif un chemin du repository present dans le contenu", () => {
+    const cleaned = cleanPatch(`@@ -1 +1 @@\n+// ${ROOT}/apps/web/page.tsx\n`);
+    assert.match(cleaned, /apps\/web\/page\.tsx/u);
+    assert.ok(!cleaned.includes(ROOT));
+  });
+
+  it("masque les secrets de NOX, y compris dans un en-tete", () => {
+    const token = ENVIRONMENT["NOX_RUNNER_TOKEN"] ?? "";
+    const cleaned = cleanPatch(`diff --git a/x b/x\n@@ -1 +1 @@\n+const t = "${token}";\n`);
+    assert.ok(!cleaned.includes(token));
+    assert.ok(cleaned.includes(SECRET_PLACEHOLDER));
+  });
+
+  it("retire les caracteres de controle sans toucher aux sauts de ligne", () => {
+    const patch = `@@ -1 +1 @@\n+a${String.fromCodePoint(0x07)}b\n`;
+    assert.equal(cleanPatch(patch), "@@ -1 +1 @@\n+ab\n");
+  });
+
+  it("rend la chaine vide telle quelle", () => {
+    assert.equal(cleanPatch(""), "");
   });
 });

@@ -164,6 +164,68 @@ export function collectArchitectSecrets(
 
 export type ArchitectSanitizer = (value: string) => string;
 
+/** Les deux etapes du nettoyage, separees pour que les patches n'en prennent qu'une. */
+type SanitizerSteps = {
+  /** Chemins : racine du repository rendue relative, absolus exterieurs masques. */
+  paths: (text: string) => string;
+  /** Secrets et caracteres de controle. Ne touche a aucun chemin. */
+  secrets: (text: string) => string;
+};
+
+function buildSteps(options: ArchitectSanitizerOptions): SanitizerSteps {
+  const caseInsensitive = options.caseInsensitivePaths ?? process.platform === "win32";
+  const rootPattern = buildRootPattern(options.repositoryRoot, caseInsensitive);
+  const secretValues = collectArchitectSecrets(options.environment);
+  const secretNames = /\bNOX_[A-Z0-9_]+\b/gu;
+
+  return {
+    paths: (value: string): string => {
+      let text = value;
+
+      // 1. La racine du repository devient un chemin relatif. En premier : sinon
+      //    l'etape suivante masquerait ces chemins comme s'ils venaient d'ailleurs.
+      if (rootPattern !== null) {
+        text = text.replace(rootPattern, (_match, rest: string | undefined) => {
+          const relative = (rest ?? "").replace(/\\/gu, "/");
+          return relative === "" ? REPOSITORY_ROOT_PLACEHOLDER : relative;
+        });
+      }
+
+      // 2. Ce qui reste d'absolu ne peut venir que d'ailleurs : il nomme un
+      //    disque, un utilisateur, une organisation de machine.
+      for (const pattern of EXTERNAL_PATH_PATTERNS) {
+        text = text.replace(pattern, EXTERNAL_PATH_PLACEHOLDER);
+      }
+      return text;
+    },
+
+    secrets: (value: string): string => {
+      let text = value;
+
+      // 3. Les secrets connus de NOX, par valeur puis par nom.
+      for (const secret of secretValues) {
+        text = text.split(secret).join(SECRET_PLACEHOLDER);
+      }
+      text = text.replace(secretNames, SECRET_PLACEHOLDER);
+
+      // 4. Les formes de secret reconnaissables, meme inconnues de NOX.
+      text = text.replace(PEM_BLOCK, SECRET_PLACEHOLDER);
+      for (const pattern of SECRET_PATTERNS) {
+        text = text.replace(pattern, SECRET_PLACEHOLDER);
+      }
+      text = text.replace(
+        SECRET_ASSIGNMENT,
+        (_match, name: string, separator: string, quote: string) =>
+          `${name}${separator}${quote}${SECRET_PLACEHOLDER}${quote}`,
+      );
+
+      // 5. Ce qui pourrait afficher autre chose que le texte reel. Les espaces et
+      //    les sauts de ligne, eux, ne sont pas touches : ils portent la structure.
+      return text.replace(CONTROL_CHARACTERS, "");
+    },
+  };
+}
+
 /**
  * Construit le nettoyeur d'un projet donne.
  *
@@ -172,53 +234,48 @@ export type ArchitectSanitizer = (value: string) => string;
  * simplement les masquer.
  */
 export function createArchitectSanitizer(options: ArchitectSanitizerOptions): ArchitectSanitizer {
-  const caseInsensitive = options.caseInsensitivePaths ?? process.platform === "win32";
-  const rootPattern = buildRootPattern(options.repositoryRoot, caseInsensitive);
-  const secrets = collectArchitectSecrets(options.environment);
-  const secretNames = /\bNOX_[A-Z0-9_]+\b/gu;
+  const steps = buildSteps(options);
+  return (value: string): string => (value === "" ? "" : steps.secrets(steps.paths(value)));
+}
+
+/**
+ * Lignes qu'un diff unifie produit lui-meme, et dont les chemins viennent de Git.
+ *
+ * Elles ne peuvent pas porter de chemin absolu de la machine : TASK-011
+ * garantit que les chemins d'une review sont relatifs au repository, et le
+ * contrat partage refuse un chemin absolu avant meme l'ecriture en base.
+ */
+const DIFF_HEADER = /^(?:diff --git |index |--- |\+\+\+ |@@ |Binary files |new file |deleted file |old mode |new mode |similarity index |rename from |rename to |GIT binary patch)/u;
+
+/**
+ * Construit le nettoyeur de patches.
+ *
+ * ## Pourquoi il differe du nettoyeur de contexte
+ *
+ * Parce qu'un diff est un format, pas de la prose. Le rendre relatif ou masquer
+ * ses chemins produirait un diff **faux** — c'est l'invariant pose par TASK-011,
+ * et il ne s'assouplit pas parce que le destinataire change. Concretement,
+ * `+++ /dev/null` deviendrait `+++ <chemin externe>` : le fichier supprime
+ * n'aurait plus l'air supprime.
+ *
+ * Les lignes d'en-tete ne traversent donc que le masquage des secrets et le
+ * retrait des caracteres de controle. Le **contenu** des lignes, lui, passe par
+ * tout : un fichier source peut parfaitement contenir un chemin de la machine,
+ * et celui-la n'a aucune raison de partir.
+ */
+export function createArchitectPatchSanitizer(
+  options: ArchitectSanitizerOptions,
+): ArchitectSanitizer {
+  const steps = buildSteps(options);
 
   return (value: string): string => {
     if (value === "") {
       return "";
     }
-
-    let text = value;
-
-    // 1. La racine du repository devient un chemin relatif. En premier : sinon
-    //    l'etape suivante masquerait ces chemins comme s'ils venaient d'ailleurs.
-    if (rootPattern !== null) {
-      text = text.replace(rootPattern, (_match, rest: string | undefined) => {
-        const relative = (rest ?? "").replace(/\\/gu, "/");
-        return relative === "" ? REPOSITORY_ROOT_PLACEHOLDER : relative;
-      });
-    }
-
-    // 2. Ce qui reste d'absolu ne peut venir que d'ailleurs : il nomme un
-    //    disque, un utilisateur, une organisation de machine.
-    for (const pattern of EXTERNAL_PATH_PATTERNS) {
-      text = text.replace(pattern, EXTERNAL_PATH_PLACEHOLDER);
-    }
-
-    // 3. Les secrets connus de NOX, par valeur puis par nom.
-    for (const secret of secrets) {
-      text = text.split(secret).join(SECRET_PLACEHOLDER);
-    }
-    text = text.replace(secretNames, SECRET_PLACEHOLDER);
-
-    // 4. Les formes de secret reconnaissables, meme inconnues de NOX.
-    text = text.replace(PEM_BLOCK, SECRET_PLACEHOLDER);
-    for (const pattern of SECRET_PATTERNS) {
-      text = text.replace(pattern, SECRET_PLACEHOLDER);
-    }
-    text = text.replace(
-      SECRET_ASSIGNMENT,
-      (_match, name: string, separator: string, quote: string) =>
-        `${name}${separator}${quote}${SECRET_PLACEHOLDER}${quote}`,
-    );
-
-    // 5. Ce qui pourrait afficher autre chose que le texte reel. Les espaces et
-    //    les sauts de ligne, eux, ne sont pas touches : ils sont le Markdown.
-    return text.replace(CONTROL_CHARACTERS, "");
+    return value
+      .split("\n")
+      .map((line) => (DIFF_HEADER.test(line) ? steps.secrets(line) : steps.secrets(steps.paths(line))))
+      .join("\n");
   };
 }
 

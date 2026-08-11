@@ -793,6 +793,14 @@ export const ARCHITECT_ERROR = {
   ARCHITECT_CONVERSATION_TOO_LARGE: "ARCHITECT_CONVERSATION_TOO_LARGE",
   /** Session ouverte avant TASK-014 : consultable, jamais poursuivie. */
   ARCHITECT_SESSION_LEGACY: "ARCHITECT_SESSION_LEGACY",
+  /** Aucun instantane de review exploitable pour cette execution. */
+  ARCHITECT_REVIEW_UNAVAILABLE: "ARCHITECT_REVIEW_UNAVAILABLE",
+  /** Le bundle prepare ne correspond plus a l'apercu relu. */
+  ARCHITECT_REVIEW_CHANGED: "ARCHITECT_REVIEW_CHANGED",
+  /** L'execution a atteint son nombre maximal d'analyses. */
+  ARCHITECT_REVIEW_LIMIT: "ARCHITECT_REVIEW_LIMIT",
+  /** Une analyse est deja en cours pour cette execution. */
+  ARCHITECT_REVIEW_ACTIVE: "ARCHITECT_REVIEW_ACTIVE",
 } as const;
 
 export type ArchitectErrorCode = (typeof ARCHITECT_ERROR)[keyof typeof ARCHITECT_ERROR];

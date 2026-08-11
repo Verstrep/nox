@@ -1,5 +1,10 @@
 import { REVIEW_FEEDBACK_LIMITS, checkResumeCandidate } from "@nox/shared";
-import { getDatabaseClient, getRunResumeContext, hasActiveRun } from "@nox/database";
+import {
+  getArchitectRunReview,
+  getDatabaseClient,
+  getRunResumeContext,
+  hasActiveRun,
+} from "@nox/database";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -21,10 +26,13 @@ import { RequestChangesForm } from "./RequestChangesForm";
  */
 export default async function RequestChangesPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string; taskId: string; runId: string }>;
+  searchParams: Promise<{ analysis?: string }>;
 }) {
   const { id, taskId, runId } = await params;
+  const { analysis: analysisId } = await searchParams;
 
   const project = await loadProject(id);
   if (project === null) {
@@ -59,6 +67,17 @@ export default async function RequestChangesPage({
     hasCorrection: context.hasCorrection,
   });
 
+  // Feedback suggere par une analyse Architecte, lorsque l'utilisateur arrive
+  // depuis « Use as feedback ». Le texte est relu **en base** a partir d'un
+  // identifiant : le navigateur ne transporte jamais le feedback lui-meme, et
+  // une analyse d'une autre execution ne prefixe rien du tout.
+  const suggested =
+    analysisId === undefined || analysisId === ""
+      ? null
+      : await getArchitectRunReview(db, analysisId);
+  const suggestedFeedback =
+    suggested !== null && suggested.runId === run.id ? suggested.feedback : null;
+
   const back = reviewUrl(project.id, task.id, run.id);
 
   return (
@@ -79,6 +98,18 @@ export default async function RequestChangesPage({
       </header>
 
       <main className="flex flex-col gap-6">
+        {suggestedFeedback === null ? null : (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3 text-sm leading-relaxed text-zinc-400">
+            <p className="font-medium text-zinc-200">Feedback propose par l&apos;Architecte</p>
+            <p className="mt-1">
+              Le champ ci-dessous est prerempli avec le texte de{" "}
+              <span className="font-mono text-zinc-300">{suggested?.code}</span>. Relisez-le,
+              modifiez-le ou effacez-le : c&apos;est votre texte qui sera transmis, et rien
+              n&apos;est encore lance.
+            </p>
+          </div>
+        )}
+
         <SectionCard
           title="Ce qui va se passer"
           description="Claude Code reprendra la session de cette execution, pas une conversation neuve."
@@ -106,6 +137,7 @@ export default async function RequestChangesPage({
               runId={run.id}
               cancelHref={back}
               maxLength={REVIEW_FEEDBACK_LIMITS.maxLength}
+              suggestedFeedback={suggestedFeedback}
             />
           </SectionCard>
         ) : (

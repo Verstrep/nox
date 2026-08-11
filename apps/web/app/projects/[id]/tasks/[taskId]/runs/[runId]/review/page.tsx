@@ -8,6 +8,7 @@ import {
   type RunValidationResultView,
 } from "@nox/shared";
 import {
+  getArchitectReviewSummary,
   getDatabaseClient,
   getFeedbackForCorrectionRun,
   getRunResumeContext,
@@ -21,6 +22,8 @@ import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatIsoDateTime } from "@/lib/format";
 import {
+  architectReviewStatusLabel,
+  architectReviewVerdictLabel,
   runChangeTypeLabel,
   runChangeTypeMark,
   runStatusLabel,
@@ -28,6 +31,12 @@ import {
   runValidationSummaryLabel,
   taskStatusLabel,
 } from "@/lib/labels";
+import {
+  architectAnalysisUrl,
+  architectReviewEligibility,
+  architectReviewIneligibleMessage,
+  architectReviewUrl,
+} from "@/lib/architect/review-display";
 import { requestChangesUrl, resumeRefusalMessage } from "@/lib/correction-display";
 import { loadProject } from "@/lib/projects";
 import { formatDuration, runStatusTone, runUrl, shortSha } from "@/lib/run-display";
@@ -210,6 +219,11 @@ export default async function ReviewPage({
   const requestedChanges = await listFeedbacksForSourceRun(db, run.id);
   const correctionOf =
     run.parentRunId === null ? null : await getFeedbackForCorrectionRun(db, run.id);
+
+  // Analyses Architecte de cette execution. Une lecture, jamais un appel : ouvrir
+  // cette page ne declenche rien chez le fournisseur.
+  const architect = await getArchitectReviewSummary(db, run.id);
+  const architectEligibility = architectReviewEligibility(run.status, review?.capturedAt ?? null);
 
   const resumeContext = await getRunResumeContext(db, run.id);
   const resumeRefusal =
@@ -516,6 +530,68 @@ export default async function ReviewPage({
             </ul>
           </SectionCard>
         )}
+
+        <SectionCard
+          title="Architect review"
+          description="Une seconde lecture, sur demande explicite. L'architecte recommande ; vous decidez."
+        >
+          {architectEligibility !== "eligible" ? (
+            <p className="text-sm leading-relaxed text-zinc-400">
+              {architectReviewIneligibleMessage(architectEligibility)}
+            </p>
+          ) : architect.latest === null ? (
+            <>
+              <p className="text-sm leading-relaxed text-zinc-400">
+                Get a second opinion from the NOX Architect using the task specification, the stored
+                Git review and structured validation results. Aucun appel n&apos;est fait avant que
+                vous ne l&apos;ayez explicitement demande.
+              </p>
+              <Link
+                href={architectReviewUrl(project.id, task.id, run.id)}
+                className="mt-5 inline-block rounded-md border border-zinc-600 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-500 hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+              >
+                Analyze with Architect
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="text-base font-medium text-zinc-100">
+                {architect.latest.finalVerdict === null
+                  ? architectReviewStatusLabel(architect.latest.status)
+                  : architectReviewVerdictLabel(architect.latest.finalVerdict)}
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">
+                {architect.latest.findings.length}{" "}
+                {architect.latest.findings.length === 1 ? "finding" : "findings"} · Analyzed with{" "}
+                <span className="font-mono">{architect.latest.model}</span> ·{" "}
+                {architect.latest.usage.totalTokens === null
+                  ? "consommation non fournie"
+                  : `${architect.latest.usage.totalTokens.toLocaleString("fr-FR")} jetons`}
+              </p>
+
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <Link
+                  href={architectAnalysisUrl(project.id, task.id, run.id, architect.latest.id)}
+                  className="rounded-md border border-zinc-600 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-500 hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+                >
+                  Open analysis
+                </Link>
+                <Link
+                  href={architectReviewUrl(project.id, task.id, run.id)}
+                  className="rounded-md border border-zinc-800 px-4 py-2 text-sm text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+                >
+                  Analyze again
+                </Link>
+              </div>
+
+              <p className="mt-4 text-xs leading-relaxed text-zinc-600">
+                {architect.count} analyse{architect.count > 1 ? "s" : ""} sur cette execution ·{" "}
+                {architect.analysesLeft} restante{architect.analysesLeft > 1 ? "s" : ""}. Aucune
+                analyse ne change le statut de la tache.
+              </p>
+            </>
+          )}
+        </SectionCard>
 
         {task.status === TASK_STATUS.REVIEW ? (
           <SectionCard

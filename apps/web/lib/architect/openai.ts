@@ -153,7 +153,23 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
       });
   }
 
-  async generateTaskProposal(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+  generateTaskTurn(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+
+  analyzeRunReview(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+
+  /**
+   * Le seul endroit ou NOX parle au fournisseur.
+   *
+   * Les deux surfaces publiques passent par ici, et c'est voulu : `store`,
+   * l'absence d'outils et l'absence de reessai n'ont qu'une implementation.
+   * Deux copies finiraient par diverger, et la divergence serait exactement
+   * celle qui compte.
+   */
+  async #call(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
     let response: ResponseLike;
 
     try {

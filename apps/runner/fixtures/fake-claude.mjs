@@ -59,6 +59,12 @@
  *                      fichier reste intact ; meme enchainement de validation,
  *                      suivi de deux commandes Git de lecture non enregistrees
  *
+ * Mode ajoute par TASK-015 :
+ *
+ *   stream-failing-validation  un travail livre avec une validation qui echoue,
+ *                              seule sur sa ligne — de quoi verifier qu'une
+ *                              recommandation d'approbation devient impossible
+ *
  * Ces modes n'existent que pour les tests. Aucun n'est atteignable en
  * production : le mode par defaut reste `success`.
  */
@@ -391,6 +397,35 @@ switch (mode) {
       JSON.stringify(assistantText("J'ai ecrit le README et une note.")),
     ];
     for (const line of lines) {
+      process.stdout.write(`${line}\n`);
+    }
+    process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));
+    process.exit(0);
+    break;
+  }
+
+  case "stream-failing-validation": {
+    // Un travail livre avec une validation qui **echoue**. La distinction
+    // compte : « echouee » et « jamais lancee » sont deux faits differents, et
+    // seul le premier prouve que la commande a bien tourne.
+    const failingRoot = process.cwd();
+    writeFileSync(
+      path.join(failingRoot, "README.md"),
+      "# Depot de test\n\nUne ligne avec un espace en trop \n",
+      "utf8",
+    );
+
+    const failingValidation = process.env.FAKE_CLAUDE_VALIDATION ?? "git diff --check";
+    const failingLines = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: SESSION }),
+      JSON.stringify(toolUse("fv-1", "Edit", { file_path: "README.md" })),
+      JSON.stringify(toolResult("fv-1")),
+      // Seule sur sa ligne : l'issue est alors imputable sans ambiguite.
+      JSON.stringify(toolUse("fv-2", "Bash", { command: failingValidation })),
+      JSON.stringify(realToolResult("fv-2", "README.md:3: trailing whitespace.", true)),
+      JSON.stringify(assistantText("La validation signale un espace en trop.")),
+    ];
+    for (const line of failingLines) {
       process.stdout.write(`${line}\n`);
     }
     process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));

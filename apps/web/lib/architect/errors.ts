@@ -73,6 +73,23 @@ const MESSAGES: Record<ArchitectErrorCode, string> = {
   [ARCHITECT_ERROR.ARCHITECT_SESSION_LEGACY]:
     "Cette conversation a ete ouverte avant l'historique conversationnel et reste en lecture " +
     "seule. Ouvrez une nouvelle conversation pour discuter avec l'architecte.",
+
+  [ARCHITECT_ERROR.ARCHITECT_REVIEW_UNAVAILABLE]:
+    "Cette execution ne possede pas de snapshot de review suffisamment detaille pour une analyse " +
+    "Architecte. NOX ne reconstruit pas un diff depuis le repository actuel : le resultat serait " +
+    "celui d'aujourd'hui, pas celui de l'execution.",
+
+  [ARCHITECT_ERROR.ARCHITECT_REVIEW_CHANGED]:
+    "Les donnees de cette review ne correspondent plus a l'apercu que vous avez relu. Aucun appel " +
+    "n'a ete fait. Rouvrez la preparation pour repartir d'un apercu a jour.",
+
+  [ARCHITECT_ERROR.ARCHITECT_REVIEW_LIMIT]:
+    "Cette execution a atteint son nombre maximal d'analyses. Relisez les analyses existantes : " +
+    "elles restent toutes consultables.",
+
+  [ARCHITECT_ERROR.ARCHITECT_REVIEW_ACTIVE]:
+    "Une analyse est deja en cours pour cette execution. Attendez qu'elle se termine avant d'en " +
+    "lancer une autre.",
 };
 
 /** Phrase affichee pour un code de l'Architecte. */

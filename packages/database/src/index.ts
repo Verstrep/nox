@@ -102,6 +102,21 @@ export {
 } from "./architect.js";
 
 export {
+  InvalidArchitectReviewRecordError,
+  finishArchitectRunReview,
+  formatArchitectReviewCode,
+  getArchitectReviewSummary,
+  getArchitectRunReview,
+  listArchitectRunReviews,
+  startArchitectRunReview,
+  type ArchitectReviewSummary,
+  type ArchitectRunReviewView,
+  type FinishArchitectReviewInput,
+  type StartArchitectReviewInput,
+  type StartArchitectReviewResult,
+} from "./architect-review.js";
+
+export {
   cancelTaskCorrection,
   createReviewFeedback,
   getFeedbackForCorrectionRun,

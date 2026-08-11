@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-014 — conversation Architecte persistante et évolution explicite du contexte**.
+Dernière étape terminée : **TASK-015 — review Architecte assistée et feedback de correction**.
 
 | Élément | État |
 | --- | --- |
@@ -36,10 +36,11 @@ Dernière étape terminée : **TASK-014 — conversation Architecte persistante 
 | Feedback de review et reprise ciblée d'une session Claude | ✅ fonctionnelles |
 | Architecte OpenAI : contexte contrôlé, proposition de tâche | ✅ fonctionnel |
 | Conversation Architecte multi-tours, contexte comparé entre deux tours | ✅ fonctionnelle |
+| Review Architecte assistée d'un run, feedback de correction suggéré | ✅ fonctionnelle |
 | Renommage, déplacement d'un document | ⬜ non commencés |
 | Archivage, suppression d'une tâche avec exécutions | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
-| Review Architecte assistée d'un run Claude | ⬜ non commencée |
+| Boucle de développement guidée avec checkpoints humains | ⬜ non commencée |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
@@ -1114,6 +1115,106 @@ ressemblance :
   quoi faire du repository avant un futur lancement. NOX ne le nettoie pas, et la vérification
   préalable refusera de partir tant qu'il sera sale — ce qui est la bonne façon de l'apprendre.
 
+## Faire relire une exécution : `Analyze with Architect`
+
+Depuis `Review changes`, une section **`Architect review`** propose une seconde lecture. Elle est
+facultative, et elle ne part **jamais** toute seule.
+
+```text
+Review changes
+      ↓
+Analyze with Architect   ← aucun appel au fournisseur
+      ↓
+Preview exacte de ce qui sera envoyé
+      ↓
+Analyze review           ← un clic, un appel
+      ↓
+Approve recommended · Changes recommended · Human review required
+      ↓
+décision humaine
+```
+
+### Ce qu'il relit, et ce qu'il ne relit pas
+
+L'architecte reçoit la **review enregistrée**, pas votre dossier de travail actuel : la
+spécification de la tâche avec ses critères numérotés `AC1`, `AC2`…, l'instantané Git pris à la
+fin de l'exécution, les patches affichables et le résultat des commandes de validation.
+
+| Envoyé | Jamais envoyé |
+| --- | --- |
+| spécification de la tâche et critères numérotés | le compte rendu final de Claude Code |
+| patches non sensibles, déjà nettoyés | le contenu d'un fichier sensible ou binaire |
+| validations, code de sortie, résumé de sortie | l'identifiant de session Claude |
+| issue de l'exécution, durée, `HEAD` courts | le coût rapporté, le prompt d'exécution |
+
+Le compte rendu de Claude Code est exclu volontairement. Il peut dire « tout est terminé » sans
+que ce soit vrai : c'est une déclaration de l'agent sur son propre travail, pas une preuve. Ce que
+l'architecte doit confronter, c'est la spécification, le diff et les validations.
+
+### La preview, avant tout appel
+
+`Analyze with Architect` ouvre une page de préparation qui ne déclenche rien. Vous y voyez la
+tâche, chaque fichier avec le sort de son patch, chaque validation, les bornes atteintes — et un
+dépliant montre le **texte exact** qui partira. C'est le même pipeline qui construit cette page et
+la requête : ce que vous lisez est ce qui part.
+
+```text
+README.md        Modified   Included       1.2 Kio
+note.md          Untracked  Included        420 car.
+.env             Modified   Content hidden      —
+assets/logo.png  Modified   Binary              —
+```
+
+Cinq sorts distincts, parce qu'ils appellent cinq conclusions différentes : `Included`,
+`Content hidden`, `Binary`, `Truncated`, `Not sent`. « Contenu indisponible » partout laisserait
+croire à une panne là où il y a une décision — masquer un `.env` en est une.
+
+### Les trois verdicts
+
+| Verdict | Ce qu'il veut dire |
+| --- | --- |
+| `Approve recommended` | sur les informations fournies, rien ne nécessite de correction |
+| `Changes recommended` | des changements précis devraient être apportés, avec un feedback |
+| `Human review required` | les données ne permettent pas de recommander quoi que ce soit |
+
+**`Approve recommended` n'approuve rien.** La tâche reste en `Review`, et c'est vous qui cliquerez
+`Approve`. Il n'existe pas de bouton qui ferait les deux à la fois, et il ne doit pas en exister.
+
+Chaque observation porte une gravité — `Blocker`, `Major`, `Minor`, `Note` — et peut désigner un
+fichier de la review et un critère de la tâche. Les deux sont **vérifiés** : un chemin absent de
+la review ou un critère hors plage font refuser la réponse entière.
+
+### Quand NOX refuse l'approbation recommandée
+
+Un fichier sensible, un binaire, un diff tronqué, des fichiers omis, une validation échouée,
+inconnue ou jamais lancée, une exécution interrompue, un état Git violé : onze faits de la review
+rendent une approbation indéfendable. Le verdict retenu devient alors `Human review required`, et
+la page dit lesquels.
+
+Le verdict proposé par l'architecte reste affiché à côté du verdict retenu. NOX ne réécrit pas ce
+qui avait été proposé : six mois plus tard, savoir lequel des deux s'était trompé compte.
+
+En revanche, **une tâche sans commande de validation n'est pas pénalisée**. Ne pas en déclarer est
+un choix légitime ; en faire un échec fictif apprendrait à ignorer le verdict.
+
+### Le feedback suggéré
+
+Pour `Changes recommended`, l'architecte propose un texte de correction. **`Use as feedback` ne
+lance rien** : il ouvre le formulaire de `Request changes` avec ce texte prérempli, que vous
+pouvez lire, modifier, compléter ou effacer entièrement. C'est votre texte qui sera transmis.
+
+La suite est le workflow habituel : `Prepare correction`, puis `Resume Claude Code`. Rien ne
+démarre avant.
+
+### Un clic, un appel
+
+Aucune analyse n'est déclenchée par l'ouverture d'une page, la fin d'une exécution, un
+rafraîchissement ou un minuteur. Une exécution accepte au plus **cinq analyses**, échecs compris,
+et une seule à la fois. Chacune reste consultable : une nouvelle n'écrase jamais la précédente.
+
+Une exécution antérieure à la review intégrée n'est pas analysable, et NOX le dit plutôt que de
+reconstruire un diff depuis le repository actuel.
+
 ## Demander une correction : `Request changes`
 
 C'est ce qui évite de tout réexpliquer à une conversation neuve.
@@ -1549,6 +1650,11 @@ NOX/
 │   │   │   │   ├── sanitize.ts      Nettoyage de ce qui quitte la machine
 │   │   │   │   ├── transcript.ts    Conversation locale, transmise en entier
 │   │   │   │   ├── prepare.ts       Contexte + transcript + prompt + empreintes
+│   │   │   │   ├── review-bundle.ts  Spécification + diff enregistré + validations
+│   │   │   │   ├── review-prepare.ts Bundle + prompt de review + empreinte
+│   │   │   │   ├── review-display.ts URL, éligibilité, lignes de preview
+│   │   │   │   ├── review-load.ts    Relecture des sources d'une analyse
+│   │   │   │   ├── review-service.ts Préparation d'une analyse, puis envoi contrôlé
 │   │   │   │   ├── provider.ts      Interface étroite + faux fournisseur
 │   │   │   │   ├── openai.ts        Responses API, Structured Output strict
 │   │   │   │   ├── service.ts       Préparation d'un tour, puis envoi contrôlé

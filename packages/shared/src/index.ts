@@ -308,6 +308,68 @@ export type {
 } from "./architect-prompt.js";
 
 export {
+  ARCHITECT_REVIEW_BLOCKER,
+  ARCHITECT_REVIEW_BLOCKERS,
+  ARCHITECT_REVIEW_CRITERION_BASE,
+  ARCHITECT_REVIEW_LIMITS,
+  ARCHITECT_REVIEW_SCHEMA_NAME,
+  ARCHITECT_REVIEW_SCHEMA_VERSION,
+  ARCHITECT_REVIEW_SEVERITIES,
+  ARCHITECT_REVIEW_SEVERITY,
+  ARCHITECT_REVIEW_STATUS,
+  ARCHITECT_REVIEW_STATUSES,
+  ARCHITECT_REVIEW_VERDICT,
+  ARCHITECT_REVIEW_VERDICTS,
+  architectCriterionLabel,
+  architectReviewBlockers,
+  buildArchitectReviewSchema,
+  guardArchitectReviewVerdict,
+  isArchitectReviewBlocker,
+  isArchitectReviewManifest,
+  isArchitectReviewSeverity,
+  isArchitectReviewStatus,
+  isArchitectReviewVerdict,
+  readArchitectReviewOutput,
+} from "./architect-review.js";
+
+export type {
+  ArchitectReviewBlocker,
+  ArchitectReviewFacts,
+  ArchitectReviewFinding,
+  ArchitectReviewGuardResult,
+  ArchitectReviewManifest,
+  ArchitectReviewOutput,
+  ArchitectReviewReferences,
+  ArchitectReviewRefusal,
+  ArchitectReviewResult,
+  ArchitectReviewSeverity,
+  ArchitectReviewStatus,
+  ArchitectReviewVerdict,
+} from "./architect-review.js";
+
+export {
+  ARCHITECT_REVIEW_PROMPT_VERSION,
+  REVIEW_FILE_CLOSE,
+  REVIEW_FILE_OPEN,
+  REVIEW_PATCH_NOTICE,
+  REVIEW_PATCH_STATE,
+  REVIEW_VALIDATION_CLOSE,
+  REVIEW_VALIDATION_OPEN,
+  neutralizeReviewMarkers,
+  renderArchitectReviewPrompt,
+} from "./architect-review-prompt.js";
+
+export type {
+  ArchitectReviewBundle,
+  ArchitectReviewPrompt,
+  ReviewPatchState,
+  ReviewPromptFile,
+  ReviewPromptRun,
+  ReviewPromptTask,
+  ReviewPromptValidation,
+} from "./architect-review-prompt.js";
+
+export {
   PROJECT_DOCUMENT_CATEGORIES,
   PROJECT_DOCUMENT_CATEGORY,
   isCreateProjectDocumentSuccess,

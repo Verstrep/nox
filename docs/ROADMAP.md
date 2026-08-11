@@ -497,9 +497,48 @@ contexte, conversation générale.
 entièrement dans NOX, sans onglet séparé. Claude Code n'est toujours **pas** déclenché
 automatiquement, et la boucle autonome OpenAI ↔ Claude reste hors périmètre.
 
+**Validée avec de vrais appels OpenAI** : conversation multi-tours réelle, `CONTINUE`,
+propositions successives, contexte comparé entre deux tours, aperçu périmé bloquant l'envoi,
+tâche finale créée en brouillon, session de TASK-013 toujours lisible.
+
 ---
 
-## ⬜ 15. Test sur un petit projet réel
+## ✅ 15. Review Architecte assistée d'une exécution — `TASK-015`
+
+**Objectif** : obtenir une seconde lecture d'un run relu, sans jamais déléguer la décision.
+
+- Analyse construite **uniquement** sur la review enregistrée : spécification, instantané Git
+  immuable, patches affichables, validations structurées
+  ([D-218](DECISIONS.md#d-218--lanalyse-lit-sqlite-jamais-le-dossier-de-travail)).
+- Le compte rendu final de Claude Code n'est pas transmis : ce n'est pas une preuve
+  ([D-219](DECISIONS.md#d-219--le-compte-rendu-de-claude-code-nest-pas-une-preuve)).
+- Preview obligatoire, construite par le même pipeline que l'envoi ; zéro appel avant le clic
+  ([D-220](DECISIONS.md#d-220--une-preview-obligatoire-avant-tout-appel-de-review)).
+- Trois verdicts, observations structurées, feedback ciblé — le tout revalidé côté serveur :
+  chemins, index de critères, gravités, longueurs, cohérence verdict/feedback.
+- Verdict du fournisseur et verdict NOX conservés séparément
+  ([D-223](DECISIONS.md#d-223--deux-verdicts-conservés-séparément)) ; une approbation est
+  impossible dès qu'une partie de la review était invisible
+  ([D-224](DECISIONS.md#d-224--une-approbation-ne-peut-pas-se-fonder-sur-ce-que-personne-na-lu)).
+- Aucune validation configurée n'est **pas** un échec
+  ([D-225](DECISIONS.md#d-225--aucune-validation-configurée-nest-pas-un-échec)).
+- `Use as feedback` préremplit le formulaire de TASK-012, éditable, et ne lance rien
+  ([D-226](DECISIONS.md#d-226--le-feedback-suggéré-est-un-texte-jamais-une-action)).
+- Cinq analyses par exécution au maximum, une seule active, chacune immuable
+  ([D-227](DECISIONS.md#d-227--cinq-analyses-par-exécution-et-une-seule-à-la-fois)).
+
+**Terminée.** Aucun appel OpenAI réel n'a été effectué pendant l'implémentation : tous les tests
+utilisent un faux fournisseur, et aucun ne lance le vrai binaire Claude Code. La première
+analyse réelle est une vérification manuelle décrite dans [PROJECT_STATE.md](PROJECT_STATE.md).
+
+**Toujours hors périmètre** : approbation automatique, `Request changes` automatique, lancement
+automatique de Claude, review OpenAI à chaque fin de run, review en arrière-plan, outils OpenAI,
+boucle autonome OpenAI ↔ Claude, scan IA de secrets, génération de commit ou de PR, analyse de
+plusieurs runs simultanément.
+
+---
+
+## ⬜ 16. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -511,7 +550,7 @@ automatiquement, et la boucle autonome OpenAI ↔ Claude reste hors périmètre.
 
 ---
 
-## ⬜ 16. Fonctionnalités avancées
+## ⬜ 17. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -520,4 +559,4 @@ automatiquement, et la boucle autonome OpenAI ↔ Claude reste hors périmètre.
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 15.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 16.**

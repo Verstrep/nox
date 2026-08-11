@@ -3,7 +3,7 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 9 août 2026, à l'issue de `TASK-013`.
+**Dernière mise à jour** : 11 août 2026, à l'issue de `TASK-015`.
 
 ---
 
@@ -24,35 +24,39 @@ ni diff Git, ni sortie de Claude Code, ni fichier `.env` — non pas parce qu'un
 mais parce qu'ils ne sont jamais candidats. Et **aucune capacité d'action** : l'appel ne déclare
 aucun outil, aucune reprise de conversation, aucun stockage distant.
 
-Ce que TASK-014 ajoute tient en trois idées.
+TASK-014 a fait de ce formulaire une conversation. **TASK-015 referme l'autre extrémité** :
+l'Architecte peut désormais relire une exécution terminée — sur demande explicite — et rendre une
+recommandation.
 
-**La conversation appartient à NOX.** Le transcript vit dans SQLite et repart en entier à chaque
-tour ; OpenAI reste sans état. Une conversation doit rester lisible après un changement de modèle,
-après un redémarrage, et même si plus aucune réponse n'est récupérable chez le fournisseur.
+Ce que TASK-015 ajoute tient en trois idées.
 
-**Une proposition ne clôt plus rien.** La première proposition est presque toujours trop grosse —
-c'est le symptôme que le découpage fonctionne. Pouvoir répondre « plus petit » sans perdre la
-discussion est le cœur de l'étape ; l'ancienne proposition reste intacte, et seule la dernière est
-créable.
+**Il relit l'histoire enregistrée, jamais le disque.** Le bundle est construit entièrement à
+partir de l'instantané immuable de TASK-011 : spécification, patches, validations. Un fichier
+modifié depuis — ce que NOX encourage — ne réécrit pas ce qui est analysé.
 
-**Le contexte projet est comparé, pas supposé.** Il bouge entre deux tours, et NOX le dit : ajouté,
-retiré, modifié avec ses deux révisions. S'il change entre l'aperçu et le clic, l'envoi est refusé
-— sans bouton de forçage. Ce que l'utilisateur a relu est ce qui part, ou rien ne part.
+**Il recommande ; il ne décide pas.** Aucune analyse ne change un statut, ne crée un feedback, ne
+lance une correction. `Approve` reste un clic humain, et il n'existe pas de bouton qui ferait deux
+actions en une.
+
+**Une approbation ne peut pas se fonder sur ce que personne n'a lu.** Un fichier sensible, un
+binaire, un patch tronqué, une validation échouée ou jamais lancée : onze faits de la review
+dégradent une recommandation d'approbation en `Human review required`. Le verdict du modèle est
+conservé à côté du verdict retenu — NOX ne réécrit pas ce qui avait été proposé.
 
 Ce que NOX ne fait toujours pas : aucun lancement automatique de Claude Code, aucun passage
-automatique en `READY`, aucune boucle autonome, aucun réessai caché, aucun résumé silencieux,
-aucun coût estimé.
+automatique en `READY`, aucune boucle autonome OpenAI ↔ Claude, aucun réessai caché, aucun résumé
+silencieux, aucune review déclenchée en arrière-plan, aucun coût estimé.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 14 — conversation Architecte
-(terminée)**. L'étape 15 (test sur un petit projet réel) devient l'étape active.
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 15 — review Architecte assistée
+(terminée)**. L'étape 16 (test sur un petit projet réel) devient l'étape active.
 ## 2. Tâche active
 
-`TASK-014 — Conversation Architecte persistante et évolution explicite du contexte projet` :
-**terminée**, en attente de review humaine.
+`TASK-015 — Review Architecte assistée et feedback de correction` : **terminée**, en attente de
+review humaine.
 
 Aucun appel OpenAI réel n'a été effectué pendant cette étape : tous les tests, unitaires comme
-fonctionnels, utilisent un faux fournisseur. La première conversation réelle est une vérification
-manuelle, décrite au § 3.61.
+fonctionnels, utilisent un faux fournisseur. Aucun test ne lance le vrai binaire Claude Code. La
+première analyse réelle est une vérification manuelle, décrite au § 3.69.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
@@ -1243,6 +1247,176 @@ et inerte.
 11. Vérifier que la tâche est en **brouillon**, que la modification a été conservée, que la
     conversation est passée en lecture seule, et qu'**aucune exécution Claude Code n'a démarré**.
 
+### 3.62 Éligibilité d'une exécution à l'analyse
+
+`Analyze with Architect` n'apparaît que pour une review réellement disponible :
+
+```text
+reviewCapturedAt != null   → analysable
+exécution encore active    → « la review sera capturée quand elle le sera »
+exécution finale sans snapshot → « pas de snapshot suffisamment détaillé »
+```
+
+Les statuts finaux `COMPLETED`, `FAILED`, `BLOCKED` et `CANCELLED` sont tous analysables — mais la
+sémantique diffère, et le bundle le dit : un run partiel est annoncé comme tel, et il interdit
+toute recommandation d'approbation. Un travail interrompu ne s'approuve pas comme un travail fini.
+
+Une exécution antérieure à TASK-011 n'a pas de snapshot et n'en aura jamais. NOX ne reconstruit
+rien : le diff serait celui d'aujourd'hui, pas celui de l'exécution.
+
+### 3.63 Ce que le bundle contient, et ce qu'il ne contiendra jamais
+
+| Envoyé | Jamais envoyé |
+| --- | --- |
+| spécification de la tâche, critères numérotés `AC1`… | le compte rendu final de Claude Code |
+| patches non sensibles, déjà nettoyés | le contenu d'un fichier sensible ou binaire |
+| résultats de validation, code de sortie, résumé | l'identifiant de session Claude, un PID |
+| faits de l'exécution : issue, durée, `HEAD` courts | le coût rapporté, le prompt d'exécution |
+| raison de chaque patch absent | une variable d'environnement, un jeton, une clé |
+
+Cinq raisons distinctes remplacent un `patch: null` muet :
+
+```text
+Content hidden    fichier sensible : NOX ne transmet jamais son texte
+Binary            aucun contenu n'est disponible, et aucun ne peut l'être
+Truncated         la suite du patch n'a pas été conservée
+Unavailable       aucun diff pour ce fichier
+Not sent          la limite d'envoi de NOX est atteinte
+```
+
+« Masqué parce que sensible » et « indisponible parce que binaire » ne demandent pas la même
+conclusion. Un modèle à qui l'on ne dit rien invente une raison.
+
+### 3.64 Bornes d'envoi, indépendantes des bornes de stockage
+
+```text
+REVIEW_LIMITS              200 fichiers · 256 Kio par patch · 4 Mio au total
+ARCHITECT_REVIEW_LIMITS    100 fichiers · 128 Kio par patch · 512 Kio au total
+                            10 Kio de résumés de validation
+```
+
+Les premières protègent SQLite et la page ; les secondes décident de ce qui **quitte la machine**
+et de ce qui est facturé. Une review de 4 Mio est parfaitement lisible en local — elle n'a
+simplement pas à partir entière.
+
+Dès que le bundle contient moins que la review, `truncated` passe à vrai, la preview l'annonce, et
+une recommandation d'approbation devient impossible. **Aucune sélection silencieuse ne doit donner
+l'impression que l'architecte a tout vu.**
+
+L'ordre est celui de la capture, jamais une heuristique : « les fichiers les plus intéressants »
+produirait une review différente selon les goûts du code, et personne ne saurait pourquoi.
+
+### 3.65 Deux verdicts, et la garde entre les deux
+
+```text
+Modèle           APPROVE_RECOMMENDED
+Review           un fichier binaire a changé
+Verdict NOX      HUMAN_REVIEW_REQUIRED
+```
+
+`providerVerdict` et `finalVerdict` sont persistés séparément. Écraser le premier réécrirait
+l'histoire : six mois plus tard, on ne saurait plus si l'architecte s'était trompé ou si NOX
+l'avait corrigé.
+
+Onze faits interdisent une approbation, et ils disent tous la même chose — une partie du travail
+n'était pas visible :
+
+```text
+RUN_NOT_COMPLETED    REVIEW_UNRELIABLE     REVIEW_ERROR
+SENSITIVE_FILE       BINARY_FILE           TRUNCATED_PATCH
+OMITTED_FILES        ARCHITECT_TRUNCATED
+VALIDATION_FAILED    VALIDATION_UNKNOWN    VALIDATION_NOT_RUN
+```
+
+Ils viennent de la review enregistrée, jamais du texte du modèle : un verdict ne peut pas se
+justifier lui-même. Un `CHANGES_RECOMMENDED` n'est pas dégradé — le défaut vu dans la partie
+visible ne disparaît pas parce qu'une autre partie manquait.
+
+**L'absence de commande de validation n'en fait pas partie.** Ne pas en déclarer est un choix
+légitime ; en faire un échec fictif apprendrait à ignorer le verdict.
+
+### 3.66 Le feedback suggéré est un texte, jamais une action
+
+```text
+Changes recommended
+      ↓
+Suggested feedback        proposé, jamais transmis
+      ↓
+Use as feedback           ouvre le formulaire de TASK-012, prérempli
+      ↓
+Édition humaine           lire, modifier, effacer
+      ↓
+Prepare correction        le workflow de TASK-012, inchangé
+```
+
+Le texte est relu **en base** à partir d'un identifiant d'analyse ; le navigateur ne le transporte
+jamais. Il n'élargit aucune permission : les règles d'outils restent calculées à partir des
+commandes de validation enregistrées, la session vient du run parent, et TASK-012 reste la seule
+frontière d'exécution.
+
+Une analyse ne crée aucun `ReviewFeedback`, ne change aucun statut, ne lance aucune correction.
+Ce n'est pas une intention : `review-service.ts` n'importe aucune fonction d'action de tâche, et
+un test le vérifie sur la source du module.
+
+### 3.67 Cinq analyses, une seule active
+
+Une exécution accepte au plus cinq analyses, échecs compris, et une seule à la fois. Chaque analyse
+terminée est immuable ; une nouvelle n'écrase jamais la précédente.
+
+```text
+ANALYSIS-2   Human review required   11 août 2026   gpt-5-mini
+ANALYSIS-1   Changes recommended     11 août 2026   gpt-5-mini
+```
+
+Relire deux fois a du sens — un autre modèle, un prompt amélioré, une seconde lecture. Compter les
+échecs est indispensable : une analyse ratée a quand même joint le fournisseur. Le verrou est un
+échange conditionnel sur le compteur, pas une vérification suivie d'une écriture.
+
+### 3.68 Interface de la review Architecte
+
+```text
+Review changes
+  └─ Architect review     verdict, nombre d'observations, modèle, consommation
+                          Analyze with Architect · Open analysis · Analyze again
+
+Préparation             Review sent to Architect · Files · Validations · Limits
+                        Exact payload preview · Analyze review · Cancel
+                        Historique des analyses
+
+Analyse                 Verdict · Summary · Findings · Suggested feedback
+                        Actions selon le verdict · Détail technique
+```
+
+Le message de l'architecte, le détail d'une observation et le feedback sont du **texte** :
+`whitespace-pre-wrap`, aucun `dangerouslySetInnerHTML`, aucun Markdown rendu, aucun lien
+automatique. Ils viennent d'un modèle qui a lu des patches, et un patch peut contenir n'importe
+quoi.
+
+Les trois libellés de verdict portent « recommended » ou « required » : aucun ne doit pouvoir se
+lire comme une décision. Pour une approbation recommandée, le bouton `Approve` reste sur la review,
+et c'est un clic distinct — il n'existe pas de `Approve with Architect`.
+
+### 3.69 Procédure de vérification manuelle de la review Architecte
+
+À exécuter par l'utilisateur, sur un projet réel. Elle n'a **pas** été exécutée pendant TASK-015.
+
+1. Créer une tâche simple avec deux ou trois critères et une commande de validation.
+2. La lancer avec Claude Code, et obtenir une review `COMPLETED`.
+3. Ouvrir `Review changes`, puis `Analyze with Architect`.
+4. **Lire attentivement la preview** : tâche, fichiers et sort de chaque patch, validations,
+   bornes, puis le texte exact envoyé.
+5. Vérifier qu'aucun contenu inattendu n'y figure — ni clé, ni chemin absolu, ni compte rendu de
+   Claude Code.
+6. Cliquer **une seule fois** sur `Analyze review`.
+7. Lire le verdict, le résumé et les observations. Vérifier que chaque chemin cité existe
+   réellement dans la review, et que chaque critère cité existe dans la tâche.
+8. Si `Changes recommended` : ouvrir `Use as feedback`, vérifier le texte prérempli, le modifier —
+   et ne pas lancer Claude pour ce premier test si ce n'est pas nécessaire.
+9. Si `Approve recommended` : vérifier que la tâche est **toujours** en `REVIEW`, et qu'aucun clic
+   n'a été fait à votre place.
+10. Rejouer une analyse sur une review comportant un fichier sensible, binaire ou tronqué, et
+    vérifier que le verdict retenu devient `Human review required` — quel que soit celui du modèle.
+
 ## 4. Éléments non commencés
 
 - Reprise d'une session Claude (`--resume`), continuation (`--continue`), message envoyé à une
@@ -1254,8 +1428,11 @@ et inerte.
   dépendances entre tâches.
 - Plusieurs agents en parallèle, worktrees, plusieurs comptes Claude.
 - Commits et push automatiques.
-- Sélection libre du contexte Architecte, review du code par OpenAI, feedback OpenAI sur une
-  review Claude, boucle autonome OpenAI → Claude → OpenAI.
+- Sélection libre du contexte Architecte, lecture du code source par OpenAI, boucle autonome
+  OpenAI → Claude → OpenAI, approbation ou correction automatique, review déclenchée en
+  arrière-plan ou à chaque fin de run.
+- Scan IA de secrets, commentaires inline éditables dans un diff, génération d'un message de
+  commit ou d'une PR, analyse de plusieurs exécutions à la fois.
 - Plusieurs tâches par conversation, roadmap multi-tâches, résumé automatique d'un long
   transcript, mémoire vectorielle, monorepos et `CLAUDE.md` imbriqués.
 - Suivi des coûts au-delà de ce que les fournisseurs rapportent.
@@ -1401,25 +1578,40 @@ une timeline produite par le vrai binaire.
     ([D-216](DECISIONS.md#d-216--les-sessions-de-task-013-restent-en-lecture-seule)).
 34. **La consommation affichée est celle que le fournisseur rapporte.** NOX n'estime aucun coût,
     et « non fourni » veut dire ce qu'il dit.
-35. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+35. **Une analyse de review n'a jamais été confrontée à un vrai modèle.** Le contrat, le prompt et
+    la garde ont été vérifiés contre un faux fournisseur ; aucune réponse réelle n'a traversé
+    `readArchitectReviewOutput`. Même réserve de méthode qu'en TASK-010, TASK-013 et TASK-014.
+36. **Le bundle de review est borné, et une troncature interdit l'approbation.** C'est voulu, mais
+    cela signifie qu'une exécution très large ne pourra jamais obtenir mieux que
+    `Human review required` — quelle que soit sa qualité
+    ([D-224](DECISIONS.md#d-224--une-approbation-ne-peut-pas-se-fonder-sur-ce-que-personne-na-lu)).
+37. **Le feedback précédent n'est pas transmis lors de l'analyse d'une correction.** La question
+    posée est « cet état final satisfait-il la tâche ? », pas « Claude a-t-il suivi le feedback ? ».
+    C'est une décision de périmètre, pas un oubli.
+38. **Une analyse et une conversation Architecte ne se parlent pas.** Une recommandation n'est
+    jamais injectée dans une conversation, et une conversation ne lit aucune review
+    ([D-217](DECISIONS.md#d-217--la-review-architecte-est-un-objet-distinct-de-la-conversation)).
+39. **Cinq analyses par exécution.** Au-delà, il faut se contenter des analyses existantes — elles
+    restent toutes consultables.
+40. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
     clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-015` — Review Architecte assistée et feedback de correction.**
+**`TASK-016` — Boucle de développement guidée avec checkpoints humains.**
 
-Objectif : permettre à l'Architecte NOX d'analyser, sur demande explicite, une review structurée
-d'un run Claude, et de proposer soit une approbation, soit un feedback de correction précis que
-l'utilisateur pourra relire et modifier avant toute action — sans jamais décider ni relancer
-Claude automatiquement.
+Objectif : relier explicitement les briques déjà construites — conversation Architecte, création
+de tâche, exécution Claude, review Architecte et correction ciblée — dans un workflow guidé de
+bout en bout, où NOX propose automatiquement la prochaine étape mais exige toujours un clic
+humain avant tout appel IA, toute exécution Claude ou toute décision de review.
 
-C'est la suite naturelle. NOX sait maintenant concevoir une tâche à deux, et relire une exécution
-à un. La relecture est l'endroit où le travail humain reste le plus dense — et le seul où
-l'Architecte dispose déjà de tout le matériel : la spécification qu'il a écrite, et le résultat
-que Claude en a fait.
+Toutes les pièces existent désormais et fonctionnent isolément. Ce qui manque n'est pas une
+capacité de plus : c'est le fil qui les relie. Aujourd'hui, l'utilisateur sait ce qu'il peut
+faire ensuite parce qu'il connaît NOX — un nouvel arrivant, ou lui-même dans trois semaines, ne
+le saurait pas.
 
-La règle qui la gouverne est déjà connue : **l'architecte propose, l'utilisateur décide.** Aucune
-approbation automatique, aucun relancement, aucune boucle.
+La règle qui la gouverne ne change pas : **NOX propose, l'utilisateur décide.** Proposer la
+prochaine étape n'est pas la déclencher.
 
 ## 8. État Git
 
@@ -1427,5 +1619,6 @@ approbation automatique, aucun relancement, aucune boucle.
 - Aucun push effectué.
 - Aucun `git add`.
 - Historique Git non modifié.
-- Commit de départ : `4d839f3` (`feat: add NOX architect task generation`), contenant `TASK-013`.
-- `TASK-014` reste **locale**, non indexée et non commitée.
+- Commit de départ : `528528b` (`feat: add persistent architect conversations`), contenant
+  `TASK-014`.
+- `TASK-015` reste **locale**, non indexée et non commitée.

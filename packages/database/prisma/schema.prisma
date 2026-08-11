@@ -215,6 +215,14 @@ model Run {
   /// se calcule a partir des `RunFileChange`.
   reviewOmittedFiles Int @default(0)
 
+  /// Prochain numero d'analyse Architecte a attribuer pour cette execution.
+  ///
+  /// Meme regle que les autres compteurs de NOX : il ne recule jamais, y compris
+  /// apres une analyse en echec. Celle-ci a consomme un appel facture, et son
+  /// numero ne doit pas etre reattribue. C'est aussi lui qui borne le nombre
+  /// d'analyses d'une execution.
+  nextArchitectReviewSequence Int @default(1)
+
   /// Empreinte opaque du dossier de travail a la fin de l'execution.
   ///
   /// Un HMAC hexadecimal, dont la cle est derivee du jeton du runner et n'est
@@ -251,9 +259,10 @@ model Run {
   /// contrainte tient meme si quelqu'un l'ignore et appelle Prisma directement.
   task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
 
-  events      RunEvent[]
-  fileChanges RunFileChange[]
-  validations RunValidationResult[]
+  events           RunEvent[]
+  fileChanges      RunFileChange[]
+  validations      RunValidationResult[]
+  architectReviews ArchitectRunReview[]
 
   feedbacks          ReviewFeedback[] @relation("ReviewFeedbackSource")
   triggeringFeedback ReviewFeedback?  @relation("ReviewFeedbackCorrection")
@@ -520,6 +529,96 @@ model TaskValidationCommand {
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, position])
+}
+
+/// Une analyse de review par l'Architecte, et ce qu'elle a rendu.
+///
+/// ## Pourquoi un enfant de `Run`, et pas une colonne
+///
+/// Parce qu'une execution peut legitimement etre relue plusieurs fois : un
+/// modele different, un prompt ameliore, une seconde lecture demandee. Ecraser
+/// la precedente effacerait ce qui avait ete dit, alors que c'est precisement ce
+/// qu'on veut comparer.
+///
+/// Chaque analyse terminee est **immuable** : la couche d'ecriture refuse de
+/// modifier une ligne qui n'est plus `RUNNING`.
+///
+/// ## Deux verdicts, et pourquoi les deux
+///
+/// `providerVerdict` est ce que le modele a propose ; `finalVerdict` ce que NOX
+/// retient apres sa garde. Les confondre reecrirait l'histoire : six mois plus
+/// tard, on ne saurait plus si l'architecte s'etait trompe ou si NOX l'avait
+/// corrige parce qu'une partie de la review lui etait invisible.
+///
+/// ## Ce qui n'est pas stocke
+///
+/// Ni le prompt, ni les patches, ni le bundle. Les patches existent deja dans
+/// `RunFileChange` ; `manifestJson` dit **combien** en est parti et si le bundle
+/// etait complet, `inputHash` identifie l'entree logique sans la conserver.
+model ArchitectRunReview {
+  id    String @id @default(cuid())
+  runId String
+
+  /// Numero attribue a la creation, unique dans l'execution et jamais modifie.
+  sequence Int
+
+  /// Modele effectivement utilise, tel que le serveur l'a lu dans sa configuration.
+  model String
+
+  /// Version du prompt de review, pour qu'un changement de consignes soit detectable.
+  promptVersion String
+
+  /// Empreinte deterministe de l'entree logique. Diagnostic, jamais securite.
+  inputHash String
+
+  /// `ArchitectReviewManifest` serialise.
+  manifestJson String
+
+  /// Valeur de `ArchitectReviewStatus`.
+  status String
+
+  /// Valeur de `ArchitectReviewVerdict` rendue par le modele.
+  providerVerdict String?
+
+  /// Valeur de `ArchitectReviewVerdict` retenue par NOX apres sa garde.
+  finalVerdict String?
+
+  /// Faits qui interdisaient une recommandation d'approbation, serialises.
+  blockersJson String?
+
+  summary String?
+
+  /// `ArchitectReviewFinding[]` serialise.
+  findingsJson String?
+
+  /// Feedback suggere, tel que le modele l'a rendu.
+  ///
+  /// Il n'est jamais transmis a Claude Code depuis ici : l'utilisateur le relit,
+  /// le modifie et le valide, et c'est alors un `ReviewFeedback` ordinaire qui
+  /// est cree par le workflow de TASK-012.
+  feedback String?
+
+  /// Identifiant de reponse rapporte par le fournisseur, lorsqu'il en fournit un.
+  providerResponseId String?
+
+  /// Consommation **rapportee**. Jamais estimee, jamais convertie en cout.
+  inputTokens       Int?
+  outputTokens      Int?
+  totalTokens       Int?
+  cachedInputTokens Int?
+
+  /// Valeur de `ArchitectErrorCode`, lorsque l'analyse a echoue.
+  errorCode String?
+
+  createdAt DateTime @default(now())
+
+  /// `Cascade` comme `RunFileChange` : une analyse ne raconte rien sans son
+  /// execution, et rien d'autre ne la referencera jamais. La regle qui protege
+  /// l'historique porte sur les executions, dont aucune n'est jamais supprimee.
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sequence])
+  @@index([runId, sequence])
 }
 
 /// Une conversation bornee avec l'Architecte, autour d'une demande produit.
