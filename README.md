@@ -12,7 +12,7 @@ tâches, d'envoyer ces tâches à Claude Code, d'exécuter les validations et de
 
 ## État actuel
 
-Dernière étape terminée : **TASK-016 — boucle de développement guidée avec checkpoints humains**.
+Dernière étape terminée : **TASK-017 — mémoire projet structurée et décisions durables**.
 
 | Élément | État |
 | --- | --- |
@@ -38,10 +38,11 @@ Dernière étape terminée : **TASK-016 — boucle de développement guidée ave
 | Conversation Architecte multi-tours, contexte comparé entre deux tours | ✅ fonctionnelle |
 | Review Architecte assistée d'un run, feedback de correction suggéré | ✅ fonctionnelle |
 | Workflow guidé : étape courante, prochaine étape recommandée, blocages | ✅ fonctionnel |
+| Mémoire projet : décisions, contraintes, conventions, connaissances | ✅ fonctionnelle |
 | Renommage, déplacement d'un document | ⬜ non commencés |
 | Archivage, suppression d'une tâche avec exécutions | ⬜ non commencés |
 | Édition, suppression, archivage d'un projet | ⬜ non commencées |
-| Mémoire projet structurée et décisions durables | ⬜ non commencée |
+| Suggestions de mémoire depuis les conversations Architecte | ⬜ non commencées |
 | Tests / lint / typecheck / build | ✅ passent |
 
 Détail complet : [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
@@ -1432,6 +1433,96 @@ blocs de réflexion, secrets, sorties énormes, processus descendants, et un mod
 réellement un repository temporaire pour éprouver la review. Elle ne consomme donc aucun quota et
 ne dépend d'aucun réseau.
 
+## La mémoire d'un projet : `Memory`
+
+Depuis la page d'un projet, **`Memory`** ouvre ce que NOX retient volontairement de lui.
+
+```text
+Project
+ → Memory
+    → Active entries
+       → Architect context
+```
+
+### Le problème que ça résout
+
+L'Architecte reçoit déjà huit documents entiers et vos dix dernières tâches. C'est précis, et il y
+manque un niveau intermédiaire. Une décision comme « le runner ne contient jamais de logique
+produit » vit quelque part dans un `DECISIONS.md` de trois mille lignes, ou dans une conversation
+fermée il y a deux semaines. Sa prise en compte dépend alors de la capacité du modèle à la
+retrouver — c'est-à-dire de la chance.
+
+Une entrée de mémoire dit ce qui compte, et seulement ce qui compte.
+
+### Quatre catégories
+
+| Catégorie | Ce qu'elle porte | Exemple |
+| --- | --- | --- |
+| `Decision` | un choix déjà tranché | « Les appels OpenAI exigent un aperçu explicite. » |
+| `Constraint` | une limite à respecter | « NOX doit rester utilisable sans OpenAI. » |
+| `Convention` | une règle de conception | « Les libellés techniques restent en anglais. » |
+| `Knowledge` | un fait durable | « Le développement se fait sous Windows. » |
+
+Il n'y a pas de catégorie `Idée`, `À faire` ou `Bug` : ce sont des choses à faire, et le backlog les
+traite déjà. Une mémoire est quelque chose qui **reste vrai**.
+
+### Active ou Archived
+
+```text
+Active     → envoyée à l'Architecte
+Archived   → conservée et consultable, jamais envoyée
+```
+
+Il n'existe pas de troisième état. Ce que la page annonce comme actif est exactement ce que
+l'Architecte recevra — sans classement caché, sans « les vingt plus pertinentes ».
+
+`Archived` existe plutôt que la seule suppression parce qu'une décision peut cesser de s'appliquer
+tout en restant importante : « nous avions choisi SQLite pour l'état local » explique la forme
+actuelle du code, même quand ce n'est plus vrai. La suppression, elle, reste possible — pour une
+erreur de saisie, une information privée, une entrée créée dans le mauvais projet.
+
+### Un budget, refusé plutôt que tronqué
+
+```text
+Active memory
+18.4 Kio / 48.0 Kio        12 Active · 7 Archived · 19 Total
+```
+
+Si activer une entrée faisait dépasser 48 Kio, l'opération est **refusée**, avec ses trois sorties :
+raccourcir le texte, archiver autre chose, ou enregistrer l'entrée directement en `Archived`.
+
+NOX n'envoie jamais une partie seulement de la mémoire active. Une interface qui annoncerait douze
+entrées actives et n'en enverrait que cinq ne dirait plus rien de ce que l'Architecte connaît.
+
+### Elle appartient à NOX, pas à votre dépôt
+
+Créer, modifier, archiver ou supprimer une mémoire n'écrit **aucun** fichier, ne crée **aucun**
+commit et ne touche jamais à `CLAUDE.md`. La mémoire vit dans la base locale de NOX.
+
+Une décision qui doit **aussi** vivre dans le repository se recopie à la main dans
+`docs/DECISIONS.md`. NOX ne synchronise pas les deux — et ne prétend pas le faire.
+
+### Rien n'y entre tout seul
+
+Aucune entrée n'est créée automatiquement : ni depuis une conversation, ni depuis une proposition de
+l'architecte, ni depuis une observation de review, ni depuis un compte rendu de Claude Code.
+
+Une conversation contient des hésitations. « On pourrait peut-être utiliser Redis » n'est pas une
+décision, et le transformer en mémoire durable fabriquerait un contexte que personne n'a relu — puis
+le rejouerait à chaque tour avec l'autorité d'un fait établi.
+
+### Ce que l'Architecte en voit
+
+Les entrées actives apparaissent dans la section `Project memory` de l'aperçu de contexte, avec leur
+code, leur catégorie et leur taille — et leur texte exact dans « Voir le texte exact envoyé ».
+
+Elles partent dans l'ordre de leurs codes, `MEM-001` puis `MEM-002`, et comptent comme le reste du
+contexte : modifier une mémoire entre deux tours est signalé, et la modifier **après** l'aperçu
+bloque l'envoi jusqu'à ce que vous l'ayez relu.
+
+La mémoire n'est pas transmise à l'analyse de review : celle-ci compare une exécution à **sa** tâche,
+et rien d'autre.
+
 ## Concevoir une tâche : `Architect`
 
 Depuis la page d'un projet, `Architect` ouvre la liste des conversations.
@@ -1757,6 +1848,8 @@ NOX/
 │   │   │   │   ├── service.ts       Préparation d'un tour, puis envoi contrôlé
 │   │   │   │   └── apply.ts         Création par le pipeline de TASK-007
 │   │   │   ├── guided-workflow.ts  Faits du workflow guidé : base + sondes en lecture
+│   │   │   ├── memory.ts          Mémoire projet : lecture et écritures, SQLite seule
+│   │   │   ├── memory-display.ts  URL, filtres, tailles, messages de refus
 │   │   │   ├── guided-workflow-display.ts
 │   │   │   │                   URL des surfaces existantes, ancres, progression
 │   │   │   ├── labels.ts           Seule couche de traduction des valeurs internes

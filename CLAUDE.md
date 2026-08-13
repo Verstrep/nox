@@ -515,6 +515,34 @@ Contraintes à respecter (voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) :
 - **La progression affichée compte cinq étapes fixes**, jamais une par exécution. Elle répond « où en
   sommes-nous », pas « qu'a-t-on fait » : l'historique des exécutions et la timeline d'un run
   existent déjà, et ne doivent pas être dupliqués.
+- **La mémoire projet est contrôlée par l'utilisateur, et par lui seul.** Aucune entrée n'est créée,
+  modifiée ou archivée automatiquement : ni depuis une conversation Architecte, ni depuis une
+  proposition, ni depuis une observation de review, ni depuis un compte rendu de Claude Code, ni
+  depuis une tâche ou un document. Une hésitation exprimée dans une discussion n'est pas une
+  décision.
+- **Le contenu d'une conversation n'est jamais mémorisé.** Le Structured Output d'un tour ne porte ni
+  `memoriesToCreate`, ni `memoriesToUpdate`, et une réponse de l'architecte ne peut pas écrire en
+  mémoire.
+- **Aucune opération de mémoire n'appelle OpenAI, Claude Code ou le runner.** Créer, modifier,
+  archiver, restaurer et supprimer sont des écritures SQLite. La page Memory fonctionne runner
+  arrêté et sans configuration OpenAI ; un test le vérifie sur la source des modules concernés.
+- **La mémoire vit dans SQLite, jamais dans le repository.** Aucune écriture Git, aucun fichier
+  Markdown généré ou synchronisé, aucune modification de `CLAUDE.md`. Une décision qui doit aussi
+  vivre dans le dépôt s'y recopie à la main.
+- **Seules les entrées `ACTIVE` atteignent la conversation Architecte**, et toutes l'atteignent.
+  `ARCHIVED` reste consultable et ne quitte jamais la machine. Il n'existe pas de troisième état.
+- **Aucune troncature silencieuse, aucun classement.** Une opération qui ferait dépasser le budget
+  actif est refusée à l'écriture, avec ses trois sorties ; les entrées partent dans l'ordre de leurs
+  codes, jamais selon une pertinence calculée ou choisie par un modèle.
+- **La mémoire est sanitisée avant de partir, et stockée telle qu'écrite.** Le budget et la révision
+  se mesurent sur le texte **envoyé**, pas sur le texte brut : une révision doit décrire ce que le
+  fournisseur a reçu.
+- **Un changement de mémoire est un changement de contexte.** Les entrées actives entrent dans
+  l'empreinte de TASK-014 : une modification survenue après l'aperçu bloque l'envoi, sans appel et
+  sans option de forçage.
+- **La review Architecte ne reçoit pas la mémoire.** Le bundle de TASK-015 reste la spécification de
+  la tâche, l'instantané Git enregistré et les validations. Élargir cette surface demande une
+  décision séparée.
 - **Seul `tasks/` peut être créé par NOX**, à la racine du repository, par la route dédiée aux
   documents de tâche. Aucun autre dossier, aucun sous-dossier.
 - Les échanges web ↔ runner suivent le contrat de `@nox/shared` : ne jamais redéclarer un code

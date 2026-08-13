@@ -3,6 +3,7 @@ import {
   ARCHITECT_LIMITS,
   ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SESSION_STATUS,
+  isProjectMemoryCategory,
 } from "@nox/shared";
 import {
   architectProposalOfMessage,
@@ -28,6 +29,7 @@ import {
   formatChars,
   manifestRows,
   manifestTaskCount,
+  memoryRows,
   proposalToFormValues,
 } from "@/lib/architect/display";
 import { loadRecentArchitectTasks } from "@/lib/architect/recent-tasks";
@@ -39,7 +41,9 @@ import {
   architectMessageRoleLabel,
   architectSessionStatusLabel,
   architectSourceStatusLabel,
+  projectMemoryCategoryLabel,
 } from "@/lib/labels";
+import { loadActiveProjectMemories } from "@/lib/memory";
 import { loadProject } from "@/lib/projects";
 import { taskUrl } from "@/lib/task-display";
 
@@ -100,6 +104,9 @@ export default async function ArchitectSessionPage({
         repositoryPath: project.repositoryPath,
         message: pending?.messageText ?? "",
         tasks: await loadRecentArchitectTasks(db, project.id),
+        // Relue a chaque rendu : la preview doit decrire la memoire actuelle,
+        // pas celle qui existait a l'ouverture de la conversation.
+        memories: await loadActiveProjectMemories(project.id),
         model: config.ok ? config.config.model : "",
         environment: process.env,
       });
@@ -395,6 +402,38 @@ export default async function ArchitectSessionPage({
                 avant de l&apos;envoyer : l&apos;envoi sera refuse tant que ce ne sera pas fait.
               </p>
             ) : null}
+
+            {memoryRows(prepared.turn.prepared.manifest).length === 0 ? null : (
+              <>
+                <h3 className="mt-5 text-xs font-medium text-zinc-400">Project memory</h3>
+                <p className="my-2 max-w-prose text-sm leading-relaxed text-zinc-400">
+                  Entrees actives de la memoire de ce projet, dans l&apos;ordre des codes. Les
+                  entrees archivees ne figurent pas ici : elles ne quittent jamais cette machine.
+                </p>
+                <ul className="flex flex-col divide-y divide-zinc-800/80 text-xs">
+                  {memoryRows(prepared.turn.prepared.manifest).map((row) => (
+                    <li
+                      key={row.code}
+                      className="flex flex-wrap items-center justify-between gap-3 py-2"
+                    >
+                      <span className="flex flex-wrap items-center gap-3">
+                        <span className="font-mono text-zinc-300">{row.code}</span>
+                        <span className="text-zinc-500">
+                          {isProjectMemoryCategory(row.category)
+                            ? projectMemoryCategoryLabel(row.category)
+                            : row.category}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-3 font-mono text-zinc-600">
+                        {row.revision === null ? null : <span>{row.revision}</span>}
+                        <span>{formatChars(row.chars)}</span>
+                        <StatusBadge>Included</StatusBadge>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
 
             <h3 className="mt-5 text-xs font-medium text-zinc-400">Sources</h3>
             <p className="my-2 max-w-prose text-sm leading-relaxed text-zinc-400">

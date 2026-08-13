@@ -40,6 +40,8 @@ import {
   GUIDED_BLOCKER,
   GUIDED_PROGRESS_STEP,
   GUIDED_STAGE,
+  PROJECT_MEMORY_CATEGORY,
+  PROJECT_MEMORY_STATUS,
   REVIEW_PATCH_STATE,
   RUN_CHANGE_TYPE,
   RUN_STATUS,
@@ -60,6 +62,8 @@ import {
   type GuidedBlockerCode,
   type GuidedProgressStep,
   type GuidedWorkflowStage,
+  type ProjectMemoryCategory,
+  type ProjectMemoryStatus,
   type ReviewPatchState,
   type RunChangeType,
   type RunStatus,
@@ -303,6 +307,12 @@ const ARCHITECT_CONTEXT_CHANGE_LABELS: Record<ArchitectContextChangeKind, string
   TASK_ADDED: "Added to recent context",
   TASK_MODIFIED: "Specification changed",
   TASK_REMOVED: "Removed from recent context",
+  MEMORY_ADDED: "Added to project memory",
+  MEMORY_MODIFIED: "Memory changed",
+  // Archivage et suppression produisent la meme absence : le manifest ne
+  // conserve que ce qui a ete envoye, et nommer la cause reviendrait a
+  // l'inventer.
+  MEMORY_REMOVED: "Removed from Architect context",
 };
 
 /** Auteur d'un message, tel que le fil l'affiche. */
@@ -504,6 +514,52 @@ const GUIDED_PROGRESS_STEP_LABELS: Record<GuidedProgressStep, string> = {
   [GUIDED_PROGRESS_STEP.CORRECTION]: "Correction",
   [GUIDED_PROGRESS_STEP.DONE]: "Done",
 };
+
+/**
+ * Categories de la memoire projet.
+ *
+ * Quatre libelles, comme quatre categories. `Knowledge` plutot que `Fact` :
+ * une connaissance durable peut etre un usage, un environnement, une habitude
+ * d'equipe — pas seulement un fait verifiable.
+ */
+const PROJECT_MEMORY_CATEGORY_LABELS: Record<ProjectMemoryCategory, string> = {
+  [PROJECT_MEMORY_CATEGORY.DECISION]: "Decision",
+  [PROJECT_MEMORY_CATEGORY.CONSTRAINT]: "Constraint",
+  [PROJECT_MEMORY_CATEGORY.CONVENTION]: "Convention",
+  [PROJECT_MEMORY_CATEGORY.KNOWLEDGE]: "Knowledge",
+};
+
+/**
+ * Etat d'une entree de memoire.
+ *
+ * `Active` veut dire « envoyee a l'Architecte », `Archived` « conservee mais non
+ * envoyee ». Les deux mots portent cette difference a eux seuls, ce qui evite
+ * d'avoir a la relire ailleurs sur la page.
+ */
+const PROJECT_MEMORY_STATUS_LABELS: Record<ProjectMemoryStatus, string> = {
+  [PROJECT_MEMORY_STATUS.ACTIVE]: "Active",
+  [PROJECT_MEMORY_STATUS.ARCHIVED]: "Archived",
+};
+
+/** Description courte d'une categorie, affichee dans le formulaire. */
+const PROJECT_MEMORY_CATEGORY_HINTS: Record<ProjectMemoryCategory, string> = {
+  [PROJECT_MEMORY_CATEGORY.DECISION]: "Un choix deja tranche pour ce projet.",
+  [PROJECT_MEMORY_CATEGORY.CONSTRAINT]: "Une limite qu'une decision future doit respecter.",
+  [PROJECT_MEMORY_CATEGORY.CONVENTION]: "Une regle de conception ou de developpement.",
+  [PROJECT_MEMORY_CATEGORY.KNOWLEDGE]: "Un fait durable utile a la comprehension du projet.",
+};
+
+export function projectMemoryCategoryLabel(category: ProjectMemoryCategory): string {
+  return PROJECT_MEMORY_CATEGORY_LABELS[category];
+}
+
+export function projectMemoryStatusLabel(status: ProjectMemoryStatus): string {
+  return PROJECT_MEMORY_STATUS_LABELS[status];
+}
+
+export function projectMemoryCategoryHint(category: ProjectMemoryCategory): string {
+  return PROJECT_MEMORY_CATEGORY_HINTS[category];
+}
 
 export function guidedStageLabel(stage: GuidedWorkflowStage): string {
   return GUIDED_STAGE_LABELS[stage];

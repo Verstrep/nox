@@ -40,6 +40,7 @@ const BASE: PrepareArchitectInput = {
     },
   ],
   tasks: [],
+  memories: [],
   transcript: [],
   newMessage: "Je veux exporter les taches en JSON.",
   model: "modele-de-test",

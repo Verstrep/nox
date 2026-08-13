@@ -135,6 +135,25 @@ export {
 } from "./review-feedback.js";
 
 export {
+  InvalidProjectMemoryRecordError,
+  createProjectMemory,
+  deleteProjectMemory,
+  getProjectMemory,
+  listActiveProjectMemories,
+  listProjectMemories,
+  projectMemoryStats,
+  sanitizedMemoryChars,
+  setProjectMemoryStatus,
+  updateProjectMemory,
+  type CreateProjectMemoryInput,
+  type MemorySanitizer,
+  type MemoryWriteRefusal,
+  type MemoryWriteResult,
+  type ProjectMemoryStats,
+  type UpdateProjectMemoryInput,
+} from "./project-memory.js";
+
+export {
   DATABASE_URL_ENV_VAR,
   databaseFileExists,
   findRepositoryRoot,

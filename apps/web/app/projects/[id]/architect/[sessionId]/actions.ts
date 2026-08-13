@@ -25,6 +25,7 @@ import { describeArchitectError, describeArchitectTextRefusal } from "@/lib/arch
 import { OpenAIArchitectProvider } from "@/lib/architect/openai";
 import { loadRecentArchitectTasks } from "@/lib/architect/recent-tasks";
 import { reviewArchitectTurn, sendArchitectTurn } from "@/lib/architect/service";
+import { loadActiveProjectMemories } from "@/lib/memory";
 import { taskUrl } from "@/lib/task-display";
 import { applyTaskDocumentSync } from "@/lib/tasks";
 import type { TaskFormValues } from "@/lib/task-input";
@@ -131,6 +132,9 @@ export async function reviewTurnAction(
       repositoryPath: loaded.project.repositoryPath,
       message,
       tasks: await loadRecentArchitectTasks(db, projectId),
+      // Relue a chaque tour, jamais figee a l'ouverture : une entree archivee
+      // entre deux tours doit disparaitre du contexte.
+      memories: await loadActiveProjectMemories(projectId),
       // Le modele n'entre que dans l'empreinte d'entree : une configuration
       // incomplete n'empeche ni de preparer, ni de relire ce qui partirait.
       model: config.ok ? config.config.model : "",
@@ -184,6 +188,7 @@ export async function sendTurnAction(
       projectName: loaded.project.name,
       repositoryPath: loaded.project.repositoryPath,
       tasks: await loadRecentArchitectTasks(db, projectId),
+      memories: await loadActiveProjectMemories(projectId),
       model: config.config.model,
       provider: new OpenAIArchitectProvider({ apiKey: config.config.apiKey }),
       environment: process.env,

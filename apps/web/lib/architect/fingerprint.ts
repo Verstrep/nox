@@ -30,7 +30,11 @@
  * concatenent en `abc`.
  */
 
-import type { ArchitectPromptDocument, ArchitectPromptTask } from "@nox/shared";
+import type {
+  ArchitectPromptDocument,
+  ArchitectPromptMemory,
+  ArchitectPromptTask,
+} from "@nox/shared";
 import { createHash, type Hash } from "node:crypto";
 
 import type { ArchitectContextBundle } from "./context.ts";
@@ -81,6 +85,38 @@ export function architectTaskRevision(task: ArchitectPromptTask): string {
   return hash.digest("hex");
 }
 
+/**
+ * Revision d'une entree de memoire, calculee sur ce qui est reellement envoye.
+ *
+ * ## Pourquoi le texte sanitise, et non la ligne en base
+ *
+ * La revision doit decrire ce que le fournisseur a **recu**. Un contenu dont la
+ * sanitation a masque une valeur `NOX_*` part different de ce qui est stocke ;
+ * hacher le texte brut ferait croire a l'historique qu'un autre texte avait ete
+ * transmis.
+ *
+ * ## Pourquoi le statut n'y figure pas
+ *
+ * `ARCHIVED` signifie simplement « absente du contexte ». Une entree archivee ne
+ * produit aucune source dans le manifest : sa disparition se lit deja comme un
+ * retrait, et faire varier la revision avec le statut ajouterait un changement
+ * la ou il y a une absence.
+ *
+ * `updatedAt` n'y figure pas non plus : un horodatage dit quand une ligne a ete
+ * touchee, pas ce qu'elle contient. Une reecriture a l'identique ne doit pas se
+ * signaler comme un changement de contexte.
+ */
+export function projectMemoryRevision(memory: ArchitectPromptMemory): string {
+  const hash = createHash("sha256");
+  field(hash, "memory");
+  field(hash, memory.code);
+  field(hash, memory.category);
+  field(hash, memory.title);
+  field(hash, memory.content);
+  field(hash, memory.rationale ?? "");
+  return hash.digest("hex");
+}
+
 /** Ajoute un document, contenu et sort de troncature compris. */
 function fieldDocument(hash: Hash, document: ArchitectPromptDocument): void {
   field(hash, document.path);
@@ -113,6 +149,15 @@ export function architectContextFingerprint(bundle: ArchitectContextBundle): str
   hash.update(" ");
   for (const document of bundle.contextDocuments) {
     fieldDocument(hash, document);
+  }
+
+  // La memoire entre dans l'empreinte : archiver, modifier ou ajouter une
+  // entree active change le contexte, et doit donc se signaler comme tel.
+  // L'ordre compte autant que le contenu — il est celui des codes.
+  hash.update(String(bundle.projectMemory.length));
+  hash.update(" ");
+  for (const memory of bundle.projectMemory) {
+    field(hash, memory.revision);
   }
 
   hash.update(String(bundle.recentTasks.length));

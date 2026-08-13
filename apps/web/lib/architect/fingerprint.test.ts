@@ -15,10 +15,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { ArchitectPromptDocument, ArchitectPromptTask } from "@nox/shared";
+import type {
+  ArchitectPromptDocument,
+  ArchitectPromptMemory,
+  ArchitectPromptTask,
+} from "@nox/shared";
 
 import type { ArchitectContextBundle } from "./context.ts";
-import { architectContextFingerprint, architectTaskRevision } from "./fingerprint.ts";
+import {
+  architectContextFingerprint,
+  architectTaskRevision,
+  projectMemoryRevision,
+} from "./fingerprint.ts";
 
 function task(overrides: Partial<ArchitectPromptTask> = {}): ArchitectPromptTask {
   return {
@@ -49,6 +57,7 @@ function bundle(overrides: Partial<ArchitectContextBundle> = {}): ArchitectConte
     manifest: { schemaVersion: 1, sources: [], totalChars: 0, missing: ["AGENTS.md"] },
     instructionDocuments: [document()],
     contextDocuments: [document({ path: "docs/ARCHITECTURE.md", revision: "b".repeat(64) })],
+    projectMemory: [],
     recentTasks: [task()],
     availableDocuments: ["CLAUDE.md", "docs/ARCHITECTURE.md"],
     ...overrides,
@@ -198,6 +207,113 @@ describe("architectContextFingerprint", () => {
           manifest: { schemaVersion: 1, sources: [], totalChars: 999, missing: ["AGENTS.md"] },
         }),
       ),
+    );
+  });
+});
+
+describe("projectMemoryRevision", () => {
+  const memory = (overrides: Record<string, unknown> = {}): ArchitectPromptMemory => ({
+    code: "MEM-001",
+    category: "DECISION",
+    revision: "",
+    title: "Un titre",
+    content: "Un contenu.",
+    rationale: null,
+    ...overrides,
+  });
+
+  it("est deterministe", () => {
+    assert.equal(projectMemoryRevision(memory()), projectMemoryRevision(memory()));
+  });
+
+  it("change avec le titre", () => {
+    assert.notEqual(
+      projectMemoryRevision(memory()),
+      projectMemoryRevision(memory({ title: "Un autre titre" })),
+    );
+  });
+
+  it("change avec la categorie", () => {
+    assert.notEqual(
+      projectMemoryRevision(memory()),
+      projectMemoryRevision(memory({ category: "CONSTRAINT" })),
+    );
+  });
+
+  it("change avec le contenu", () => {
+    assert.notEqual(
+      projectMemoryRevision(memory()),
+      projectMemoryRevision(memory({ content: "Un autre contenu." })),
+    );
+  });
+
+  it("change avec la justification", () => {
+    assert.notEqual(
+      projectMemoryRevision(memory()),
+      projectMemoryRevision(memory({ rationale: "Parce que." })),
+    );
+  });
+
+  it("ne depend pas du champ revision lui-meme", () => {
+    assert.equal(
+      projectMemoryRevision(memory({ revision: "a".repeat(64) })),
+      projectMemoryRevision(memory({ revision: "b".repeat(64) })),
+    );
+  });
+
+  it("resiste au deplacement d'une frontiere entre deux champs", () => {
+    assert.notEqual(
+      projectMemoryRevision(memory({ title: "ab", content: "c" })),
+      projectMemoryRevision(memory({ title: "a", content: "bc" })),
+    );
+  });
+
+  it("distingue deux textes Unicode voisins", () => {
+    assert.notEqual(
+      projectMemoryRevision(memory({ content: "café" })),
+      projectMemoryRevision(memory({ content: "cafe" })),
+    );
+  });
+});
+
+describe("architectContextFingerprint — memoire", () => {
+  const entry = (overrides: Record<string, unknown> = {}): ArchitectPromptMemory => ({
+    code: "MEM-001",
+    category: "DECISION",
+    revision: "m".repeat(64),
+    title: "Un titre",
+    content: "Un contenu.",
+    rationale: null,
+    ...overrides,
+  });
+
+  it("change lorsqu'une memoire est ajoutee", () => {
+    assert.notEqual(
+      architectContextFingerprint(bundle()),
+      architectContextFingerprint(bundle({ projectMemory: [entry()] })),
+    );
+  });
+
+  it("change lorsqu'une memoire est modifiee", () => {
+    assert.notEqual(
+      architectContextFingerprint(bundle({ projectMemory: [entry()] })),
+      architectContextFingerprint(bundle({ projectMemory: [entry({ revision: "n".repeat(64) })] })),
+    );
+  });
+
+  it("change lorsqu'une memoire disparait du contexte", () => {
+    assert.notEqual(
+      architectContextFingerprint(bundle({ projectMemory: [entry()] })),
+      architectContextFingerprint(bundle({ projectMemory: [] })),
+    );
+  });
+
+  it("depend de l'ordre des entrees", () => {
+    const a = entry();
+    const b = entry({ code: "MEM-002", revision: "p".repeat(64) });
+    assert.notEqual(
+      architectContextFingerprint(bundle({ projectMemory: [a, b] })),
+      architectContextFingerprint(bundle({ projectMemory: [b, a] })),
     );
   });
 });

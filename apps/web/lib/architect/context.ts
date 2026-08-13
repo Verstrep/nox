@@ -4,10 +4,14 @@
  * ## Une liste fermee, pas une exploration
  *
  * L'Architecte ne recoit **jamais** le repository. Il recoit huit chemins
- * connus a l'avance — deux fichiers de conventions, six documents produit — et
- * les dernieres taches enregistrees. Rien d'autre n'est candidat : ni code
- * source, ni diff, ni sortie de Claude Code, ni fichier `.env`, ni chemin choisi
- * par le navigateur.
+ * connus a l'avance — deux fichiers de conventions, six documents produit —, les
+ * dernieres taches enregistrees, et depuis TASK-017 la memoire **active** du
+ * projet. Rien d'autre n'est candidat : ni code source, ni diff, ni sortie de
+ * Claude Code, ni fichier `.env`, ni chemin choisi par le navigateur.
+ *
+ * La memoire ne fait pas exception a cette regle, elle la prolonge : elle est
+ * une liste fermee elle aussi, mais fermee par l'utilisateur plutot que par NOX.
+ * Rien n'y entre sans qu'il l'ait ecrit et enregistre lui-meme.
  *
  * C'est la premiere protection de NOX, et de loin la plus solide. Un nettoyeur
  * de secrets peut manquer une forme inconnue ; une liste fermee ne peut pas
@@ -34,13 +38,16 @@
  * cout, et une seconde source d'erreur.
  */
 
-import type {
-  ArchitectContextManifest,
-  ArchitectContextSource,
-  ArchitectPromptDocument,
-  ArchitectPromptTask,
-  DevelopmentTaskDetail,
-  ProjectDocumentSummary,
+import {
+  PROJECT_MEMORY_STATUS,
+  type ArchitectContextManifest,
+  type ArchitectContextSource,
+  type ArchitectPromptDocument,
+  type ArchitectPromptMemory,
+  type ArchitectPromptTask,
+  type DevelopmentTaskDetail,
+  type ProjectDocumentSummary,
+  type ProjectMemoryEntry,
 } from "@nox/shared";
 
 /** Bornes du contexte. Exprimees en caracteres, mesurees apres sanitation. */
@@ -108,6 +115,14 @@ export type ArchitectContextInput = {
   inventory: readonly ProjectDocumentSummary[];
   /** Taches du projet, de la plus recente a la plus ancienne. */
   tasks: readonly DevelopmentTaskDetail[];
+  /**
+   * Memoire du projet, dans l'ordre des codes.
+   *
+   * Les entrees archivees sont refiltrees ici plutot que supposees absentes :
+   * la garantie « une memoire archivee ne quitte jamais la machine » doit vivre
+   * dans le constructeur, pas dans la discipline de l'appelant.
+   */
+  memories: readonly ProjectMemoryEntry[];
   /** Nettoyeur applique a **toute** chaine transmise. */
   sanitize: (value: string) => string;
   /**
@@ -118,12 +133,16 @@ export type ArchitectContextInput = {
    * `fingerprint.ts`, qui a le droit d'utiliser `node:crypto`.
    */
   taskRevision: (task: ArchitectPromptTask) => string;
+  /** Revision d'une memoire, calculee sur son texte sanitise. */
+  memoryRevision: (memory: ArchitectPromptMemory) => string;
 };
 
 export type ArchitectContextBundle = {
   manifest: ArchitectContextManifest;
   instructionDocuments: ArchitectPromptDocument[];
   contextDocuments: ArchitectPromptDocument[];
+  /** Entrees actives, sanitisees, dans l'ordre des codes. */
+  projectMemory: ArchitectPromptMemory[];
   recentTasks: ArchitectPromptTask[];
   /** Liste fermee des chemins referencables par une proposition. */
   availableDocuments: string[];
@@ -219,9 +238,11 @@ export function buildAvailableDocuments(
 /**
  * Construit le bundle transmis a l'architecte.
  *
- * L'ordre de consommation du budget est fixe : conventions, taches recentes,
- * puis documents produit. Les conventions d'abord parce qu'elles sont des
- * regles ; les taches ensuite parce qu'elles sont petites et montrent la taille
+ * L'ordre de consommation du budget est fixe : conventions, memoire du projet,
+ * taches recentes, puis documents produit. Les conventions d'abord parce
+ * qu'elles sont des regles ; la memoire ensuite parce qu'elle est ce que
+ * l'utilisateur a explicitement demande de retenir, et qu'elle ne doit jamais
+ * etre tronquee ; les taches parce qu'elles sont petites et montrent la taille
  * attendue d'une tache dans ce projet ; les documents enfin, du plus general au
  * plus volumineux.
  */
@@ -267,6 +288,46 @@ export function buildArchitectContext(input: ArchitectContextInput): ArchitectCo
     }
   }
 
+  // La memoire passe **avant** les taches et les documents produit, et ce n'est
+  // pas un detail : elle ne doit jamais etre tronquee.
+  //
+  // L'arithmetique le garantit. Les conventions consomment au plus
+  // 2 x 32 Kio = 64 Kio, il reste donc toujours au moins 64 Kio ici — et le
+  // budget actif de la memoire, verifie a l'ecriture, vaut 48 Kio. Une entree
+  // active est donc integralement transmise ou n'existe pas : il n'y a pas de
+  // troisieme cas, et l'interface peut affirmer « ACTIVE = envoye ».
+  const projectMemory: ArchitectPromptMemory[] = [];
+  for (const memory of input.memories) {
+    if (memory.status !== PROJECT_MEMORY_STATUS.ACTIVE) {
+      continue;
+    }
+
+    const entry: ArchitectPromptMemory = {
+      code: memory.code,
+      category: memory.category,
+      // Remplie juste apres : la revision decrit le texte sanitise, donc elle
+      // ne peut pas etre calculee avant lui.
+      revision: "",
+      title: input.sanitize(memory.title),
+      content: input.sanitize(memory.content),
+      rationale: memory.rationale === null ? null : input.sanitize(memory.rationale),
+    };
+    entry.revision = input.memoryRevision(entry);
+
+    const chars = entry.title.length + entry.content.length + (entry.rationale?.length ?? 0);
+    remaining -= chars;
+    projectMemory.push(entry);
+
+    sources.push({
+      kind: "MEMORY",
+      identifier: memory.code,
+      revision: entry.revision,
+      includedChars: chars,
+      truncated: false,
+      category: memory.category,
+    });
+  }
+
   const recentTasks: ArchitectPromptTask[] = [];
   for (const task of input.tasks.slice(0, ARCHITECT_CONTEXT_LIMITS.recentTasks)) {
     const { task: summary, chars } = summarizeTask(task, input.sanitize);
@@ -304,6 +365,7 @@ export function buildArchitectContext(input: ArchitectContextInput): ArchitectCo
     },
     instructionDocuments,
     contextDocuments,
+    projectMemory,
     recentTasks,
     availableDocuments: buildAvailableDocuments(input.inventory),
   };

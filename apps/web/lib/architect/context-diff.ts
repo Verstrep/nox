@@ -24,9 +24,15 @@ import type { ArchitectContextManifest, ArchitectContextSource } from "@nox/shar
 /**
  * Nature d'un changement entre deux tours.
  *
- * Les documents et les taches sont distingues parce qu'ils ne changent pas pour
+ * Documents, taches et memoire sont distingues parce qu'ils ne changent pas pour
  * les memes raisons : un document est modifie par l'utilisateur, une tache entre
- * ou sort de la fenetre des dix plus recentes sans que personne n'y touche.
+ * ou sort de la fenetre des dix plus recentes sans que personne n'y touche, et
+ * une entree de memoire ne bouge que sur une action explicite.
+ *
+ * `MEMORY_REMOVED` couvre deux gestes distincts — archivage et suppression — et
+ * c'est volontaire : le manifest ne conserve que ce qui a ete **envoye**, donc
+ * une entree absente est absente, sans que NOX puisse dire laquelle des deux
+ * causes s'applique. Nommer la cause reviendrait a l'inventer.
  */
 export const ARCHITECT_CONTEXT_CHANGE = {
   ADDED: "ADDED",
@@ -36,6 +42,9 @@ export const ARCHITECT_CONTEXT_CHANGE = {
   TASK_ADDED: "TASK_ADDED",
   TASK_MODIFIED: "TASK_MODIFIED",
   TASK_REMOVED: "TASK_REMOVED",
+  MEMORY_ADDED: "MEMORY_ADDED",
+  MEMORY_MODIFIED: "MEMORY_MODIFIED",
+  MEMORY_REMOVED: "MEMORY_REMOVED",
 } as const;
 
 export type ArchitectContextChangeKind =
@@ -56,8 +65,43 @@ function shortRevision(revision: string | null): string | null {
   return revision === null ? null : revision.slice(0, 12);
 }
 
-function isTask(source: ArchitectContextSource): boolean {
-  return source.kind === "TASK";
+/**
+ * Nature d'un changement, selon la source concernee.
+ *
+ * Une table plutot qu'une suite de conditions : une nature de source ajoutee
+ * plus tard ne peut pas passer inapercue, `Record` obligeant a la traiter.
+ */
+const CHANGE_KINDS: Record<
+  ArchitectContextSource["kind"],
+  { added: ArchitectContextChangeKind; modified: ArchitectContextChangeKind; removed: ArchitectContextChangeKind }
+> = {
+  INSTRUCTIONS: {
+    added: ARCHITECT_CONTEXT_CHANGE.ADDED,
+    modified: ARCHITECT_CONTEXT_CHANGE.MODIFIED,
+    removed: ARCHITECT_CONTEXT_CHANGE.REMOVED,
+  },
+  DOCUMENT: {
+    added: ARCHITECT_CONTEXT_CHANGE.ADDED,
+    modified: ARCHITECT_CONTEXT_CHANGE.MODIFIED,
+    removed: ARCHITECT_CONTEXT_CHANGE.REMOVED,
+  },
+  TASK: {
+    added: ARCHITECT_CONTEXT_CHANGE.TASK_ADDED,
+    modified: ARCHITECT_CONTEXT_CHANGE.TASK_MODIFIED,
+    removed: ARCHITECT_CONTEXT_CHANGE.TASK_REMOVED,
+  },
+  MEMORY: {
+    added: ARCHITECT_CONTEXT_CHANGE.MEMORY_ADDED,
+    modified: ARCHITECT_CONTEXT_CHANGE.MEMORY_MODIFIED,
+    removed: ARCHITECT_CONTEXT_CHANGE.MEMORY_REMOVED,
+  },
+};
+
+function changeKinds(source: ArchitectContextSource) {
+  // Un manifest enregistre avant l'ajout d'une nature de source reste lisible :
+  // une valeur inconnue est traitee comme un document ordinaire plutot que de
+  // faire tomber la page d'historique.
+  return CHANGE_KINDS[source.kind] ?? CHANGE_KINDS.DOCUMENT;
 }
 
 /** Indexe les sources par identifiant ; deux sources ne le partagent jamais. */
@@ -85,7 +129,7 @@ export function diffArchitectManifests(
 
     if (old === undefined) {
       changes.push({
-        kind: isTask(source) ? ARCHITECT_CONTEXT_CHANGE.TASK_ADDED : ARCHITECT_CONTEXT_CHANGE.ADDED,
+        kind: changeKinds(source).added,
         identifier: source.identifier,
         previousRevision: null,
         currentRevision: shortRevision(source.revision),
@@ -95,9 +139,7 @@ export function diffArchitectManifests(
 
     if (old.revision !== source.revision) {
       changes.push({
-        kind: isTask(source)
-          ? ARCHITECT_CONTEXT_CHANGE.TASK_MODIFIED
-          : ARCHITECT_CONTEXT_CHANGE.MODIFIED,
+        kind: changeKinds(source).modified,
         identifier: source.identifier,
         previousRevision: shortRevision(old.revision),
         currentRevision: shortRevision(source.revision),
@@ -122,7 +164,7 @@ export function diffArchitectManifests(
       continue;
     }
     changes.push({
-      kind: isTask(source) ? ARCHITECT_CONTEXT_CHANGE.TASK_REMOVED : ARCHITECT_CONTEXT_CHANGE.REMOVED,
+      kind: changeKinds(source).removed,
       identifier: source.identifier,
       previousRevision: shortRevision(source.revision),
       currentRevision: null,

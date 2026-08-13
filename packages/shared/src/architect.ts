@@ -709,13 +709,22 @@ export const ARCHITECT_SCHEMA_NAME = "nox_architect_turn";
  * texte, ni secret — seulement de quoi retrouver la version utilisee.
  */
 export type ArchitectContextSource = {
-  kind: "INSTRUCTIONS" | "DOCUMENT" | "TASK";
-  /** Chemin relatif d'un document, ou code d'une tache. */
+  kind: "INSTRUCTIONS" | "DOCUMENT" | "TASK" | "MEMORY";
+  /** Chemin relatif d'un document, code d'une tache, ou code d'une memoire. */
   identifier: string;
-  /** Revision SHA-256 du document, lorsqu'elle existe. */
+  /** Revision SHA-256 du contenu envoye, lorsqu'elle existe. */
   revision: string | null;
   includedChars: number;
   truncated: boolean;
+  /**
+   * Categorie d'une entree de memoire.
+   *
+   * Facultative parce qu'elle n'a de sens que pour `MEMORY` — et parce qu'un
+   * manifest enregistre avant TASK-017 n'en porte aucune. Un champ obligatoire
+   * rendrait illisibles les generations passees, que NOX conserve precisement
+   * pour pouvoir les relire.
+   */
+  category?: string;
 };
 
 export type ArchitectContextManifest = {
@@ -726,14 +735,18 @@ export type ArchitectContextManifest = {
   missing: string[];
 };
 
+const CONTEXT_SOURCE_KINDS: readonly string[] = ["INSTRUCTIONS", "DOCUMENT", "TASK", "MEMORY"];
+
 function isContextSource(value: unknown): value is ArchitectContextSource {
   return (
     isRecord(value) &&
-    (value["kind"] === "INSTRUCTIONS" || value["kind"] === "DOCUMENT" || value["kind"] === "TASK") &&
+    typeof value["kind"] === "string" &&
+    CONTEXT_SOURCE_KINDS.includes(value["kind"]) &&
     typeof value["identifier"] === "string" &&
     (value["revision"] === null || typeof value["revision"] === "string") &&
     typeof value["includedChars"] === "number" &&
-    typeof value["truncated"] === "boolean"
+    typeof value["truncated"] === "boolean" &&
+    (value["category"] === undefined || typeof value["category"] === "string")
   );
 }
 

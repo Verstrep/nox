@@ -28,11 +28,16 @@ import {
   type ArchitectPromptMessage,
   type DevelopmentTaskDetail,
   type ProjectDocumentSummary,
+  type ProjectMemoryEntry,
 } from "@nox/shared";
 import { createHash } from "node:crypto";
 
 import { buildArchitectContext, type FetchedArchitectDocument } from "./context.ts";
-import { architectContextFingerprint, architectTaskRevision } from "./fingerprint.ts";
+import {
+  architectContextFingerprint,
+  architectTaskRevision,
+  projectMemoryRevision,
+} from "./fingerprint.ts";
 import { createArchitectSanitizer } from "./sanitize.ts";
 
 export type PrepareArchitectInput = {
@@ -41,6 +46,8 @@ export type PrepareArchitectInput = {
   documents: readonly FetchedArchitectDocument[];
   inventory: readonly ProjectDocumentSummary[];
   tasks: readonly DevelopmentTaskDetail[];
+  /** Memoire du projet, dans l'ordre des codes. Les archivees sont ecartees. */
+  memories: readonly ProjectMemoryEntry[];
   /** Messages deja echanges, du plus ancien au plus recent. */
   transcript: readonly ArchitectPromptMessage[];
   /** Message que l'utilisateur vient d'ecrire. */
@@ -118,8 +125,10 @@ export function prepareArchitectGeneration(
     documents: input.documents,
     inventory: input.inventory,
     tasks: input.tasks,
+    memories: input.memories,
     sanitize,
     taskRevision: architectTaskRevision,
+    memoryRevision: projectMemoryRevision,
   });
 
   const transcript: ArchitectPromptMessage[] = input.transcript.map((message) => ({
@@ -136,6 +145,7 @@ export function prepareArchitectGeneration(
     projectName: sanitize(input.projectName),
     instructionDocuments: bundle.instructionDocuments,
     contextDocuments: bundle.contextDocuments,
+    projectMemory: bundle.projectMemory,
     recentTasks: bundle.recentTasks,
     availableDocuments: bundle.availableDocuments,
     transcript,

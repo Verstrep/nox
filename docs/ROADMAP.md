@@ -561,8 +561,12 @@ plusieurs runs simultanément.
   ([D-234](DECISIONS.md#d-234--les-checkpoints-ia-sont-visibles-et-seulement-là-où-ils-existent)).
 
 **Terminée.** Aucune étape ne se déclenche seule : ni au chargement d'une page, ni après un délai,
-ni parce que l'étape précédente vient de se terminer. Le premier parcours réel est une vérification
-manuelle décrite dans [PROJECT_STATE.md](PROJECT_STATE.md).
+ni parce que l'étape précédente vient de se terminer.
+
+**Validée sur un parcours réel** : `Drafting → Mark ready`, `Ready to run → Run Claude Code`,
+runner arrêté correctement détecté, `Running → Open run`, `Reviewing → Analyze with Architect`,
+verdict réel `Approve recommended`, `Review and approve`, tâche restée en `REVIEW`, approbation
+humaine distincte, puis `Done` sans aucune action recommandée.
 
 **Toujours hors périmètre** : exécution automatique de l'étape suivante, appel OpenAI ou lancement
 Claude automatique, `Approve` ou `Request changes` automatique, boucle autonome OpenAI ↔ Claude,
@@ -570,7 +574,42 @@ planification de plusieurs tâches, cron, scheduler, notifications, queue multi-
 orchestration parallèle, politique de coût, intégration GitHub.
 
 ---
-## ⬜ 17. Test sur un petit projet réel
+
+## ✅ 17. Mémoire projet structurée et décisions durables — `TASK-017`
+
+**Objectif** : donner au projet une mémoire explicite, que l'Architecte retrouve sans la chercher.
+
+- Quatre catégories fermées : `DECISION`, `CONSTRAINT`, `CONVENTION`, `KNOWLEDGE`
+  ([D-239](DECISIONS.md#d-239--quatre-catégories-et-pas-une-de-plus)).
+- Codes `MEM-xxx` stables, dérivés d'un compteur atomique et jamais réattribués.
+- Création, modification, archivage, restauration et suppression, toutes manuelles
+  ([D-240](DECISIONS.md#d-240--rien-nentre-en-mémoire-sans-une-action-humaine)).
+- La mémoire vit dans SQLite : aucune écriture Git, aucun fichier Markdown généré
+  ([D-241](DECISIONS.md#d-241--la-mémoire-vit-dans-sqlite-pas-dans-le-repository)).
+- `ACTIVE` est envoyé, `ARCHIVED` ne l'est pas, et il n'existe pas de troisième état
+  ([D-242](DECISIONS.md#d-242--active-veut-dire--envoyé--archived-veut-dire--non-envoyé-)).
+- Budget de 48 Kio d'entrées actives, **refusé à l'écriture** plutôt que tronqué à l'envoi
+  ([D-243](DECISIONS.md#d-243--le-budget-est-refusé-à-lécriture-jamais-tronqué-à-lenvoi)).
+- Ordre déterministe, aucun classement ni sélection par IA
+  ([D-244](DECISIONS.md#d-244--aucun-classement-aucune-sélection-par-ia)).
+- Sanitation avant envoi, révision calculée sur le texte réellement transmis
+  ([D-245](DECISIONS.md#d-245--la-mémoire-est-sanitisée-avant-de-partir-et-stockée-telle-quécrite),
+  [D-246](DECISIONS.md#d-246--la-révision-décrit-ce-qui-a-été-envoyé)).
+- La mémoire entre dans l'empreinte de contexte : une modification après l'aperçu bloque l'envoi
+  ([D-248](DECISIONS.md#d-248--un-changement-de-mémoire-est-un-changement-de-contexte)).
+
+**Terminée.** Aucun appel OpenAI réel n'a été effectué pendant l'implémentation : tous les tests
+utilisent un faux fournisseur, et aucun ne lance Claude Code. La première conversation nourrie par
+la mémoire est une vérification manuelle décrite dans [PROJECT_STATE.md](PROJECT_STATE.md).
+
+**Toujours hors périmètre** : extraction automatique depuis une conversation, suggestions
+automatiques, résumé automatique, mémoire vectorielle, embeddings, recherche sémantique, RAG,
+mémoire globale ou partagée entre projets, import automatique de `DECISIONS.md`, synchronisation
+mémoire ↔ Markdown, expiration automatique, fusion de doublons, tags libres, relations entre
+mémoires, mémoire dans la review Architecte.
+
+---
+## ⬜ 18. Test sur un petit projet réel
 
 **Objectif** : confronter NOX à un usage réel.
 
@@ -582,7 +621,7 @@ orchestration parallèle, politique de coût, intégration GitHub.
 
 ---
 
-## ⬜ 18. Fonctionnalités avancées
+## ⬜ 19. Fonctionnalités avancées
 
 **Objectif** : améliorer l'usage une fois la V1 éprouvée.
 
@@ -591,4 +630,4 @@ orchestration parallèle, politique de coût, intégration GitHub.
 - Modèles de tâches réutilisables.
 - Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
 
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 17.**
+**Aucun élément de cette étape ne doit être anticipé avant l'étape 18.**

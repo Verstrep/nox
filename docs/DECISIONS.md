@@ -3127,3 +3127,171 @@ contredirait la page de la tâche. Une même tâche ne doit pas dire deux choses
 l'endroit où on la regarde.
 
 Un tableau de bord global reste possible plus tard, avec les requêtes qui le rendraient honnête.
+
+### D-238 — La mémoire appartient à un projet, jamais à l'utilisateur
+
+**Décision.** Une entrée de mémoire est rattachée à un `Project`. Il n'existe ni mémoire globale,
+ni mémoire partagée entre projets, ni héritage.
+
+**Justification.** « Le développement se fait sous Windows » est vrai d'un poste ; « le runner ne
+contient jamais de logique produit » est vrai d'un projet, et faux du suivant. Mélanger les deux
+produirait un contexte où l'Architecte recevrait, pour chaque projet, les décisions de tous les
+autres — c'est-à-dire exactement le bruit que la mémoire existe pour supprimer.
+
+La suppression d'un projet emporte sa mémoire, en cascade. Une mémoire orpheline ne décrirait plus
+rien.
+
+### D-239 — Quatre catégories, et pas une de plus
+
+**Décision.** `DECISION`, `CONSTRAINT`, `CONVENTION`, `KNOWLEDGE`. Ni `PREFERENCE`, ni `TODO`, ni
+`IDEA`, ni `BUG`, ni `NOTE`, ni tags libres.
+
+**Justification.** Les quatre catégories retenues répondent à la même question — « qu'est-ce qui
+reste vrai du projet ? » — sous quatre angles qu'un lecteur distingue immédiatement. Les autres
+répondent à une question différente : « qu'est-ce qu'il reste à faire ? ». Les tâches et le backlog
+la traitent déjà.
+
+Une mémoire qui accueillerait des idées deviendrait un bloc-notes, c'est-à-dire un texte que
+personne ne relit et que l'Architecte recevrait quand même.
+
+### D-240 — Rien n'entre en mémoire sans une action humaine
+
+**Décision.** Aucune entrée n'est créée, modifiée ou archivée automatiquement. Ni depuis une
+conversation Architecte, ni depuis une proposition, ni depuis une observation de review, ni depuis
+un compte rendu de Claude Code, ni depuis une tâche ou un document. Le Structured Output de la
+conversation reste inchangé : il ne porte ni `memoriesToCreate`, ni `memoriesToUpdate`.
+
+**Justification.** Une conversation contient des hésitations. « On pourrait peut-être utiliser
+Redis » n'est pas une décision, et le transformer en mémoire durable fabriquerait un contexte que
+personne n'a relu — puis le rejouerait à chaque tour, avec l'autorité d'un fait établi.
+
+Une mémoire est une affirmation que l'utilisateur accepte de voir répétée indéfiniment à sa place.
+Cela mérite un clic.
+
+### D-241 — La mémoire vit dans SQLite, pas dans le repository
+
+**Décision.** Créer, modifier, archiver ou supprimer une entrée ne produit aucune écriture Git,
+aucun fichier Markdown, aucun appel au runner. NOX ne génère ni ne synchronise de fichier mémoire, et
+ne modifie jamais `CLAUDE.md` ni `docs/DECISIONS.md`.
+
+**Justification.** La mémoire est un outil de NOX, pas un livrable du projet. La versionner
+obligerait à commiter chaque correction de frappe, à gérer des conflits sur un fichier que deux
+outils écrivent, et à décider quoi faire quand le disque et la base divergent — trois problèmes que
+personne n'a demandé à résoudre.
+
+Une décision qui doit **aussi** vivre dans le repository se recopie à la main dans `DECISIONS.md`.
+Le geste est court, et il reste un choix.
+
+### D-242 — `ACTIVE` veut dire « envoyé », `ARCHIVED` veut dire « non envoyé »
+
+**Décision.** Deux états, et pas un troisième. Toutes les entrées actives partent dans le contexte
+Architecte ; aucune entrée archivée ne quitte la machine. L'archivage est manuel, et il n'existe
+aucune expiration automatique.
+
+**Justification.** Un troisième état — « active mais écartée faute de place » — serait invisible.
+L'interface annoncerait « 42 entrées actives » pendant que douze seulement partiraient, et
+l'utilisateur ne saurait plus ce que l'Architecte connaît. Or c'est précisément la question à
+laquelle cette page doit répondre.
+
+`ARCHIVED` existe plutôt que la seule suppression parce qu'une décision peut cesser de s'appliquer
+tout en restant un fait important : « nous avions choisi SQLite pour l'état local » explique la forme
+actuelle du code, même quand ce n'est plus vrai.
+
+### D-243 — Le budget est refusé à l'écriture, jamais tronqué à l'envoi
+
+**Décision.** 48 Kio de mémoire active par projet, mesurés sur le texte sanitisé, et 100 entrées au
+total. Une création, une modification ou une restauration qui ferait dépasser le budget est
+**refusée**, avec les trois sorties possibles : raccourcir, archiver autre chose, ou enregistrer
+directement en `Archived`.
+
+**Justification.** Tronquer à l'envoi placerait le refus là où personne ne le verrait, et le rendrait
+dépendant d'un classement interne. Refuser à l'écriture le place là où l'utilisateur peut agir, au
+moment où il a le texte sous les yeux.
+
+48 Kio, c'est un peu plus du tiers du budget total de contexte (128 Kio) : assez pour plusieurs
+dizaines de décisions écrites serré, assez peu pour que les documents du projet gardent la place qui
+leur revient. Le contrôle vit dans la transaction d'écriture, pas dans un champ caché du formulaire :
+le navigateur n'a aucune autorité sur ce qui tient dans le contexte.
+
+### D-244 — Aucun classement, aucune sélection par IA
+
+**Décision.** Les entrées actives partent dans l'ordre de leurs codes — `sequence` croissant. Ni
+`updatedAt DESC`, ni score de pertinence, ni sélection par un modèle, ni recherche sémantique.
+
+**Justification.** Un ordre qui suivrait les modifications déplacerait les décisions dans le prompt à
+chaque correction de frappe : le contexte changerait sans que rien n'ait changé, et l'avertissement
+« le contexte a changé » finirait par ne plus rien signaler.
+
+Un classement par pertinence, lui, demanderait de savoir ce qui est pertinent — donc un second appel,
+un second coût, et une seconde source d'erreur. L'ordre des codes est arbitraire, stable, et
+explicable en une phrase.
+
+### D-245 — La mémoire est sanitisée avant de partir, et stockée telle qu'écrite
+
+**Décision.** SQLite conserve le texte exact de l'utilisateur. La sanitation — valeurs `NOX_*`,
+chemins absolus, caractères de contrôle — s'applique à l'envoi, avec le **même** nettoyeur que les
+documents et les messages.
+
+**Justification.** Ce que l'utilisateur relira dans six mois doit être ce qu'il a écrit ; nettoyer à
+l'écriture lui ferait relire une version masquée de son propre texte, sans qu'il sache ce qui manque.
+
+Mais rien de brut ne doit quitter la machine : une mémoire est du texte libre, et un chemin absolu ou
+une valeur d'environnement peut s'y coller par mégarde. Le budget, lui, se mesure sur le texte
+**sanitisé** — celui qui part réellement — sans quoi une entrée acceptée à l'écriture pourrait ne pas
+tenir dans le contexte.
+
+### D-246 — La révision décrit ce qui a été envoyé
+
+**Décision.** `projectMemoryRevision` hache le code, la catégorie et les trois textes **sanitisés**.
+Ni `updatedAt`, ni le statut n'y figurent.
+
+**Justification.** La révision sert à deux choses : dire qu'une entrée a changé entre deux tours, et
+décrire ce que le fournisseur a reçu. Un horodatage ne dit ni l'un ni l'autre — il dit quand une
+ligne a été touchée, pas ce qu'elle contient, et une réécriture à l'identique se signalerait comme un
+changement.
+
+Le statut en est absent parce que `ARCHIVED` signifie simplement « absente du contexte » : une entrée
+archivée ne produit aucune source dans le manifest, et sa disparition se lit déjà comme un retrait.
+Le faire varier ajouterait un changement là où il y a une absence.
+
+### D-247 — Une mémoire est du contenu, jamais une instruction
+
+**Décision.** Les entrées sont délimitées dans le prompt, leurs marqueurs sont neutralisés, et le
+bloc annonce explicitement qu'il s'agit de contexte. Une mémoire ne peut modifier ni les
+instructions système, ni le schéma de sortie, ni la configuration du fournisseur.
+
+**Justification.** Une mémoire peut contenir « Ignore all previous instructions » — soit par
+plaisanterie, soit par recopie d'un texte trouvé ailleurs. La délimitation rend la citation non
+ambiguë, mais **ce n'est pas là que se joue la sécurité** : le modèle n'a aucun outil, sa sortie est
+revalidée côté serveur, et aucune tâche n'est créée sans un clic humain. C'est exactement le
+traitement des documents et des messages depuis TASK-013.
+
+### D-248 — Un changement de mémoire est un changement de contexte
+
+**Décision.** Les entrées actives entrent dans l'empreinte de contexte de TASK-014, avec leur ordre.
+Ajouter, modifier, archiver ou supprimer une entrée fait donc changer l'empreinte, et une
+modification survenue après l'aperçu bloque l'envoi — sans appel, sans quota consommé, sans option
+de forçage.
+
+**Justification.** La mémoire est du contexte au même titre qu'un document. Lui accorder une
+exception reviendrait à dire « ce que vous avez relu est ce qui part, sauf pour la mémoire », ce qui
+vide la garantie de son sens.
+
+Le diff de manifest distingue en revanche les trois natures — document, tâche, mémoire — parce
+qu'elles ne changent pas pour les mêmes raisons : un document est modifié par l'utilisateur, une
+tâche entre ou sort de la fenêtre des dix plus récentes sans que personne n'y touche, et une mémoire
+ne bouge que sur une action explicite.
+
+### D-249 — La review Architecte ne reçoit pas la mémoire
+
+**Décision.** Le bundle de TASK-015 reste inchangé : spécification de la tâche, instantané Git
+enregistré, validations. La Project Memory n'y est pas ajoutée.
+
+**Justification.** Une review répond à une question précise — « ce diff satisfait-il **cette**
+tâche ? » —, et la tâche porte déjà ses propres critères d'acceptation. Y verser le contexte projet
+élargirait la question sans qu'on ait décidé jusqu'où : un travail conforme à sa tâche serait-il
+refusé parce qu'il contredit une convention non citée dans la tâche ?
+
+C'est une question légitime, et elle mérite sa propre décision plutôt qu'un effet de bord de
+TASK-017. La conversation Architecte, elle, reçoit la mémoire — c'est la surface où l'on **conçoit**,
+donc celle où le contexte projet sert.

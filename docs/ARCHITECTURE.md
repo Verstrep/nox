@@ -197,8 +197,8 @@ dans un Client Component, et la clé n'atteint jamais le navigateur.
 Responsabilités :
 
 - tenir la **conversation locale** : transcript persisté, reconstruit en entier à chaque tour ;
-- assembler un **contexte projet contrôlé** à partir d'une liste fermée de documents et des
-  dernières tâches ;
+- assembler un **contexte projet contrôlé** à partir d'une liste fermée de documents, des
+  dernières tâches et de la **mémoire active du projet** ;
 - construire un prompt déterministe et le rendre prévisualisable avant tout envoi ;
 - calculer l'**empreinte du contexte** et la comparer entre l'aperçu et l'envoi ;
 - appeler le fournisseur avec un Structured Output strict ;
@@ -1601,3 +1601,138 @@ Dans les deux cas, ce qui ne dépend pas du service manquant reste utilisable : 
 `Request changes`, la lecture de la review, la modification du statut. Recommander une action
 impossible est pire que ne rien recommander — l'utilisateur clique, échoue, et cesse de faire
 confiance au guide ([D-235](DECISIONS.md#d-235--nox-reste-utilisable-sans-openai-et-sans-runner)).
+
+### 5.18 Mémoire projet
+
+Depuis TASK-017, un projet possède une mémoire : ce que NOX retient volontairement de lui.
+
+```text
+User-controlled Project Memory
+        ↓
+Active entries
+        ↓
+Sanitation
+        ↓
+Memory revisions
+        ↓
+Architect Context Bundle
+        ↓
+Preview
+        ↓
+Explicit OpenAI call
+```
+
+#### Conversation ≠ Project Memory
+
+```text
+Conversation
+     ≠
+Project Memory
+```
+
+C'est l'invariant central de l'étape. Une conversation contient des hésitations — « on pourrait
+peut-être utiliser Redis » — et rien de ce qui s'y dit ne devient une mémoire durable. Aucune
+entrée n'est créée, modifiée ou archivée automatiquement : ni depuis un message, ni depuis une
+proposition de l'architecte, ni depuis une observation de review, ni depuis un compte rendu de
+Claude Code, ni depuis une tâche ou un document
+([D-240](DECISIONS.md#d-240--rien-nentre-en-mémoire-sans-une-action-humaine)).
+
+Une mémoire est une affirmation que l'utilisateur accepte de voir répétée indéfiniment à sa place.
+Cela mérite un clic.
+
+#### Pourquoi la mémoire est explicite
+
+L'Architecte reçoit déjà huit documents entiers et les dix dernières tâches. C'est précis, et il
+y manque un niveau intermédiaire : une décision précise y est noyée dans trois mille lignes, et sa
+prise en compte dépend de la capacité du modèle à la retrouver — c'est-à-dire de la chance.
+
+Une entrée de mémoire dit ce qui compte, et seulement ce qui compte. Quatre catégories, fermées :
+
+| Catégorie | Ce qu'elle porte |
+| --- | --- |
+| `DECISION` | un choix déjà tranché |
+| `CONSTRAINT` | une limite qu'une décision future doit respecter |
+| `CONVENTION` | une règle de conception ou de développement |
+| `KNOWLEDGE` | un fait durable utile à la compréhension du projet |
+
+`PREFERENCE`, `TODO`, `IDEA`, `BUG` et `NOTE` sont absentes volontairement : elles répondent à
+« qu'est-ce qu'il reste à faire ? », question que le backlog traite déjà
+([D-239](DECISIONS.md#d-239--quatre-catégories-et-pas-une-de-plus)).
+
+#### Pourquoi elle vit dans SQLite, et pas dans le repository
+
+```text
+Créer / modifier / archiver / supprimer une mémoire
+       ↓
+0 écriture Git · 0 fichier Markdown · 0 appel au runner · 0 appel IA
+```
+
+La mémoire est un outil de NOX, pas un livrable du projet. La versionner obligerait à commiter
+chaque correction de frappe, à gérer des conflits sur un fichier que deux outils écrivent, et à
+trancher les divergences entre le disque et la base
+([D-241](DECISIONS.md#d-241--la-mémoire-vit-dans-sqlite-pas-dans-le-repository)).
+
+Une décision qui doit **aussi** vivre dans le repository se recopie à la main dans
+`docs/DECISIONS.md`. NOX ne synchronise pas les deux.
+
+#### ACTIVE et ARCHIVED, sans troisième état
+
+```text
+ACTIVE     → envoyé à l'Architecte
+ARCHIVED   → conservé, jamais envoyé
+```
+
+Un troisième état — « active mais écartée faute de place » — serait invisible : l'interface
+annoncerait « 42 entrées actives » pendant que douze seulement partiraient. `ARCHIVED` existe
+plutôt que la seule suppression parce qu'une décision peut cesser de s'appliquer tout en restant un
+fait important de l'histoire du projet.
+
+#### Le budget, refusé à l'écriture
+
+```text
+PROJECT_MEMORY_LIMITS   160 car. de titre · 4 Kio de contenu · 2 Kio de justification
+                        48 Kio de mémoire active · 100 entrées par projet
+```
+
+Une opération qui ferait dépasser le budget est **refusée**, avec ses trois sorties : raccourcir,
+archiver autre chose, ou enregistrer directement en `Archived`. Le contrôle vit dans la transaction
+d'écriture — jamais dans un champ caché du formulaire
+([D-243](DECISIONS.md#d-243--le-budget-est-refusé-à-lécriture-jamais-tronqué-à-lenvoi)).
+
+L'arithmétique garantit qu'aucune entrée active n'est jamais tronquée à l'envoi : les conventions
+consomment au plus 64 Kio du budget de contexte, la mémoire est prise juste après, et 48 Kio
+tiennent toujours dans les 64 Kio restants.
+
+#### Aucun classement
+
+Les entrées partent dans l'ordre de leurs codes, `MEM-001` puis `MEM-002`. Ni `updatedAt DESC` —
+qui déplacerait les décisions à chaque correction de frappe —, ni score de pertinence, ni sélection
+par un modèle ([D-244](DECISIONS.md#d-244--aucun-classement-aucune-sélection-par-ia)).
+
+#### Manifest et empreinte
+
+```text
+{ kind: "MEMORY", identifier: "MEM-003", category: "DECISION",
+  revision: "…", includedChars: 842, truncated: false }
+```
+
+Le manifest **décrit** ; il ne duplique pas. Aucun contenu de mémoire n'y est copié, comme pour les
+documents : une ancienne génération se relit par ses révisions, jamais par son texte.
+
+La révision est calculée sur le texte **sanitisé**, celui que le fournisseur a réellement reçu.
+Ni `updatedAt`, ni le statut n'y figurent
+([D-246](DECISIONS.md#d-246--la-révision-décrit-ce-qui-a-été-envoyé)).
+
+Les entrées actives entrent dans l'empreinte de contexte de TASK-014, ordre compris : modifier,
+archiver ou supprimer une mémoire après l'aperçu bloque l'envoi, sans appel et sans quota consommé.
+Le diff de manifest distingue `MEMORY_ADDED`, `MEMORY_MODIFIED` et `MEMORY_REMOVED` — ce dernier
+couvrant l'archivage comme la suppression, puisque le manifest ne conserve que ce qui a été envoyé
+et ne peut donc pas nommer la cause de l'absence.
+
+#### Ce que la mémoire ne touche pas
+
+La review Architecte de TASK-015 reste inchangée : elle reçoit la spécification de la tâche,
+l'instantané Git enregistré et les validations, et rien d'autre. Une review répond à « ce diff
+satisfait-il **cette** tâche ? » ; y verser le contexte projet élargirait la question sans qu'on ait
+décidé jusqu'où
+([D-249](DECISIONS.md#d-249--la-review-architecte-ne-reçoit-pas-la-mémoire)).

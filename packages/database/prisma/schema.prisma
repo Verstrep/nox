@@ -45,8 +45,68 @@ model Project {
   /// dans un log ou dans une conversation.
   nextTaskSequence Int @default(1)
 
+  /// Prochain numero d'entree de memoire a attribuer dans ce projet.
+  ///
+  /// Meme regle que `nextTaskSequence` : il ne recule jamais. Un `MEM-004`
+  /// reattribue apres une suppression designerait deux decisions differentes
+  /// dans deux manifests Architecte, et l'historique deviendrait illisible.
+  nextMemorySequence Int @default(1)
+
   tasks             Task[]
   architectSessions ArchitectSession[]
+  memories          ProjectMemoryEntry[]
+}
+
+/// Une entree de memoire projet : ce que NOX retient volontairement.
+///
+/// ## Pourquoi cette table existe
+///
+/// L'Architecte recoit des documents entiers et les dix dernieres taches. Une
+/// decision precise y est noyee, et depend de la capacite du modele a la
+/// retrouver. Une entree de memoire dit ce qui compte, et seulement cela.
+///
+/// ## Ce qui n'y entre jamais
+///
+/// Rien d'automatique. Ni une proposition d'architecte, ni une observation de
+/// review, ni un compte rendu de Claude Code, ni un extrait de conversation. Une
+/// hesitation exprimee dans une discussion n'est pas une decision, et NOX ne
+/// transforme jamais l'une en l'autre.
+///
+/// ## Le texte stocke est celui de l'utilisateur
+///
+/// La sanitation s'applique **a l'envoi**, pas a l'ecriture : ce qui est relu
+/// six mois plus tard doit etre le texte ecrit, pas sa version masquee. La
+/// revision transmise a l'architecte, elle, decrit le texte sanitise — c'est
+/// celui que le fournisseur a reellement recu.
+model ProjectMemoryEntry {
+  id        String @id @default(cuid())
+  projectId String
+
+  /// Numero attribue a la creation, unique dans le projet et jamais modifie.
+  sequence Int
+
+  /// Valeur de `ProjectMemoryCategory`, stockee en chaine comme les autres enums.
+  category String
+
+  title     String
+  content   String
+  rationale String?
+
+  /// Valeur de `ProjectMemoryStatus` : `ACTIVE` ou `ARCHIVED`.
+  ///
+  /// `ACTIVE` signifie « envoye a l'Architecte », `ARCHIVED` « conserve mais
+  /// non envoye ». Il n'existe pas de troisieme etat : une entree active que le
+  /// budget ecarterait silencieusement ferait mentir l'interface.
+  status String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// `Cascade` : une memoire ne decrit rien sans son projet.
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sequence])
+  @@index([projectId, status])
 }
 
 /// Une tache de developpement : la specification d'une unite de travail.

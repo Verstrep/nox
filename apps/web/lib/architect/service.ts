@@ -46,6 +46,7 @@ import {
   type ArchitectTurn,
   type DevelopmentTaskDetail,
   type ProjectDocumentSummary,
+  type ProjectMemoryEntry,
 } from "@nox/shared";
 import {
   finishArchitectGeneration,
@@ -145,6 +146,14 @@ export type TurnInput = {
   /** Message que l'utilisateur vient d'ecrire. */
   message: string;
   tasks: readonly DevelopmentTaskDetail[];
+  /**
+   * Memoire active du projet, relue en base a chaque tour.
+   *
+   * Relue, et non figee a l'ouverture de la conversation : une entree archivee
+   * entre deux tours doit disparaitre du contexte, et une entree ajoutee doit y
+   * entrer. C'est exactement le traitement reserve aux documents.
+   */
+  memories: readonly ProjectMemoryEntry[];
   model: string;
   environment: Record<string, string | undefined>;
   ports?: ArchitectRepositoryPorts;
@@ -207,6 +216,7 @@ export async function prepareArchitectTurn(input: TurnInput): Promise<PrepareTur
     documents: fetched.context.documents,
     inventory: fetched.context.inventory,
     tasks: input.tasks,
+    memories: input.memories,
     transcript: architectTranscript(input.session),
     newMessage: input.message,
     model: input.model,

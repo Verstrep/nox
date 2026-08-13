@@ -3,7 +3,7 @@
 > Ce document décrit ce qui existe **réellement** dans le repository, pas ce qui est prévu.
 > Il est mis à jour à la fin de chaque tâche.
 
-**Dernière mise à jour** : 11 août 2026, à l'issue de `TASK-016`.
+**Dernière mise à jour** : 12 août 2026, à l'issue de `TASK-017`.
 
 ---
 
@@ -61,22 +61,41 @@ l'état a changé entre l'affichage et le clic, c'est l'action existante qui ref
 suite : la machine d'état locale connaît déjà tous les faits, et le guide fonctionne hors ligne,
 sans OpenAI et sans coût.
 
+TASK-016 a relié les briques. **TASK-017 leur donne une mémoire** : le projet peut désormais
+retenir explicitement ce qui a été décidé, contraint ou conventionné, sans dépendre de la capacité
+d'un modèle à le retrouver dans un long document.
+
+Ce que TASK-017 ajoute tient en trois idées.
+
+**Conversation n'est pas mémoire.** Rien n'entre en mémoire sans une action humaine : ni un
+message, ni une proposition, ni une observation de review, ni un compte rendu de Claude Code. Une
+hésitation exprimée dans une discussion n'est pas une décision.
+
+**La mémoire appartient à NOX, pas au repository.** Elle vit dans SQLite : aucune écriture Git,
+aucun fichier Markdown généré, aucune synchronisation. Une décision qui doit aussi vivre dans le
+dépôt s'y recopie à la main.
+
+**`ACTIVE` veut dire « envoyé », et il n'existe pas de troisième état.** Toutes les entrées actives
+partent avec le contexte Architecte ; le budget est refusé à l'écriture plutôt que tronqué à
+l'envoi, parce qu'une interface qui annoncerait douze entrées et en enverrait cinq ne dirait plus
+rien de ce que l'Architecte connaît.
+
 Ce que NOX ne fait toujours pas : aucun lancement automatique de Claude Code, aucun passage
 automatique en `READY`, aucune boucle autonome OpenAI ↔ Claude, aucun réessai caché, aucun résumé
 silencieux, aucune review déclenchée en arrière-plan, aucune exécution automatique de l'étape
-suivante, aucun coût estimé.
+suivante, aucune mémoire créée automatiquement, aucun coût estimé.
 
-Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 16 — boucle de développement guidée
-(terminée)**. L'étape 17 (test sur un petit projet réel) devient l'étape active.
+Étape correspondante dans la [roadmap](ROADMAP.md) : **étape 17 — mémoire projet structurée
+(terminée)**. L'étape 18 (test sur un petit projet réel) devient l'étape active.
 ## 2. Tâche active
 
-`TASK-016 — Boucle de développement guidée avec checkpoints humains` : **terminée**, en attente
-de review humaine.
+`TASK-017 — Mémoire projet structurée et décisions durables` : **terminée**, en attente de review
+humaine.
 
-Aucune migration n'a été ajoutée : le schéma Prisma est inchangé, et `prisma migrate diff`
-confirme une migration vide. Aucun appel OpenAI réel, aucun appel Claude réel : tous les tests,
-unitaires comme fonctionnels, utilisent un faux fournisseur et un faux Claude. Le premier
-parcours guidé réel est une vérification manuelle, décrite au § 3.79.
+Une migration **additive** a été ajoutée : une colonne sur `Project`, une table
+`ProjectMemoryEntry`, deux index. `Project` n'est pas reconstruit. Aucun appel OpenAI réel, aucun
+appel Claude réel : tous les tests, unitaires comme fonctionnels, utilisent un faux fournisseur.
+La première conversation nourrie par la mémoire est une vérification manuelle, décrite au § 3.92.
 
 Aucun commit ni push n'a été effectué par Claude Code. Les modifications sont locales et
 disponibles pour relecture.
@@ -1610,6 +1629,210 @@ lirait pas du tout pour une partie des lecteurs.
 10. À chaque étape, vérifier que rien ne s'est déclenché tout seul : aucune exécution nouvelle,
     aucune analyse nouvelle, aucun changement de statut non demandé.
 
+### 3.80 La mémoire d'un projet
+
+```text
+ProjectMemoryEntry
+├── code        MEM-001, dérivé de sequence, jamais réattribué
+├── category    DECISION · CONSTRAINT · CONVENTION · KNOWLEDGE
+├── title       160 caractères, une ligne
+├── content     4 Kio
+├── rationale   2 Kio, facultatif
+└── status      ACTIVE · ARCHIVED
+```
+
+Une entrée appartient à un projet et disparaît avec lui. Le compteur
+`Project.nextMemorySequence` ne recule jamais : supprimer `MEM-002` ne rend pas ce code disponible,
+sans quoi deux manifests Architecte désigneraient deux décisions différentes sous le même nom.
+
+Quatre catégories, fermées. `PREFERENCE`, `TODO`, `IDEA`, `BUG` et `NOTE` sont absentes
+volontairement : elles répondent à « qu'est-ce qu'il reste à faire ? », question que le backlog
+traite déjà.
+
+### 3.81 Conversation ≠ mémoire
+
+Rien n'entre en mémoire sans une action humaine. Ni depuis un message de conversation, ni depuis une
+proposition de l'architecte, ni depuis une observation de review, ni depuis un compte rendu de
+Claude Code, ni depuis une tâche ou un document.
+
+Une conversation contient des hésitations. « On pourrait peut-être utiliser Redis » n'est pas une
+décision, et le transformer en mémoire durable fabriquerait un contexte que personne n'a relu — puis
+le rejouerait à chaque tour avec l'autorité d'un fait établi.
+
+Le Structured Output de la conversation est inchangé : il ne porte ni `memoriesToCreate`, ni
+`memoriesToUpdate`. Une réponse de l'architecte ne peut pas écrire en mémoire.
+
+### 3.82 SQLite, jamais le repository
+
+```text
+Créer / modifier / archiver / supprimer une mémoire
+       ↓
+0 écriture Git · 0 fichier Markdown · 0 appel au runner · 0 appel IA
+```
+
+La mémoire est un outil de NOX, pas un livrable du projet. Rien n'est écrit dans le repository,
+`CLAUDE.md` n'est jamais modifié, et aucun fichier mémoire n'est généré ni synchronisé. Une décision
+qui doit **aussi** vivre dans le repository se recopie à la main dans `docs/DECISIONS.md`.
+
+Vérifié en fonctionnel : après quinze sections d'opérations de mémoire, `git status --porcelain` est
+vide et le dépôt compte toujours un seul commit.
+
+### 3.83 ACTIVE et ARCHIVED
+
+```text
+ACTIVE     → envoyé à l'Architecte
+ARCHIVED   → conservé et consultable, jamais envoyé
+```
+
+Il n'existe pas de troisième état. Une entrée « active mais écartée faute de place » serait
+invisible : l'interface annoncerait « 42 entrées actives » pendant que douze seulement partiraient,
+et l'utilisateur ne saurait plus ce que l'Architecte connaît.
+
+L'archivage est manuel, et il n'y a aucune expiration automatique. `ARCHIVED` existe plutôt que la
+seule suppression parce qu'une décision peut cesser de s'appliquer tout en restant un fait important
+de l'histoire du projet.
+
+### 3.84 Le budget, refusé à l'écriture
+
+```text
+48 Kio de mémoire active par projet, mesurés sur le texte sanitisé
+100 entrées par projet, actives et archivées confondues
+```
+
+Une création, une modification ou une restauration qui ferait dépasser le budget est **refusée** :
+
+> Memory budget exceeded : la mémoire active de ce projet est limitée à 48.0 Kio. […] NOX n'envoie
+> jamais une partie seulement de la mémoire active : raccourcissez cette entrée, archivez-en une
+> autre, ou enregistrez celle-ci directement en Archived.
+
+Le contrôle vit dans la transaction d'écriture, jamais dans un champ caché du formulaire. Une entrée
+archivée peut dépasser le budget sans conséquence : elle ne quitte pas la machine.
+
+L'arithmétique garantit qu'aucune entrée active n'est tronquée à l'envoi. Les conventions consomment
+au plus 64 Kio du budget de contexte, la mémoire est prise juste après, et 48 Kio tiennent toujours
+dans les 64 Kio restants.
+
+### 3.85 Ordre déterministe, aucun classement
+
+Les entrées actives partent dans l'ordre de leurs codes : `MEM-001`, `MEM-002`, `MEM-007`. Ni
+`updatedAt DESC` — qui déplacerait les décisions dans le prompt à chaque correction de frappe —, ni
+score de pertinence, ni sélection par un modèle, ni recherche sémantique.
+
+### 3.86 Ce qui part, et sous quelle forme
+
+```text
+## Memoire du projet
+
+<memory code="MEM-001" category="DECISION" revision="a83f…">
+<title>…</title>
+<content>…</content>
+<rationale>…</rationale>
+</memory>
+```
+
+Le bloc annonce explicitement qu'il s'agit de contexte, pas d'instructions. Les marqueurs présents
+dans le texte de l'utilisateur sont neutralisés visiblement, comme pour les documents.
+
+La sécurité ne vient pas de là : le modèle n'a aucun outil, sa sortie est revalidée côté serveur, et
+aucune tâche n'est créée sans un clic humain. Une mémoire contenant « Ignore all previous
+instructions » est transmise telle quelle, et reste sans effet.
+
+### 3.87 Brut en base, sanitisé à l'envoi
+
+SQLite conserve le texte exact de l'utilisateur ; la sanitation s'applique à l'envoi, avec le
+**même** nettoyeur que les documents et les messages. Ce qui sera relu dans six mois doit être ce
+qui a été écrit.
+
+La révision, elle, est calculée sur le texte **sanitisé** : elle décrit ce que le fournisseur a
+réellement reçu. Ni `updatedAt`, ni le statut n'y figurent — le premier dit quand une ligne a été
+touchée, pas ce qu'elle contient ; le second se lit déjà comme une absence dans le manifest.
+
+Le budget est mesuré sur ce même texte sanitisé, sans quoi une entrée acceptée à l'écriture pourrait
+ne pas tenir dans le contexte.
+
+### 3.88 Manifest et contexte
+
+```text
+{ kind: "MEMORY", identifier: "MEM-003", category: "DECISION",
+  revision: "…", includedChars: 842, truncated: false }
+```
+
+Le manifest décrit ; il ne duplique pas. Aucun contenu de mémoire n'y est copié, comme pour les
+documents : une ancienne génération se relit par ses révisions, jamais par son texte.
+
+Les entrées actives entrent dans l'empreinte de contexte de TASK-014, ordre compris. Modifier,
+archiver ou supprimer une mémoire après l'aperçu bloque l'envoi — sans appel, sans quota consommé,
+sans option de forçage. Le diff distingue trois faits :
+
+```text
+MEM-003   Added to project memory
+MEM-003   Memory changed            revision A → B
+MEM-003   Removed from Architect context
+```
+
+Le retrait couvre l'archivage **et** la suppression : le manifest ne conserve que ce qui a été
+envoyé, et nommer la cause de l'absence reviendrait à l'inventer.
+
+### 3.89 Interface de la mémoire
+
+```text
+Project memory                                        [Add memory]
+
+Active memory
+18.4 Kio / 48.0 Kio        12 Active · 7 Archived · 19 Total (max 100)
+
+Entrees                                    [Active] [Archived] [All]
+
+MEM-001   Decision   Active
+Architect calls require an explicit preview
+Every Architect call requires explicit context review…
+                                    [Edit] [Archive] [Delete]
+```
+
+Le contenu est du **texte** : `whitespace-pre-wrap`, aucun `dangerouslySetInnerHTML`, aucun Markdown
+rendu. Il vient d'un champ libre.
+
+La suppression demande une confirmation qui est un second bouton, pas une alerte du navigateur :
+elle se lit, se tabule et s'annule comme n'importe quel élément de la page. Catégorie et statut sont
+écrits en toutes lettres, jamais portés par la seule couleur.
+
+### 3.90 Ni runner, ni OpenAI
+
+La page Memory et toutes ses opérations sont des lectures et des écritures SQLite. Vérifié en
+fonctionnel sur un second serveur web démarré sans configuration OpenAI, puis avec le runner arrêté :
+création, modification, archivage, restauration et suppression fonctionnent dans les deux cas.
+
+Un test lit le **source** du chargeur, des Server Actions et de la couche de persistance pour
+vérifier qu'aucun ne mentionne un fournisseur, le runner, Claude Code, une écriture de fichier ou
+Git.
+
+### 3.91 Ce que la mémoire ne touche pas
+
+La review Architecte de TASK-015 est inchangée : elle reçoit la spécification de la tâche,
+l'instantané Git enregistré et les validations, et rien d'autre. Une review répond à « ce diff
+satisfait-il **cette** tâche ? », et élargir cette surface mérite une décision séparée.
+
+Une tâche créée depuis une conversation ne reçoit pas non plus de copie de la mémoire : ni dans son
+contexte, ni dans ses références documentaires, ni dans son Markdown. La mémoire aide à concevoir ;
+elle n'est pas collée en bloc dans chaque tâche.
+
+### 3.92 Procédure de vérification manuelle de la mémoire
+
+À exécuter par l'utilisateur, sur un projet réel. Elle n'a **pas** été exécutée pendant TASK-017, et
+ne demande **qu'un seul** appel OpenAI réel.
+
+1. Créer deux entrées : une `DECISION` et une `CONSTRAINT`, toutes deux actives.
+2. Vérifier la page Memory : codes, catégories, budget consommé, compteurs.
+3. Ouvrir une nouvelle conversation Architecte, puis `Review context`.
+4. Vérifier les deux entrées dans la section `Project memory`, puis dans le texte exact envoyé.
+5. Écrire une demande qui dépend clairement de ces mémoires, et faire **un seul** envoi.
+6. Vérifier que la réponse les respecte.
+7. Modifier une mémoire, puis `Review context` : le diff doit annoncer `Memory changed`.
+8. Modifier encore après l'aperçu, puis `Send` : l'envoi doit être refusé, sans appel supplémentaire.
+9. Archiver une mémoire, puis `Review context` : elle doit apparaître en `Removed from Architect
+   context`, et son texte ne doit plus figurer dans l'envoi.
+10. Vérifier `git status` : aucune modification du repository ne doit être apparue.
+
 ## 4. Éléments non commencés
 
 - Reprise d'une session Claude (`--resume`), continuation (`--continue`), message envoyé à une
@@ -1631,6 +1854,12 @@ lirait pas du tout pour une partie des lecteurs.
   supervisant plusieurs repositories, politique de coût, sélection automatique de modèle.
 - Indicateur « prochaine étape » dans le backlog ou sur la page d'un projet, tableau de bord
   global.
+- Extraction automatique de mémoire depuis une conversation, suggestions de décisions, résumé
+  automatique, mémoire vectorielle, embeddings, recherche sémantique, RAG.
+- Mémoire globale utilisateur, mémoire partagée entre projets, héritage, import automatique de
+  `DECISIONS.md`, synchronisation mémoire ↔ Markdown.
+- Expiration automatique, fusion de doublons, tags libres, relations entre mémoires, mémoire dans
+  la review Architecte.
 - Plusieurs tâches par conversation, roadmap multi-tâches, résumé automatique d'un long
   transcript, mémoire vectorielle, monorepos et `CLAUDE.md` imbriqués.
 - Suivi des coûts au-delà de ce que les fournisseurs rapportent.
@@ -1806,25 +2035,40 @@ une timeline produite par le vrai binaire.
 43. **Les Server Actions ne sont toujours pas couvertes par un test fonctionnel HTTP** : le test
     appelle les mêmes fonctions serveur qu'elles. Les pages, elles, sont bien lues par HTTP.
     Réserve inchangée depuis TASK-010.
-44. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
+44. **Aucune conversation réelle n'a encore été nourrie par la mémoire.** Le format, la sanitation,
+    la révision et l'empreinte ont été vérifiés contre un faux fournisseur ; aucun modèle réel n'a
+    lu une entrée. Même réserve de méthode qu'en TASK-010, TASK-013 à TASK-016.
+45. **Deux modifications concurrentes d'une même mémoire s'écrasent.** La dernière écriture gagne :
+    il n'existe pas de contrôle de révision comme pour les documents Markdown. NOX est un outil
+    personnel, et un mécanisme de collaboration temps réel serait hors de proportion — mais deux
+    onglets ouverts sur la même entrée peuvent perdre une modification.
+46. **La mémoire n'est pas recherchable.** Trois filtres — Active, Archived, All — et rien d'autre.
+    Une mémoire bornée à cent entrées se parcourt à l'œil ; au-delà, il faudra un vrai filtre par
+    catégorie ou par texte.
+47. **Le budget est mesuré en caractères, jamais en jetons.** NOX ne prétend pas savoir ce qu'un
+    fournisseur facturera. Une entrée de 4 Kio pèse donc plus ou moins selon la langue, et le
+    budget affiché ne prédit pas le coût.
+48. **La review Architecte ne reçoit pas la mémoire**, par décision explicite de TASK-017. Un
+    travail conforme à sa tâche mais contraire à une convention enregistrée ne sera donc pas
+    signalé par l'analyse.
+49. Limites héritées : remplacement non atomique sous Windows à l'édition, aucun cache, jeton en
     clair dans `.env`, TypeScript 5.9 et ESLint 9 figés, Node ≥ 22.18 requis.
 
 ## 7. Prochaine tâche recommandée
 
-**`TASK-017` — Mémoire projet structurée et décisions durables.**
+**`TASK-018` — Suggestions de mémoire depuis les conversations Architecte.**
 
-Objectif : ajouter une mémoire projet locale, structurée et explicitement contrôlée, permettant à
-NOX de conserver les décisions importantes, contraintes, conventions et connaissances durables
-validées par l'utilisateur, puis de les injecter de façon bornée et traçable dans le contexte
-Architecte — sans transformer chaque conversation passée en mémoire implicite.
+Objectif : permettre à l'Architecte de **proposer**, à l'issue d'une conversation, une ou plusieurs
+entrées de Project Memory candidates lorsqu'une décision durable semble avoir été prise, tout en
+exigeant une validation et une édition humaines explicites avant tout enregistrement. Aucune
+mémoire ne doit jamais être créée automatiquement.
 
-C'est la suite naturelle. Le contexte de l'Architecte est une liste fermée de documents entiers :
-précis, mais coûteux, et incapable de retenir « on a décidé de ne pas faire X, et voici pourquoi »
-autrement qu'en relisant tout `DECISIONS.md`. Une mémoire explicite dit ce qui compte, et
-seulement ce qui compte.
+C'est la suite naturelle. La mémoire existe et sert, mais elle se remplit encore à la main — juste
+après une conversation où la décision vient d'être prise, et où elle est la plus fraîche. Proposer
+le texte au bon moment est exactement ce qui manque.
 
-La règle qui la gouverne est déjà connue : **rien n'entre en mémoire sans validation humaine.**
-Une mémoire implicite serait une source de vérité que personne n'a relue.
+La règle qui la gouverne ne change pas : **proposer n'est pas enregistrer.** Une suggestion est un
+brouillon que l'utilisateur relit, modifie et valide — ou jette.
 
 ## 8. État Git
 
@@ -1832,6 +2076,5 @@ Une mémoire implicite serait une source de vérité que personne n'a relue.
 - Aucun push effectué.
 - Aucun `git add`.
 - Historique Git non modifié.
-- Commit de départ : `91862a5` (`feat: add architect-assisted run review`), contenant
-  `TASK-015`.
-- `TASK-016` reste **locale**, non indexée et non commitée.
+- Commit de départ : `389ba51` (`feat: add guided development workflow`), contenant `TASK-016`.
+- `TASK-017` reste **locale**, non indexée et non commitée.

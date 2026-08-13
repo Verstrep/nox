@@ -189,3 +189,94 @@ describe("diffArchitectManifests — ordre et exhaustivite", () => {
     ]);
   });
 });
+
+describe("diffArchitectManifests — memoire du projet", () => {
+  const memorySource = (overrides: Partial<ArchitectContextSource> = {}): ArchitectContextSource =>
+    source({ kind: "MEMORY", identifier: "MEM-001", category: "DECISION", ...overrides });
+
+  it("ne signale rien quand la memoire n'a pas bouge", () => {
+    assert.deepEqual(
+      diffArchitectManifests(manifest([memorySource()]), manifest([memorySource()])),
+      [],
+    );
+  });
+
+  it("signale une memoire ajoutee", () => {
+    const changes = diffArchitectManifests(manifest([]), manifest([memorySource()]));
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0]?.kind, "MEMORY_ADDED");
+    assert.equal(changes[0]?.identifier, "MEM-001");
+    assert.equal(changes[0]?.previousRevision, null);
+  });
+
+  it("signale un contenu modifie", () => {
+    const changes = diffArchitectManifests(
+      manifest([memorySource()]),
+      manifest([memorySource({ revision: "b".repeat(64) })]),
+    );
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0]?.kind, "MEMORY_MODIFIED");
+    assert.equal(changes[0]?.previousRevision, "a".repeat(12));
+    assert.equal(changes[0]?.currentRevision, "b".repeat(12));
+  });
+
+  it("signale un titre modifie comme tout changement de revision", () => {
+    // NOX ne conserve pas le texte : il ne peut pas dire quel champ a change, et
+    // ne le pretend pas. Il dit que l'entree a change.
+    const changes = diffArchitectManifests(
+      manifest([memorySource()]),
+      manifest([memorySource({ revision: "c".repeat(64) })]),
+    );
+    assert.equal(changes[0]?.kind, "MEMORY_MODIFIED");
+  });
+
+  it("signale une categorie modifiee par sa revision", () => {
+    const changes = diffArchitectManifests(
+      manifest([memorySource()]),
+      manifest([memorySource({ category: "CONSTRAINT", revision: "d".repeat(64) })]),
+    );
+    assert.equal(changes[0]?.kind, "MEMORY_MODIFIED");
+  });
+
+  it("signale un retrait du contexte, sans en nommer la cause", () => {
+    // Archivage et suppression produisent la meme absence : le manifest ne
+    // conserve que ce qui a ete envoye.
+    const changes = diffArchitectManifests(manifest([memorySource()]), manifest([]));
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0]?.kind, "MEMORY_REMOVED");
+    assert.equal(changes[0]?.currentRevision, null);
+  });
+
+  it("signale une restauration comme un ajout", () => {
+    const changes = diffArchitectManifests(manifest([]), manifest([memorySource()]));
+    assert.equal(changes[0]?.kind, "MEMORY_ADDED");
+  });
+
+  it("distingue un document et une memoire modifies en meme temps", () => {
+    const changes = diffArchitectManifests(
+      manifest([source(), memorySource()]),
+      manifest([source({ revision: "z".repeat(64) }), memorySource({ revision: "y".repeat(64) })]),
+    );
+
+    assert.equal(changes.length, 2);
+    assert.deepEqual(changes.map((change) => change.kind).sort(), [
+      "MEMORY_MODIFIED",
+      "MODIFIED",
+    ]);
+  });
+
+  it("distingue une tache et une memoire modifiees en meme temps", () => {
+    const changes = diffArchitectManifests(
+      manifest([source({ kind: "TASK", identifier: "TASK-001" }), memorySource()]),
+      manifest([
+        source({ kind: "TASK", identifier: "TASK-001", revision: "z".repeat(64) }),
+        memorySource({ revision: "y".repeat(64) }),
+      ]),
+    );
+
+    assert.deepEqual(changes.map((change) => change.kind).sort(), [
+      "MEMORY_MODIFIED",
+      "TASK_MODIFIED",
+    ]);
+  });
+});

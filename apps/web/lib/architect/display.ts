@@ -43,6 +43,32 @@ export type ArchitectSourceRow = {
 };
 
 /**
+ * Une ligne de la section « Project memory » de la preview.
+ *
+ * Distincte des lignes de sources : une memoire se lit par son code et sa
+ * categorie, la ou un document se lit par son chemin. Les melanger obligerait
+ * l'utilisateur a deviner laquelle des deux natures il regarde.
+ */
+export type ArchitectMemoryRow = {
+  code: string;
+  category: string;
+  revision: string | null;
+  chars: number;
+};
+
+/** Extrait les entrees de memoire du manifest, dans l'ordre d'envoi. */
+export function memoryRows(manifest: ArchitectContextManifest): ArchitectMemoryRow[] {
+  return manifest.sources
+    .filter((source) => source.kind === "MEMORY")
+    .map((source) => ({
+      code: source.identifier,
+      category: source.category ?? "",
+      revision: source.revision === null ? null : source.revision.slice(0, 12),
+      chars: source.includedChars,
+    }));
+}
+
+/**
  * Sort d'une source, derive du manifest.
  *
  * Un document present mais sans un seul caractere transmis est `OMITTED`, pas

@@ -291,6 +291,8 @@ export {
   CONVERSATION_OPEN,
   DOCUMENT_CLOSE,
   DOCUMENT_OPEN,
+  MEMORY_CLOSE,
+  MEMORY_OPEN,
   MESSAGE_CLOSE,
   MESSAGE_OPEN,
   USER_MESSAGE_CLOSE,
@@ -368,6 +370,32 @@ export type {
   ReviewPromptTask,
   ReviewPromptValidation,
 } from "./architect-review-prompt.js";
+
+export {
+  MEMORY_CODE_PREFIX,
+  PROJECT_MEMORY_CATEGORIES,
+  PROJECT_MEMORY_CATEGORY,
+  PROJECT_MEMORY_LIMITS,
+  PROJECT_MEMORY_STATUS,
+  PROJECT_MEMORY_STATUSES,
+  checkProjectMemoryInput,
+  formatProjectMemoryCode,
+  isProjectMemoryCategory,
+  isProjectMemoryStatus,
+  normalizeProjectMemoryText,
+  projectMemoryChars,
+} from "./project-memory.js";
+
+export type {
+  ArchitectPromptMemory,
+  ProjectMemoryCategory,
+  ProjectMemoryCheck,
+  ProjectMemoryEntry,
+  ProjectMemoryInput,
+  ProjectMemoryRefusal,
+  ProjectMemoryStatus,
+  ProjectMemoryValues,
+} from "./project-memory.js";
 
 export {
   GUIDED_ACTION,

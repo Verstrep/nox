@@ -125,6 +125,25 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         </SectionCard>
 
         <SectionCard
+          title="Memoire"
+          description="Ce que NOX retient de ce projet : decisions, contraintes, conventions, connaissances durables."
+          action={
+            <Link
+              href={`/projects/${project.id}/memory`}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Memory
+            </Link>
+          }
+        >
+          <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
+            Les entrees actives accompagnent chaque conversation Architecte de ce projet, sans avoir
+            a etre reexpliquees. Rien n&apos;y entre automatiquement : ni depuis une conversation, ni
+            depuis une proposition, ni depuis une execution de Claude Code.
+          </p>
+        </SectionCard>
+
+        <SectionCard
           title="Architecte"
           description="Transformer une demande produit en tache structuree, a partir du contexte du projet."
           action={
