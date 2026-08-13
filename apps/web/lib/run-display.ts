@@ -63,11 +63,6 @@ export function runEventsEndpoint(
   return `/api/projects/${projectId}/tasks/${taskId}/runs/${runId}/events?afterSequence=${String(afterSequence)}`;
 }
 
-/** URL de la page d'une execution, avec la confirmation d'annulation ouverte. */
-export function runCancelUrl(projectId: string, taskId: string, runId: string): string {
-  return `${runUrl(projectId, taskId, runId)}?confirmCancel=1`;
-}
-
 /** Heure courte d'un evenement : `01:28:03`. */
 export function formatEventTime(isoDate: string): string {
   const date = new Date(isoDate);

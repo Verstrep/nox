@@ -1,633 +1,184 @@
 # ROADMAP — NOX
 
-Roadmap pragmatique vers la V1 définie dans [V1_SCOPE.md](V1_SCOPE.md).
+> **Rôle de ce document** : ce qui est envisagé ensuite, et dans quel ordre.
+>
+> Ce qui existe est décrit dans [PROJECT_STATE.md](PROJECT_STATE.md), la cible produit dans
+> [V1_SCOPE.md](V1_SCOPE.md), et les choix déjà tranchés dans [DECISIONS.md](DECISIONS.md).
 
-Les étapes sont **ordonnées** : chacune s'appuie sur la précédente. Une étape n'est déclarée
-terminée que si le repository est dans un état stable, validé et commitable.
-
-Légende : ✅ terminée · 🟢 active · ⬜ non commencée
-
----
-
-## ✅ 1. Socle monorepo — `TASK-001`
-
-**Objectif** : disposer d'un repository propre, typé et validable.
-
-- Workspaces npm : `apps/web`, `apps/runner`, `packages/shared`.
-- TypeScript strict, ESLint, Tailwind CSS.
-- Page d'accueil statique du futur tableau de bord.
-- Runner HTTP minimal exposant `GET /health`.
-- Documentation initiale et règles permanentes (`CLAUDE.md`).
-- Scripts `lint`, `typecheck`, `build` opérationnels à la racine.
-
-**Terminée.** Voir [PROJECT_STATE.md](PROJECT_STATE.md) pour le détail des validations exécutées.
-Les scripts `test`, `db:generate`, `db:migrate` et `db:studio` ont été ajoutés à l'étape 2.
+**Les numéros au-delà de `TASK-018` sont une direction, pas un contrat.** Ils disent l'ordre
+probable et la découpe envisagée. Une étape peut être fusionnée, scindée, réordonnée ou
+abandonnée — et le sera, si le projet le demande. Une étape n'existe vraiment qu'au moment où
+son prompt est écrit.
 
 ---
 
-## ✅ 2. Gestion locale des projets — `TASK-002`
+## Phase de fondation — terminée
 
-**Objectif** : créer un projet NOX et l'associer à un repository local.
+`TASK-001` → `TASK-017`. Dix-sept étapes qui ont construit la chaîne complète, d'un dossier
+vide à une exécution relue.
 
-- Persistance locale : Prisma + SQLite, dans `packages/database`
-  ([D-018](DECISIONS.md#d-018--prisma-comme-couche-daccès-aux-données),
-  [D-019](DECISIONS.md#d-019--sqlite-comme-persistance-locale-de-la-v1)).
-- Migration initiale versionnée, modèle `Project`.
-- Création, liste et consultation d'un projet depuis l'interface.
-- Vérification serveur du chemin d'un repository Git, avec enregistrement de la racine
-  canonique retournée par Git.
-- Création par Server Action ; lecture en Server Components.
+| # | Étape | Ce qu'elle a apporté |
+| --- | --- | --- |
+| 1 | Socle monorepo | Workspaces npm, TypeScript strict, ESLint unique, trois packages |
+| 2 | Gestion locale des projets | Projets en SQLite, statuts, chemin de repository enregistré |
+| 3 | Connexion web ↔ runner | Runner local authentifié, contrat partagé, boucle locale exclusive |
+| 4 | Documents Markdown | Inventaire et lecture confinés, chemins vérifiés après `realpath` |
+| 5 | Édition d'un document | Écriture atomique, contrôle de révision, aucun forçage de conflit |
+| 6 | Création de documents | Primitive exclusive, noms portables, parents contrôlés |
+| 7 | Tâches structurées | Codes immuables, document à chemin stable, synchronisation visible |
+| 8 | Lancement Claude Code | Préflight Git, prompt régénéré côté serveur, politique d'outils calculée |
+| 9 | Suppression et libellés | Suppression contrôlée, libellés centralisés, statuts internes stables |
+| 10 | Streaming et annulation | `stream-json`, événements fermés et bornés, arrêt de l'arbre de processus |
+| 11 | Review Git et validations | Instantané immuable, diff borné, issue réellement observée |
+| 12 | Feedback et reprise ciblée | Empreinte de dossier de travail authentifiée, `--resume`, run de correction |
+| 13 | Architecte NOX | Second modèle sans outils, contexte fermé, proposition relue puis créée |
+| 14 | Conversation Architecte | Transcript possédé par NOX, empreinte de contexte, diff entre deux tours |
+| 15 | Review Architecte | Bundle issu de l'instantané, verdict et garde d'approbation |
+| 16 | Workflow guidé | Étape courante et prochaine action, dérivées, sans stockage ni IA |
+| 17 | Mémoire projet | Décisions durables, budget refusé à l'écriture, injection tracée |
 
-**Fin d'étape atteinte** : un projet créé depuis l'interface survit à un redémarrage du
-serveur — vérifié par un test fonctionnel réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
-
-Hors périmètre volontaire de cette étape : édition, suppression et archivage d'un projet
-([D-027](DECISIONS.md#d-027--ni-édition-ni-suppression-de-projet-dans-task-002)).
-
----
-
-## ✅ 3. Connexion web ↔ runner — `TASK-003`
-
-**Objectif** : établir un canal local sécurisé entre l'application web et le runner, et lui
-transférer les opérations locales.
-
-- API HTTP du runner : `GET /health` publique, `POST /repositories/resolve` authentifiée.
-- Jeton partagé obligatoire, écoute restreinte à la boucle locale, corps JSON borné.
-- Contrat partagé (formes et codes d'erreur) dans `@nox/shared`
-  ([D-030](DECISIONS.md#d-030--contrat-partagé-dans-noxshared)).
-- Client runner strictement serveur dans `apps/web`, indicateur de disponibilité au rendu.
-- Validation Git retirée de `apps/web` et déplacée dans le runner : l'exception ouverte par
-  TASK-002 est close ([ARCHITECTURE.md § 5.2](ARCHITECTURE.md)).
-
-**Fin d'étape atteinte** : la création d'un projet passe par le runner, et le tableau de bord
-reste consultable runner arrêté — vérifié par un test fonctionnel réel, voir
-[PROJECT_STATE.md](PROJECT_STATE.md).
-
-Hors périmètre volontaire : SSE, WebSocket, exécution de commandes arbitraires, runners
-multiples ([D-037](DECISIONS.md#d-037--pas-de-sse-ni-de-websocket-dans-task-003)).
+**Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
+automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
+résumé silencieux, aucune estimation de coût.
 
 ---
 
-## ✅ 4. Inventaire et lecture des documents Markdown — `TASK-004`
+## Étape en cours
 
-**Objectif** : inventorier et lire les documents Markdown d'un projet depuis NOX.
+### `TASK-018` — Consolidation documentaire et réalignement produit
 
-- Routes authentifiées `POST /repositories/documents/list` et
-  `POST /repositories/documents/read`.
-- Périmètre d'inspection restreint et documenté
-  ([D-041](DECISIONS.md#d-041--emplacements-inspectés-limités-pas-de-parcours-complet)).
-- Catégorisation et tri stables, déduits du chemin seul
-  ([D-042](DECISIONS.md#d-042--documents-principaux-reconnus-par-une-liste-explicite)).
-- Confinement des chemins vérifié après résolution réelle, liens sortants bloqués
-  ([D-045](DECISIONS.md#d-045--confinement-vérifié-après-résolution-réelle-des-chemins)).
-- Page `/projects/[id]/documents` : liste, lecteur, sélection portée par l'URL.
-- Contenu affiché brut, sans rendu HTML
-  ([D-047](DECISIONS.md#d-047--contenu-brut-aucun-rendu-markdown)).
+Remettre chaque information dans le document qui en est responsable, réaligner les documents
+de vision sur la direction ci-dessous, et auditer le repository pour identifier la dette
+technique réelle.
 
-**Fin d'étape atteinte** : les documents d'un repository réel sont inventoriés, classés et
-lisibles dans NOX, et la page projet reste accessible runner arrêté — vérifié par un test
-fonctionnel réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
-
-Hors périmètre volontaire : toute écriture, le rendu Markdown, la recherche, l'historique
-([D-040](DECISIONS.md#d-040--lecture-seule-stricte)).
+Aucun changement fonctionnel.
 
 ---
 
-## ✅ 5. Édition sécurisée d'un document existant — `TASK-005`
+## Direction retenue
 
-**Objectif** : modifier depuis NOX un document Markdown déjà présent, sans jamais écraser une
-version modifiée entre-temps sur le disque.
+Cette direction remplace l'ancienne, qui s'arrêtait à un « test sur un petit projet réel »
+suivi de « fonctionnalités avancées ». Elle est plus précise parce que la fondation, elle,
+est finie.
 
-- Route authentifiée `POST /repositories/documents/update`.
-- Révision SHA-256 renvoyée à chaque lecture, comparée à chaque écriture
-  ([D-052](DECISIONS.md#d-052--la-révision-est-une-empreinte-sha-256-du-contenu-binaire)).
-- Contrôle de concurrence optimiste, conflit explicite, aucun forçage
-  ([D-053](DECISIONS.md#d-053--contrôle-de-concurrence-optimiste-pas-de-verrou),
-  [D-054](DECISIONS.md#d-054--aucun-forçage-de-conflit)).
-- Confinement réutilisé tel quel, refus d'écrire dans un lien symbolique
-  ([D-055](DECISIONS.md#d-055--refus-décrire-dans-un-lien-symbolique)).
-- Écriture par fichier temporaire puis remplacement, sans reste
-  ([D-056](DECISIONS.md#d-056--écriture-par-fichier-temporaire-et-remplacement)).
-- Modes lecture et édition sur `/projects/[id]/documents`, texte conservé en cas d'erreur.
+Le cap tient en une phrase : **faire passer NOX d'un outil qui exécute des tâches à un outil
+qui tient un projet.**
 
-**Fin d'étape atteinte** : `PROJECT_BRIEF.md` d'un projet est modifiable depuis NOX, et une
-modification concurrente est refusée sans perte — vérifié par un test fonctionnel réel, voir
-[PROJECT_STATE.md](PROJECT_STATE.md).
+```text
+1 Project
+    ↓
+1 persistent project conversation
+    ↓
+Living Project Plan
+    ↓
+Multiple Tasks
+    ↓
+Execution queue
+    ↓
+Claude Code
+    ↓
+Automated validations
+    ↓
+Architect review
+    ↓
+Human validation only when necessary
+    ↓
+Validated delivery
+```
 
-Hors périmètre volontaire : création, suppression, renommage, déplacement, brouillons,
-sauvegarde automatique, aperçu Markdown, diff
-([D-051](DECISIONS.md#d-051--lédition-ne-porte-que-sur-des-documents-existants),
-[D-058](DECISIONS.md#d-058--aucune-sauvegarde-automatique)).
+### `TASK-019` — Nettoyage de dette technique
 
----
+**Conditionnelle.** N'a lieu de se faire que si `TASK-018` prouve une dette suffisante. Une
+tâche de nettoyage motivée par « le code pourrait être plus propre » coûte une review et
+n'apporte rien.
 
-## ✅ 6. Création de documents Markdown — `TASK-006`
+### `TASK-020` — Project Architect : conversation principale persistante
 
-**Objectif** : créer un nouveau document depuis NOX, sans jamais écraser un fichier existant.
+Une conversation rattachée au projet, et non à une tâche à concevoir. On y revient.
 
-- Route authentifiée `POST /repositories/documents/create`, réponse `201`.
-- Création par ouverture exclusive, seule garantie de non-écrasement
-  ([D-062](DECISIONS.md#d-062--création-par-ouverture-exclusive-jamais-par-vérification-préalable),
-  [D-063](DECISIONS.md#d-063--aucun-écrasement-aucune-option-pour-en-demander-un)).
-- Dossiers parents obligatoirement existants, réels et non liés
-  ([D-064](DECISIONS.md#d-064--les-dossiers-parents-doivent-exister--nox-nen-crée-aucun),
-  [D-065](DECISIONS.md#d-065--refus-des-dossiers-parents-qui-sont-des-liens)).
-- Noms validés pour rester portables, jamais transformés
-  ([D-067](DECISIONS.md#d-067--noms-validés-pour-rester-portables-et-jamais-transformés)).
-- Chemin final recomposé côté serveur à partir d'une destination validée
-  ([D-068](DECISIONS.md#d-068--le-chemin-final-est-reconstruit-côté-serveur)).
-- Page `/projects/[id]/documents/new` : cinq destinations, prévisualisation du chemin,
-  contenu initial facultatif.
+C'est le pivot de toute la suite : le plan, le backlog et la replanification supposent tous un
+endroit durable où la conception vit.
 
-**Fin d'étape atteinte** : un document de référence manquant est créé depuis NOX, apparaît
-aussitôt dans l'inventaire et devient immédiatement modifiable — vérifié par un test fonctionnel
-réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
+### `TASK-021` — Project Brief structuré et plan de V1 vivant
 
-Hors périmètre volontaire : suppression, renommage, déplacement, création de dossiers, modèles
-et génération de contenu
-([D-069](DECISIONS.md#d-069--aucun-modèle-aucun-contenu-généré)).
+Une compréhension du projet tenue par NOX, structurée et modifiable, et le premier plan qui en
+découle.
 
----
+### `TASK-022` — Planification multi-tâches et génération de backlog
 
-## ✅ 7. Gestion structurée des tâches — `TASK-007`
+Produire plusieurs tâches ordonnées à partir d'une conception, chacune créée en brouillon et
+relue avant d'être mise en file.
 
-**Objectif** : structurer le travail en tâches vérifiables, et produire l'artefact que liront
-les agents.
+### `TASK-023` — Amorçage d'un projet — `TASK-000`
 
-- Modèles `Task`, `TaskAcceptanceCriterion`, `TaskDocumentReference`, `TaskValidationCommand`.
-- Numéro attribué par un compteur transactionnel par projet, jamais réutilisé
-  ([D-075](DECISIONS.md#d-075--allocation-transactionnelle-du-numéro),
-  [D-076](DECISIONS.md#d-076--les-trous-de-numérotation-sont-acceptés)).
-- Backlog filtrable et transitions manuelles centralisées dans une fonction pure
-  ([D-078](DECISIONS.md#d-078--transitions-manuelles-limitées-et-centralisées)).
-- Générateur Markdown pur et déterministe, sans valeur mutable
-  ([D-083](DECISIONS.md#d-083--le-statut-et-la-priorité-ne-figurent-pas-dans-le-markdown)).
-- Route authentifiée `POST /repositories/tasks/create-document`, seule autorisée à créer le
-  dossier `tasks/` ([D-081](DECISIONS.md#d-081--le-dossier-tasks-est-la-seule-création-de-dossier-autorisée)).
-- Synchronisation à quatre états et reprise idempotente, sans écrasement
-  ([D-079](DECISIONS.md#d-079--quatre-états-de-synchronisation-explicites),
-  [D-080](DECISIONS.md#d-080--reprise-idempotente-sans-écrasement)).
-- Pages `/projects/[id]/tasks`, `/tasks/new` et `/tasks/[taskId]`.
+Le premier pas d'un projet vide : structure, documents de référence, premier commit préparé.
 
-**Fin d'étape atteinte** : une tâche complète est rédigeable dans NOX, son document Markdown
-apparaît dans le repository, et une panne du runner ne la fait pas perdre — vérifié par un test
-fonctionnel réel, voir [PROJECT_STATE.md](PROJECT_STATE.md).
+### `TASK-024` — Dépendances entre tâches et modification des tâches futures
 
-Hors périmètre volontaire : exécution des commandes, lancement de Claude Code, modification
-complète d'une spécification après création, suppression, renumérotation, duplication,
-dépendances entre tâches
-([D-084](DECISIONS.md#d-084--les-commandes-de-validation-sont-stockées-jamais-exécutées)).
+Un plan vivant suppose de pouvoir réécrire ce qui n'a pas encore été lancé, et de dire qu'une
+tâche en attend une autre.
 
-La prévisualisation du prompt, initialement prévue ici, appartient à l'étape 8 : elle est
-indissociable du lancement qu'elle précède.
+### `TASK-025` — Refonte du tableau de bord d'un projet
 
----
+Répondre à « où en est ce projet » sans ouvrir chaque tâche.
 
-## ✅ 8. Lancement manuel d'une tâche Claude Code — `TASK-008`
+### `TASK-026` — File d'exécution
 
-**Objectif** : transformer une tâche `READY` en exécution réelle de Claude Code, déclenchée
-explicitement, et en rendre le résultat relisible.
+Enchaîner plusieurs tâches prêtes. Enchaîner n'est pas s'autonomiser : chaque départ reste
+décidé, et une seule exécution reste active.
 
-- Modèle `Run`, numéroté par un compteur transactionnel propre à chaque tâche
-  ([D-094](DECISIONS.md#d-094--registre-en-mémoire-limite-assumée)).
-- Prompt d'exécution pur et déterministe, régénéré côté serveur, avec son empreinte
-  ([D-088](DECISIONS.md#d-088--le-prompt-est-déterministe-et-régénéré-côté-serveur)).
-- Préflight Git obligatoire, en lecture seule, sans accès réseau
-  ([D-090](DECISIONS.md#d-090--préflight-git-obligatoire-avant-tout-lancement),
-  [D-091](DECISIONS.md#d-091--lupstream-comparé-est-la-référence-locale)).
-- Routes authentifiées `POST /claude/preflight`, `/claude/runs/start` (`202`) et
-  `/claude/runs/status`.
-- Permissions d'outils explicites, calculées, jamais reçues du navigateur
-  ([D-097](DECISIONS.md#d-097--permissions-explicites-calculées-jamais-reçues),
-  [D-098](DECISIONS.md#d-098--une-commande-qui-ne-peut-pas-être-représentée-exactement-bloque-le-lancement)).
-- Environnement nettoyé de toutes les variables `NOX_*`
-  ([D-100](DECISIONS.md#d-100--lenvironnement-du-processus-enfant-est-nettoyé-de-toutes-les-variables-nox)).
-- Registre en mémoire, interrogation périodique, résultat persisté
-  ([D-095](DECISIONS.md#d-095--interrogation-périodique-plutôt-que-flux-dévénements),
-  [D-096](DECISIONS.md#d-096--le-navigateur-ne-parle-jamais-au-runner)).
-- Pages `/tasks/[taskId]/runs/new` et `/tasks/[taskId]/runs/[runId]`.
+### `TASK-027` — Validation autonome et classification des tests humains
 
-**Fin d'étape atteinte** : une tâche `READY` est lancée depuis NOX, modifie réellement le
-repository, et son résultat est relisible sans copier-coller — vérifié par un test fonctionnel
-avec un faux Claude Code, voir [PROJECT_STATE.md](PROJECT_STATE.md).
+Distinguer ce qu'une commande prouve, ce que l'Architecte peut établir, et ce qui exige
+réellement un test humain.
 
-> **Réserve levée.** Au moment de l'étape 8, Claude Code n'était pas installé et la syntaxe des
-> arguments n'avait pas pu être vérifiée. Elle l'a été depuis : un premier run réel a été exécuté
-> avec Claude Code `2.1.223` sous Windows — lancement non interactif fonctionnel, prompt transmis
-> par `stdin`, résultat JSON final récupéré, repository modifié sans commit, `HEAD` inchangé,
-> métadonnées de session, durée, nombre de tours et coût rapporté récupérés, tâche passée en
-> `REVIEW`. L'étape 10 a confirmé les arguments contre le binaire local, sans lancer de requête.
+### `TASK-028` — Boucle bornée de correction et de re-review
 
-Hors périmètre volontaire : streaming des événements, annulation manuelle, reprise de session,
-prompt correctif automatique, exécution automatique d'une autre tâche, plusieurs agents en
-parallèle, worktrees, commits automatiques
-([D-095](DECISIONS.md#d-095--interrogation-périodique-plutôt-que-flux-dévénements),
-[D-105](DECISIONS.md#d-105--nox-constate-létat-git-il-ne-le-répare-pas)).
+Enchaîner correction et relecture, avec une borne explicite. Une boucle sans borne finit par
+tourner seule.
+
+### `TASK-029` — Livraison Git contrôlée
+
+Commit et push depuis NOX, sur décision explicite, avec un message relu. La règle « aucun push
+automatique » ne change pas : c'est le geste qui entre dans l'outil, pas la décision.
+
+### `TASK-030` — Tableau de bord multi-projets
+
+Une vue d'ensemble, une fois qu'un projet unique est correctement tenu.
+
+### `TASK-031` — Runner multi-projets
+
+Aujourd'hui, une seule exécution est active tous projets confondus. Cette limite tombe ici, ou
+pas du tout.
+
+### `TASK-032` — Replanification depuis la conversation principale
+
+La boucle se referme : revenir dans la conversation du projet et réordonner le plan restant.
 
 ---
 
-## ✅ 9. Suppression sécurisée et libellés d'état — `TASK-009`
+## Vérification sur un projet réel
 
-**Objectif** : pouvoir retirer depuis NOX ce qui a été créé pour des essais, sans jamais perdre
-un historique, et rendre les états lisibles d'un coup d'œil.
+Ce n'est pas une étape : c'est une pratique permanente.
 
-- Route authentifiée `POST /repositories/documents/delete`, avec contrôle de révision
-  ([D-107](DECISIONS.md#d-107--la-suppression-exige-une-révision-comme-lécriture),
-  [D-108](DECISIONS.md#d-108--aucune-suppression-forcée-aucun-bouton-pour-en-demander-une)).
-- Documents `tasks/TASK-xxx.md` protégés **par le runner**, pas seulement par l'interface
-  ([D-111](DECISIONS.md#d-111--les-documents-taskstask-xxxmd-sont-protégés-dans-le-runner)).
-- Route dédiée `POST /repositories/tasks/delete-document`, qui ne reçoit qu'un code de tâche
-  ([D-112](DECISIONS.md#d-112--une-route-dédiée-pour-le-document-dune-tâche),
-  [D-113](DECISIONS.md#d-113--un-document-absent-est-une-réussite-idempotente)).
-- Aucun dossier supprimé, aucun lien suivi, aucune suppression récursive
-  ([D-110](DECISIONS.md#d-110--aucun-dossier-nest-supprimé-jamais)).
-- `deleteTaskWithoutRuns` et contrainte `Restrict` de `Run` vers `Task`
-  ([D-115](DECISIONS.md#d-115--une-tâche-possédant-un-historique-nest-pas-supprimable),
-  [D-116](DECISIONS.md#d-116--la-contrainte-double-la-règle-métier)).
-- Fichier supprimé avant la base, numéro jamais réutilisé
-  ([D-117](DECISIONS.md#d-117--le-numéro-dune-tâche-supprimée-reste-réservé),
-  [D-118](DECISIONS.md#d-118--le-fichier-est-supprimé-avant-la-tâche-en-base)).
-- Confirmations portées par l'URL, code de tâche à recopier
-  ([D-119](DECISIONS.md#d-119--la-confirmation-exige-de-recopier-le-code-de-la-tâche),
-  [D-120](DECISIONS.md#d-120--les-confirmations-sont-portées-par-lurl-pas-par-un-état-de-composant)).
-- Libellés anglais limités aux micro-éléments techniques, centralisés dans `lib/labels.ts`
-  ([D-121](DECISIONS.md#d-121--langlais-est-limité-aux-micro-éléments-techniques),
-  [D-122](DECISIONS.md#d-122--un-seul-module-traduit-les-valeurs-internes),
-  [D-123](DECISIONS.md#d-123--les-valeurs-internes-ne-changent-pas)).
+Chaque étape depuis `TASK-008` se conclut par une procédure de vérification manuelle,
+exécutée par l'utilisateur sur un vrai repository, et consignée dans
+[PROJECT_STATE.md](PROJECT_STATE.md). Un test automatisé contre un faux fournisseur ne prouve
+rien du comportement réel d'un modèle ou d'un binaire — il prouve seulement que le contrat est
+respecté.
 
-**Fin d'étape atteinte** : un document de test se supprime depuis NOX, une modification
-concurrente bloque la suppression sans rien perdre, une tâche sans exécution disparaît avec son
-Markdown, et une tâche avec historique est conservée — vérifié par un test fonctionnel réel, voir
-[PROJECT_STATE.md](PROJECT_STATE.md).
-
-Hors périmètre volontaire : suppression de projet, de run, de tâche avec exécutions, suppression
-forcée, récursive ou en masse, corbeille, restauration, archivage, renommage, déplacement.
+Cette pratique est ce qui a révélé, entre autres, la forme réelle des lignes Bash de Claude
+Code et la structure exacte de ses événements `stream-json`.
 
 ---
 
-## ✅ 10. Streaming des événements et annulation — `TASK-010`
+## Hors périmètre, durablement
 
-**Objectif** : suivre une exécution en direct et pouvoir l'interrompre, sans jamais exposer ce
-que Claude Code manipule.
+Ces éléments ne figurent nulle part ci-dessus, et c'est délibéré. Le détail et les raisons
+sont dans [V1_SCOPE.md](V1_SCOPE.md) § 3.
 
-- Invocation en `--output-format stream-json --verbose`, `--verbose` étant une précondition du
-  binaire ([D-124](DECISIONS.md#d-124--sortie-stream-json-avec---verbose-sans-messages-partiels)).
-- Parser NDJSON incrémental : chunks partiels, CRLF, ligne finale sans terminateur, ligne
-  démesurée abandonnée ([D-125](DECISIONS.md#d-125--un-parser-ndjson-incrémental-et-non-un-découpage-par-chunk)).
-- Événements publics normalisés, type fermé, aucun message brut hors du runner
-  ([D-126](DECISIONS.md#d-126--aucun-événement-brut-ne-quitte-le-runner)).
-- Raisonnement interne sans aucune représentation possible
-  ([D-127](DECISIONS.md#d-127--le-raisonnement-interne-na-aucune-représentation)).
-- Commandes affichées seulement si exactement autorisées, résultats d'outils réduits à leur issue
-  ([D-128](DECISIONS.md#d-128--une-commande-nest-affichée-que-si-elle-est-exactement-autorisée)).
-- Sanitation centralisée et bornes constantes, avec troncature explicite
-  ([D-129](DECISIONS.md#d-129--sanitation-centralisée-appliquée-à-toutes-les-chaînes),
-  [D-130](DECISIONS.md#d-130--les-événements-sont-bornés-et-la-troncature-est-explicite)).
-- Modèle `RunEvent`, insertion idempotente par contrainte d'unicité
-  ([D-131](DECISIONS.md#d-131--runevent-en-sqlite-sans-compteur-dénormalisé),
-  [D-132](DECISIONS.md#d-132--idempotence-par-contrainte-pas-par-confiance)).
-- Flux SSE via Next.js, persistance avant affichage, reprise par curseur
-  ([D-133](DECISIONS.md#d-133--sse-plutôt-quun-websocket-avec-du-polling-côté-serveur),
-  [D-134](DECISIONS.md#d-134--la-persistance-précède-lenvoi-au-navigateur),
-  [D-136](DECISIONS.md#d-136--reprise-par-curseur-jamais-par-décalage)).
-- Rattrapage des événements manqués à la réouverture de la page
-  ([D-135](DECISIONS.md#d-135--rattrapage-des-événements-à-la-réouverture-de-la-page)).
-- Statut `CANCELLING`, arrêt réutilisant l'unique implémentation de TASK-008
-  ([D-138](DECISIONS.md#d-138--un-statut-cancelling-non-final),
-  [D-139](DECISIONS.md#d-139--une-seule-implémentation-de-larrêt-de-larbre)).
-- Course fin / annulation tranchée par le premier état final
-  ([D-140](DECISIONS.md#d-140--le-premier-état-final-gagne)).
-- Git capturé après l'arrêt, aucune restauration, tâche `BLOCKED`
-  ([D-141](DECISIONS.md#d-141--git-est-capturé-après-larrêt-et-rien-nest-restauré),
-  [D-142](DECISIONS.md#d-142--un-run-annulé-bloque-la-tâche)).
-
-**Fin d'étape atteinte** : la page d'une exécution affiche en direct les lectures, recherches,
-modifications, validations et messages publics de Claude Code ; fermer l'onglet n'interrompt rien
-et ne perd rien ; `Cancel run` arrête le processus et ses descendants, laisse le repository en
-l'état et bloque la tâche — vérifié par un test fonctionnel avec un faux Claude Code, voir
-[PROJECT_STATE.md](PROJECT_STATE.md).
-
-> **Réserve.** Le premier run réel de cette étape a **échoué immédiatement** : `-p` avec
-> `--output-format stream-json` exige `--verbose`, ce qu'un probe à `stdin` vide n'avait pas
-> détecté — il s'arrêtait plus tôt, faute d'entrée. L'invocation a été corrigée ; le détail et la
-> leçon sont dans [D-124](DECISIONS.md#d-124--sortie-stream-json-avec---verbose-sans-messages-partiels).
-> La forme réelle des messages reste partiellement observée : `system/init` et `result` le sont,
-> `assistant` et `user` non. Une procédure de vérification manuelle en deux scénarios est décrite
-> dans [PROJECT_STATE.md](PROJECT_STATE.md).
-
-Hors périmètre volontaire : reprise avec `--resume`, continuation avec `--continue`, message
-envoyé à une session active, approbation interactive d'outils, terminal interactif, plusieurs runs
-parallèles, persistance du processus après redémarrage du runner, restauration automatique du
-repository, diff complet, orchestration OpenAI, suppression ou archivage de run.
-
----
-
-## ✅ 11. Review Git intégrée et validations structurées — `TASK-011`
-
-**Objectif** : afficher le diff détaillé d'un run, structurer les résultats des validations et
-aider à accepter ou rejeter le travail — sans jamais créer de commit automatiquement.
-
-- ~~`git status`, liste des fichiers modifiés~~ — fait à l'étape 8.
-- ~~Événements de validation dans la timeline~~ — fait à l'étape 10, à l'état près.
-- Instantané de review capturé **à la fin** de l'exécution, jamais recalculé ensuite
-  ([D-145](DECISIONS.md#d-145--le-snapshot-de-review-est-pris-à-la-fin-de-lexécution),
-  [D-146](DECISIONS.md#d-146--le-point-de-comparaison-est-githeadbefore-pas-head)).
-- Un `RunFileChange` par fichier, fichiers non suivis compris, sans jamais `git add`
-  ([D-147](DECISIONS.md#d-147--un-stockage-par-fichier-jamais-un-diff-global),
-  [D-148](DECISIONS.md#d-148--les-fichiers-non-suivis-appartiennent-à-la-review)).
-- Bornes constantes, troncature explicite, exécution jamais requalifiée en échec
-  ([D-149](DECISIONS.md#d-149--les-bornes-du-diff-sont-des-constantes)).
-- Fichiers sensibles sans contenu, binaires sans blob, patches nettoyés de leurs secrets mais pas
-  de leurs chemins ([D-150](DECISIONS.md#d-150--un-fichier-sensible-montre-son-existence-jamais-son-contenu),
-  [D-151](DECISIONS.md#d-151--un-patch-est-nettoyé-de-ses-secrets-pas-de-ses-chemins),
-  [D-152](DECISIONS.md#d-152--un-blob-binaire-nentre-jamais-en-base)).
-- Aucune review reconstruite pour une exécution ancienne
-  ([D-153](DECISIONS.md#d-153--les-anciens-runs-ne-reçoivent-aucune-review-reconstruite)).
-- Commandes de validation recopiées au lancement, corrélées par `tool_use_id`, sans code de sortie
-  déduit ni sortie analysée
-  ([D-154](DECISIONS.md#d-154--les-commandes-de-validation-sont-recopiées-au-lancement),
-  [D-155](DECISIONS.md#d-155--la-corrélation-passe-par-tool_use_id-et-seulement-pour-une-commande-exacte),
-  [D-156](DECISIONS.md#d-156--aucun-code-de-sortie-nest-déduit-aucune-sortie-nest-analysée)).
-- Aucune commande relancée par NOX
-  ([D-158](DECISIONS.md#d-158--aucune-commande-nest-relancée-par-nox)).
-- Patch rendu comme du texte, fichier sélectionné parmi les lignes enregistrées
-  ([D-159](DECISIONS.md#d-159--un-patch-est-du-texte-et-rien-dautre),
-  [D-160](DECISIONS.md#d-160--le-fichier-affiché-est-choisi-parmi-les-lignes-enregistrées)).
-- Route de review attachée au run, transfert unique vers la base
-  ([D-161](DECISIONS.md#d-161--une-route-de-review-attachée-au-run-pas-un-explorateur-git),
-  [D-162](DECISIONS.md#d-162--le-transfert-vers-la-base-a-lieu-une-fois-et-la-base-fait-foi-ensuite)).
-- `Approve` et `Reopen` sans aucune action Git, indicateurs factuels sans score
-  ([D-163](DECISIONS.md#d-163--approve-et-reopen-ne-touchent-pas-à-git),
-  [D-164](DECISIONS.md#d-164--des-faits-jamais-un-score)).
-- Commande Bash lue par segments, liste de la tâche prioritaire sur la classification générique,
-  issue inconnue plutôt que verdict inventé — correction du premier run réel
-  ([D-165](DECISIONS.md#d-165--une-commande-bash-est-lue-par-segments-jamais-comme-un-bloc),
-  [D-166](DECISIONS.md#d-166--la-liste-de-la-tâche-prime-sur-la-classification-générique),
-  [D-167](DECISIONS.md#d-167--une-issue-inconnue-plutôt-quun-verdict-inventé),
-  [D-168](DECISIONS.md#d-168--le-comportement-observé-fait-autorité)).
-
-**Fin d'étape atteinte** : la review d'une exécution se fait entièrement dans NOX — diff par
-fichier, validations structurées, décision humaine — et le commit reste une action humaine.
-Vérifié par un test fonctionnel avec un faux Claude Code, voir
-[PROJECT_STATE.md](PROJECT_STATE.md).
-
-> **Levée de réserve.** Le premier run réel a eu lieu, et il a révélé un défaut : Claude Code
-> préfixe ses commandes Bash de `cd "<répertoire>" &&`, si bien qu'une validation pourtant exécutée
-> restait « Not run ». La corrélation par `tool_use_id`, elle, fonctionnait. La correction et la
-> forme réellement observée sont consignées en
-> [D-165](DECISIONS.md#d-165--une-commande-bash-est-lue-par-segments-jamais-comme-un-bloc) à
-> [D-168](DECISIONS.md#d-168--le-comportement-observé-fait-autorité). Le comportement observé fait
-> désormais autorité sur le format documenté.
-
-Hors périmètre volontaire : commit, push et `git add` automatiques, génération d'un message de
-commit, `reset`, `restore`, `checkout`, nettoyage, modification d'un fichier depuis le diff,
-commentaires inline, review par IA, relance automatique d'une exécution, reprise de session,
-orchestration OpenAI, fusion de branches, pull request, plusieurs agents.
-
----
-
-## ✅ 12. Feedback de review et reprise ciblée d'une session Claude — `TASK-012`
-
-**Objectif** : permettre de rejeter une review avec un commentaire, puis reprendre la session
-Claude associée pour appliquer un correctif ciblé — sans orchestration OpenAI automatique.
-
-- `Request changes` depuis une review, distinct de `Reopen`
-  ([D-171](DECISIONS.md#d-171--request-changes-et-reopen-ne-se-confondent-pas)).
-- Feedback humain persistant, historique, utilisable **une seule fois**
-  ([D-170](DECISIONS.md#d-170--le-feedback-est-un-objet-persistant-pas-un-paramètre-de-lancement),
-  [D-177](DECISIONS.md#d-177--un-feedback-vaut-pour-une-seule-correction)).
-- Reprise de **la** session du run relu, à la demande explicite de l'utilisateur, avec une syntaxe
-  `--resume` vérifiée sur le binaire local
-  ([D-172](DECISIONS.md#d-172--la-session-reprise-vient-du-run-parent-jamais-du-navigateur)).
-- Dossier de travail sale autorisé, mais un seul : celui qui a été relu
-  ([D-173](DECISIONS.md#d-173--un-dossier-de-travail-sale-est-autorisé-mais-un-seul--celui-qui-a-été-relu)).
-- Empreinte authentifiée du dossier de travail, complète ou refusée
-  ([D-174](DECISIONS.md#d-174--lempreinte-du-dossier-de-travail-est-authentifiée-jamais-un-simple-hachage),
-  [D-175](DECISIONS.md#d-175--une-empreinte-partielle-nexiste-pas--cest-un-refus)).
-- Contrôle refait juste avant le lancement du processus
-  ([D-176](DECISIONS.md#d-176--le-contrôle-est-refait-juste-avant-le-spawn)).
-- Correction = nouveau run, parent immuable, chaîne possible
-  ([D-169](DECISIONS.md#d-169--une-correction-est-une-exécution-à-part-entière-distinguée-par-son-type),
-  [D-179](DECISIONS.md#d-179--une-chaîne-de-corrections-chacune-reprenant-lexécution-quelle-a-relue)).
-- Review cumulative après correction, validations issues de la spécification actuelle
-  ([D-178](DECISIONS.md#d-178--la-review-dune-correction-montre-létat-complet-pas-le-delta),
-  [D-180](DECISIONS.md#d-180--les-validations-dune-correction-viennent-de-la-spécification-actuelle)).
-- Feedback traité comme du contenu, jamais comme une instruction privilégiée
-  ([D-181](DECISIONS.md#d-181--le-feedback-est-du-contenu-jamais-une-instruction-privilégiée)).
-- Commit et push restent hors périmètre, comme depuis le début.
-
-**Fin d'étape atteinte** : un aller-retour de correction se fait dans NOX, sans recopier de
-contexte. Vérifié par un test fonctionnel avec un faux Claude Code, voir
-[PROJECT_STATE.md](PROJECT_STATE.md).
-
-> **Réserve.** Aucune requête Claude réelle n'a été lancée pendant cette étape. La syntaxe
-> `-p --resume <id> --output-format stream-json --verbose` a en revanche été exercée sur le binaire
-> local `2.1.223`, contre un serveur Messages en boucle locale : l'historique est réellement rejoué
-> et la session conserve son identifiant. Une procédure de vérification manuelle est décrite dans
-> [PROJECT_STATE.md](PROJECT_STATE.md).
-
-Hors périmètre volontaire : architecte OpenAI, génération automatique du feedback, review IA,
-correction sans clic, commit/push/`git add` automatiques, `reset`, `restore`, `checkout`, nettoyage,
-reprise d'un run annulé, échoué ou bloqué, choix libre d'une session, `--continue`, plusieurs agents
-en parallèle, modification du feedback après lancement, commentaires par ligne de diff.
-
----
-
-## ✅ 13. Architecte NOX et génération assistée de tâches — `TASK-013`
-
-**Objectif** : concevoir une tâche dans NOX, à partir du contexte réel du projet.
-
-- Second modèle, aux rôles disjoints : **OpenAI conçoit, Claude Code implémente**
-  ([D-186](DECISIONS.md#d-186--openai-conçoit-claude-implémente)).
-- Intégration **server-side** dans `apps/web` ; le runner ignore l'existence de l'Architecte
-  ([D-187](DECISIONS.md#d-187--lintégration-openai-vit-dans-le-web-jamais-dans-le-runner)).
-- Responses API, Structured Output strict, `store: false`, **aucun outil**
-  ([D-188](DECISIONS.md#d-188--responses-api-structured-output-strict-aucun-outil)).
-- Contexte projet **fermé** : huit documents nommés et les dix dernières tâches. Ni code, ni diff,
-  ni sortie de Claude Code, ni `.env`
-  ([D-193](DECISIONS.md#d-193--le-contexte-est-une-liste-fermée-jamais-une-exploration)).
-- Contexte visible **avant** l'envoi : documents, révisions, tailles, troncatures, texte exact.
-- Manifest persisté avec chaque génération, jamais le contenu envoyé
-  ([D-195](DECISIONS.md#d-195--un-manifest-jamais-une-copie-du-contexte)).
-- Boucle de clarification bornée : `NEEDS_INPUT`, questions, précisions, nouvelle génération.
-  Dix générations au maximum par session, une seule à la fois.
-- Proposition entièrement éditable, puis création par le **pipeline de TASK-007** — tâche `DRAFT`
-  ([D-201](DECISIONS.md#d-201--la-création-réutilise-le-pipeline-de-task-007)).
-- `NOX_OPENAI_API_KEY` : le préfixe `NOX_` place la clé hors de portée de Claude Code
-  ([D-190](DECISIONS.md#d-190--nox_openai_api_key-et-pas-openai_api_key)).
-- Consommation rapportée affichée, **aucun coût estimé**
-  ([D-203](DECISIONS.md#d-203--aucun-coût-estimé)).
-
-**Terminée.** Aucun appel OpenAI réel n'a été effectué pendant l'implémentation : tous les tests
-utilisent un faux fournisseur. La première génération réelle est une vérification manuelle décrite
-dans [PROJECT_STATE.md](PROJECT_STATE.md).
-
-**Toujours hors périmètre** : boucle autonome OpenAI → Claude → OpenAI, review du code par OpenAI,
-lancement automatique de Claude, passage automatique en `READY`, outils OpenAI, sélection libre du
-contexte, conversation générale.
-
----
-
-## ✅ 14. Conversation Architecte persistante et évolution du contexte — `TASK-014`
-
-**Objectif** : poursuivre une discussion avec l'Architecte autour d'un projet.
-
-- Conversation persistée dans SQLite, transmise **en entier** à chaque tour
-  ([D-204](DECISIONS.md#d-204--la-conversation-architecte-appartient-à-nox)). OpenAI reste sans état :
-  `store: false`, ni `previous_response_id`, ni `conversation`, ni mode background.
-- Réponse publique de l'architecte persistée et affichée, distincte de tout raisonnement interne
-  ([D-205](DECISIONS.md#d-205--la-réponse-publique-nest-pas-du-raisonnement)).
-- Une proposition ne clôt plus la discussion : demander « plus petit » produit une nouvelle
-  proposition, et l'ancienne reste intacte
-  ([D-206](DECISIONS.md#d-206--une-proposition-ne-clôt-pas-la-conversation)).
-- Seule la dernière proposition est créable, et plus du tout si la conversation l'a dépassée
-  ([D-207](DECISIONS.md#d-207--seule-la-dernière-proposition-est-créable)).
-- Empreinte du contexte projet, comparée entre deux tours **et** entre l'aperçu et l'envoi
-  ([D-208](DECISIONS.md#d-208--une-empreinte-de-contexte-et-ce-quelle-nest-pas)) ; un contexte
-  modifié après l'aperçu bloque l'appel, sans option de forçage
-  ([D-211](DECISIONS.md#d-211--un-contexte-modifié-après-laperçu-bloque-lenvoi)).
-- Diff de manifest : ajouté, retiré, modifié, troncature changée, tâche entrée ou sortie de la
-  fenêtre — jamais un diff de contenu.
-- Transcript borné à vingt tours et 64 Kio, sans résumé ni fenêtre silencieuse
-  ([D-213](DECISIONS.md#d-213--le-transcript-est-borné-jamais-résumé)).
-- Sessions de TASK-013 conservées en lecture seule, sans conversation inventée
-  ([D-216](DECISIONS.md#d-216--les-sessions-de-task-013-restent-en-lecture-seule)).
-
-**Terminée.** La boucle conversationnelle est disponible : le découpage d'un besoin se fait
-entièrement dans NOX, sans onglet séparé. Claude Code n'est toujours **pas** déclenché
-automatiquement, et la boucle autonome OpenAI ↔ Claude reste hors périmètre.
-
-**Validée avec de vrais appels OpenAI** : conversation multi-tours réelle, `CONTINUE`,
-propositions successives, contexte comparé entre deux tours, aperçu périmé bloquant l'envoi,
-tâche finale créée en brouillon, session de TASK-013 toujours lisible.
-
----
-
-## ✅ 15. Review Architecte assistée d'une exécution — `TASK-015`
-
-**Objectif** : obtenir une seconde lecture d'un run relu, sans jamais déléguer la décision.
-
-- Analyse construite **uniquement** sur la review enregistrée : spécification, instantané Git
-  immuable, patches affichables, validations structurées
-  ([D-218](DECISIONS.md#d-218--lanalyse-lit-sqlite-jamais-le-dossier-de-travail)).
-- Le compte rendu final de Claude Code n'est pas transmis : ce n'est pas une preuve
-  ([D-219](DECISIONS.md#d-219--le-compte-rendu-de-claude-code-nest-pas-une-preuve)).
-- Preview obligatoire, construite par le même pipeline que l'envoi ; zéro appel avant le clic
-  ([D-220](DECISIONS.md#d-220--une-preview-obligatoire-avant-tout-appel-de-review)).
-- Trois verdicts, observations structurées, feedback ciblé — le tout revalidé côté serveur :
-  chemins, index de critères, gravités, longueurs, cohérence verdict/feedback.
-- Verdict du fournisseur et verdict NOX conservés séparément
-  ([D-223](DECISIONS.md#d-223--deux-verdicts-conservés-séparément)) ; une approbation est
-  impossible dès qu'une partie de la review était invisible
-  ([D-224](DECISIONS.md#d-224--une-approbation-ne-peut-pas-se-fonder-sur-ce-que-personne-na-lu)).
-- Aucune validation configurée n'est **pas** un échec
-  ([D-225](DECISIONS.md#d-225--aucune-validation-configurée-nest-pas-un-échec)).
-- `Use as feedback` préremplit le formulaire de TASK-012, éditable, et ne lance rien
-  ([D-226](DECISIONS.md#d-226--le-feedback-suggéré-est-un-texte-jamais-une-action)).
-- Cinq analyses par exécution au maximum, une seule active, chacune immuable
-  ([D-227](DECISIONS.md#d-227--cinq-analyses-par-exécution-et-une-seule-à-la-fois)).
-
-**Terminée.** Aucun appel OpenAI réel n'a été effectué pendant l'implémentation : tous les tests
-utilisent un faux fournisseur, et aucun ne lance le vrai binaire Claude Code.
-
-**Validée avec un vrai appel OpenAI** : review Claude réelle capturée, preview exacte, Structured
-Output `architect-review/1`, verdict réel `APPROVE_RECOMMENDED`, observations rattachées à de vrais
-fichiers et critères, tâche restée en `REVIEW`, aucune approbation ni aucun lancement automatique.
-
-**Toujours hors périmètre** : approbation automatique, `Request changes` automatique, lancement
-automatique de Claude, review OpenAI à chaque fin de run, review en arrière-plan, outils OpenAI,
-boucle autonome OpenAI ↔ Claude, scan IA de secrets, génération de commit ou de PR, analyse de
-plusieurs runs simultanément.
-
----
-
-
-## ✅ 16. Boucle de développement guidée avec checkpoints humains — `TASK-016`
-
-**Objectif** : relier les briques existantes en un parcours lisible, sans en automatiser aucune.
-
-- La page d'une tâche répond à « où en sommes-nous, et quelle étape a du sens maintenant ».
-- L'étape est **dérivée** de l'état déjà enregistré : aucune colonne, aucune migration
-  ([D-228](DECISIONS.md#d-228--le-workflow-guidé-est-dérivé-jamais-persisté)).
-- Chaque recommandation porte sa raison, ses alternatives et ses blocages.
-- Une recommandation n'autorise rien : les Server Actions restent la seule frontière
-  ([D-229](DECISIONS.md#d-229--une-recommandation-nautorise-rien)).
-- Le choix de l'étape est 100 % déterministe et local : aucun appel IA
-  ([D-230](DECISIONS.md#d-230--aucun-appel-ia-pour-choisir-la-prochaine-étape)).
-- La review Architecte reste facultative ; NOX fonctionne sans OpenAI et sans runner
-  ([D-231](DECISIONS.md#d-231--la-review-architecte-reste-facultative),
-  [D-235](DECISIONS.md#d-235--nox-reste-utilisable-sans-openai-et-sans-runner)).
-- Les actions qui engagent une IA sont annoncées, et elles seules
-  ([D-234](DECISIONS.md#d-234--les-checkpoints-ia-sont-visibles-et-seulement-là-où-ils-existent)).
-
-**Terminée.** Aucune étape ne se déclenche seule : ni au chargement d'une page, ni après un délai,
-ni parce que l'étape précédente vient de se terminer.
-
-**Validée sur un parcours réel** : `Drafting → Mark ready`, `Ready to run → Run Claude Code`,
-runner arrêté correctement détecté, `Running → Open run`, `Reviewing → Analyze with Architect`,
-verdict réel `Approve recommended`, `Review and approve`, tâche restée en `REVIEW`, approbation
-humaine distincte, puis `Done` sans aucune action recommandée.
-
-**Toujours hors périmètre** : exécution automatique de l'étape suivante, appel OpenAI ou lancement
-Claude automatique, `Approve` ou `Request changes` automatique, boucle autonome OpenAI ↔ Claude,
-planification de plusieurs tâches, cron, scheduler, notifications, queue multi-projets,
-orchestration parallèle, politique de coût, intégration GitHub.
-
----
-
-## ✅ 17. Mémoire projet structurée et décisions durables — `TASK-017`
-
-**Objectif** : donner au projet une mémoire explicite, que l'Architecte retrouve sans la chercher.
-
-- Quatre catégories fermées : `DECISION`, `CONSTRAINT`, `CONVENTION`, `KNOWLEDGE`
-  ([D-239](DECISIONS.md#d-239--quatre-catégories-et-pas-une-de-plus)).
-- Codes `MEM-xxx` stables, dérivés d'un compteur atomique et jamais réattribués.
-- Création, modification, archivage, restauration et suppression, toutes manuelles
-  ([D-240](DECISIONS.md#d-240--rien-nentre-en-mémoire-sans-une-action-humaine)).
-- La mémoire vit dans SQLite : aucune écriture Git, aucun fichier Markdown généré
-  ([D-241](DECISIONS.md#d-241--la-mémoire-vit-dans-sqlite-pas-dans-le-repository)).
-- `ACTIVE` est envoyé, `ARCHIVED` ne l'est pas, et il n'existe pas de troisième état
-  ([D-242](DECISIONS.md#d-242--active-veut-dire--envoyé--archived-veut-dire--non-envoyé-)).
-- Budget de 48 Kio d'entrées actives, **refusé à l'écriture** plutôt que tronqué à l'envoi
-  ([D-243](DECISIONS.md#d-243--le-budget-est-refusé-à-lécriture-jamais-tronqué-à-lenvoi)).
-- Ordre déterministe, aucun classement ni sélection par IA
-  ([D-244](DECISIONS.md#d-244--aucun-classement-aucune-sélection-par-ia)).
-- Sanitation avant envoi, révision calculée sur le texte réellement transmis
-  ([D-245](DECISIONS.md#d-245--la-mémoire-est-sanitisée-avant-de-partir-et-stockée-telle-quécrite),
-  [D-246](DECISIONS.md#d-246--la-révision-décrit-ce-qui-a-été-envoyé)).
-- La mémoire entre dans l'empreinte de contexte : une modification après l'aperçu bloque l'envoi
-  ([D-248](DECISIONS.md#d-248--un-changement-de-mémoire-est-un-changement-de-contexte)).
-
-**Terminée.** Aucun appel OpenAI réel n'a été effectué pendant l'implémentation : tous les tests
-utilisent un faux fournisseur, et aucun ne lance Claude Code. La première conversation nourrie par
-la mémoire est une vérification manuelle décrite dans [PROJECT_STATE.md](PROJECT_STATE.md).
-
-**Toujours hors périmètre** : extraction automatique depuis une conversation, suggestions
-automatiques, résumé automatique, mémoire vectorielle, embeddings, recherche sémantique, RAG,
-mémoire globale ou partagée entre projets, import automatique de `DECISIONS.md`, synchronisation
-mémoire ↔ Markdown, expiration automatique, fusion de doublons, tags libres, relations entre
-mémoires, mémoire dans la review Architecte.
-
----
-## ⬜ 18. Test sur un petit projet réel
-
-**Objectif** : confronter NOX à un usage réel.
-
-- Piloter un projet secondaire de bout en bout avec NOX.
-- Relever les frictions et les manques.
-- Corriger avant d'ajouter la moindre fonctionnalité avancée.
-
-**Fin d'étape** : un projet réel a été mené sans repasser par un flux manuel.
-
----
-
-## ⬜ 19. Fonctionnalités avancées
-
-**Objectif** : améliorer l'usage une fois la V1 éprouvée.
-
-- Suivi fin des coûts OpenAI et des limites d'utilisation Claude.
-- Historique et comparaison des exécutions.
-- Modèles de tâches réutilisables.
-- Éléments listés hors périmètre dans [V1_SCOPE.md](V1_SCOPE.md), si le besoin se confirme.
-
-**Aucun élément de cette étape ne doit être anticipé avant l'étape 18.**
+Autonomie sans checkpoints · orchestration multi-agents complexe · parallélisme agressif dans
+un même repository · automatisation avancée des PR GitHub · cloud multi-utilisateur ·
+collaboration temps réel · plusieurs comptes Claude · worktrees automatiques · application
+mobile · déploiement applicatif · apprentissage automatique des préférences · mémoire
+vectorielle, embeddings et RAG.

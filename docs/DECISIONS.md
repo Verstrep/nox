@@ -1,10 +1,60 @@
 # DECISIONS — NOX
 
-Journal des décisions structurantes. Chaque entrée indique la décision, sa justification et,
-si utile, ce qu'elle écarte.
+> **Rôle de ce document** : pourquoi certains choix ont été faits.
+>
+> Ce que NOX fait est décrit dans [PROJECT_STATE.md](PROJECT_STATE.md), comment il le fait dans
+> [ARCHITECTURE.md](ARCHITECTURE.md). Ici, on trouve la raison — et ce qui a été écarté.
 
-Une décision consignée ici n'est pas rediscutée sans raison nouvelle. Si elle est révisée,
-l'entrée est mise à jour et la raison du changement est écrite.
+Journal des décisions structurantes. Chaque entrée indique la décision, sa justification et,
+si utile, ce qu'elle écarte. Une décision consignée ici n'est pas rediscutée sans raison
+nouvelle.
+
+## Comment lire ce document
+
+**Une entrée sans mention de statut est en vigueur.** C'est le cas de la très grande majorité
+d'entre elles : ajouter `Statut : en vigueur` sur 249 entrées ajouterait 249 lignes sans
+ajouter une information.
+
+Une entrée dont la situation a changé porte une ligne `**Statut — …**` juste après sa décision.
+Cinq formes existent :
+
+| Mention | Ce qu'elle veut dire |
+| --- | --- |
+| `close` | L'écart ou la restriction décrite a été refermé, comme prévu |
+| `étendue, comme annoncé` | La tâche dédiée qu'elle annonçait a eu lieu, et a élargi son cadre |
+| `borne relevée` | Le principe tient, un chiffre a changé — la nouvelle valeur est citée |
+| `précisée` | La mise en œuvre a été corrigée sans que le principe bouge |
+| `en vigueur, mais visée` | Le mécanisme tourne, mais la direction produit a changé |
+
+**Les décisions historiques restent.** Beaucoup sont explicitement bornées à leur étape — « ni
+base de données pendant TASK-001 », « TASK-004 n'ajoute aucune écriture ». Elles n'ont pas été
+contredites : elles ont été **honorées**, puis étendues par la tâche dédiée qu'elles
+annonçaient. Les supprimer effacerait la raison d'être de l'architecture visible aujourd'hui
+dans le code.
+
+## Sections
+
+| Section | Décisions |
+| --- | --- |
+| Décisions produit | D-001 → D-003 |
+| Décisions de processus | D-004 → D-005 |
+| Décisions techniques du socle — TASK-001 | D-006 → D-017 |
+| TASK-002 — persistance et projets locaux | D-018 → D-028 |
+| TASK-003 — connexion web ↔ runner | D-029 → D-039 |
+| TASK-004 — inventaire et lecture des documents Markdown | D-040 → D-050 |
+| TASK-005 — édition sécurisée d'un document | D-051 → D-060 |
+| TASK-006 — création de documents | D-061 → D-070 |
+| TASK-007 — tâches structurées | D-071 → D-084 |
+| TASK-008 — lancement de Claude Code | D-085 → D-106 |
+| TASK-009 — suppression et libellés | D-107 → D-123 |
+| TASK-010 — streaming et annulation | D-124 → D-144 |
+| TASK-011 — review Git et validations structurées | D-145 → D-168 |
+| TASK-012 — feedback de review et reprise ciblée | D-169 → D-185 |
+| TASK-013 — Architecte NOX | D-186 → D-203 |
+| TASK-014 — conversation Architecte persistante | D-204 → D-216 |
+| TASK-015 — review Architecte d'une exécution | D-217 → D-227 |
+| TASK-016 — workflow de développement guidé | D-228 → D-237 |
+| TASK-017 — mémoire projet | D-238 → D-249 |
 
 ---
 
@@ -57,7 +107,7 @@ diff et la review devient inexploitable.
 
 ---
 
-## Décisions techniques
+## Décisions techniques du socle — TASK-001
 
 ### D-006 — Monorepo avec les workspaces npm natifs
 
@@ -259,9 +309,12 @@ repository n'est lu, et aucune commande Git modifiant le repository n'est lancé
 
 **Écart assumé.** [ARCHITECTURE.md](ARCHITECTURE.md) posait « l'application web ne lance aucun
 processus système ». Cette frontière est franchie ici, sur instruction explicite de TASK-002 et
-pour un seul cas, en lecture seule. Le document a été mis à jour en conséquence : la
-responsabilité reviendra à `apps/runner` quand NOX séparera réellement l'interface de la machine
-d'exécution.
+pour un seul cas, en lecture seule.
+
+**Statut — close.** L'écart annoncé a été refermé par TASK-003, comme prévu.
+`apps/web/lib/repository-path.ts` a été supprimé, `apps/web` n'importe plus
+`node:child_process`, et la résolution vit dans `apps/runner`. La frontière est aujourd'hui
+sans exception ; cette entrée reste pour expliquer pourquoi elle a un jour été franchie.
 
 ### D-024 — Stockage du chemin canonique retourné par Git
 
@@ -461,7 +514,7 @@ les variables déjà définies dans le shell (vérifié).
 
 ---
 
-## Décisions de TASK-004 — inventaire et lecture des documents
+## Décisions de TASK-004 — inventaire et lecture des documents Markdown
 
 ### D-040 — Lecture seule stricte
 
@@ -609,6 +662,10 @@ frappe, et le message invite à corriger la saisie. `REPOSITORY_NOT_FOUND` survi
 déjà enregistré : le repository a été déplacé ou supprimé, et le message doit le dire. Un code
 unique aurait forcé un message vague dans les deux cas.
 
+---
+
+## Décisions de TASK-005 — édition sécurisée d'un document
+
 ### D-051 — L'édition ne porte que sur des documents existants
 
 **Décision.** `POST /repositories/documents/update` remplace le contenu d'un fichier déjà
@@ -743,6 +800,10 @@ C'est particulièrement vrai du conflit, seul cas où NOX refuse une action parf
 lui faire perdre son texte par-dessus le marché rendrait la protection plus coûteuse que le
 risque dont elle protège.
 
+---
+
+## Décisions de TASK-006 — création de documents
+
 ### D-061 — La création est une opération distincte de l'édition
 
 **Décision.** `POST /repositories/documents/create` est une route séparée, servie par un module
@@ -858,6 +919,10 @@ qu'accepte le runner. Un document de taille légitime échouait donc avec une er
 lieu du message « taille maximale » prévu — défaut constaté pendant le test fonctionnel de
 TASK-006, et présent depuis TASK-005. Les deux bornes disent désormais la même chose, et c'est le
 runner — seul à voir les octets réels — qui tranche.
+
+---
+
+## Décisions de TASK-007 — tâches structurées
 
 ### D-071 — La tâche structurée vit en base, pas dans un fichier
 
@@ -1011,6 +1076,11 @@ figé peut être comparé, un document qui bouge avec l'état de la base ne le p
 
 ### D-084 — Les commandes de validation sont stockées, jamais exécutées
 
+**Statut — étendue, comme annoncé.** La tâche dédiée évoquée ci-dessous est TASK-008 : depuis,
+les commandes enregistrées sont **autorisées à Claude Code**, une par une et à l'identique
+([D-097](#d-097--permissions-explicites-calculées-jamais-reçues)). NOX, lui, n'en exécute
+toujours aucune — ni le web, ni le runner.
+
 **Décision.** Les commandes sont du texte enregistré avec la tâche. NOX ne les interprète pas,
 ne les découpe pas et ne les lance pas.
 
@@ -1018,6 +1088,10 @@ ne les découpe pas et ne les lance pas.
 runner existe pour empêcher tant qu'aucune tâche ne l'autorise. Les stocker maintenant permet à
 la spécification d'être complète — l'agent saura quoi lancer — sans ouvrir le droit de le faire.
 Ce droit relèvera d'une tâche dédiée, avec ses propres garanties.
+
+---
+
+## Décisions de TASK-008 — lancement de Claude Code
 
 ### D-085 — Claude Code est lancé en CLI, avec l'authentification existante
 
@@ -1249,6 +1323,10 @@ logs. Le double critère évite le faux positif le plus probable : un compte ren
 *rate limit* implémenté dans le code de l'utilisateur. Et une heure inventée serait pire
 qu'aucune.
 
+---
+
+## Décisions de TASK-009 — suppression et libellés
+
 ### D-107 — La suppression exige une révision, comme l'écriture
 
 **Décision.** `POST /repositories/documents/delete` reçoit `expectedRevision` et refuse de
@@ -1452,6 +1530,10 @@ TASK-009 ne touche qu'à l'affichage.
 transitions et dans les documents Markdown déjà générés. Les renommer aurait demandé une
 migration de données pour un bénéfice purement cosmétique. Un test le vérifie explicitement, pour
 que la prochaine session ne confonde pas « traduire » et « renommer ».
+
+---
+
+## Décisions de TASK-010 — streaming et annulation
 
 ### D-124 — Sortie `stream-json`, avec `--verbose`, sans messages partiels
 
@@ -1758,6 +1840,10 @@ La course entre la fin et l'annulation est testée avec un lanceur **contrôlabl
 décident quand les morceaux de `stdout` arrivent et quand le processus ferme. Avec un vrai
 processus, cette course ne serait jamais déterministe.
 
+---
+
+## Décisions de TASK-011 — review Git et validations structurées
+
 ### D-145 — Le snapshot de review est pris à la fin de l'exécution
 
 **Décision.** Les changements détaillés sont capturés au moment précis où l'exécution devient
@@ -2059,6 +2145,14 @@ sait juger. Les faits se vérifient ; un score se croit.
 
 ### D-165 — Une commande Bash est lue par segments, jamais comme un bloc
 
+**Statut — précisée.** Le principe est inchangé. Sa mise en œuvre a été corrigée après le premier
+run réel : le découpage respecte les guillemets
+([D-183](#d-183--le-découpage-sur--respecte-les-guillemets)), un segment non affichable n'efface
+plus la validation qui l'accompagne
+([D-182](#d-182--un-segment-non-affichable-nefface-plus-la-validation-qui-laccompagne)), et un
+échec n'est imputé qu'à une validation seule sur sa ligne
+([D-185](#d-185--un-échec-nest-imputé-quà-une-validation-seule-sur-sa-ligne)).
+
 **Décision.** Une commande Bash observée dans le flux est découpée sur `&&`, débarrassée de son
 préfixe `cd <chemin>`, puis chacun de ses segments est confronté aux commandes autorisées. Toute
 autre construction — `;`, `|`, `>`, `<`, `` ` ``, `$(`, `&` isolé, guillemet hors navigation, retour
@@ -2150,6 +2244,10 @@ Trois faits sont désormais acquis plutôt que supposés :
 
 La méthode du rejeu local est conservée : c'est le seul moyen d'observer le vrai binaire sans quota,
 et elle a déjà servi une fois pour établir que `stream-json` exige `--verbose`.
+
+---
+
+## Décisions de TASK-012 — feedback de review et reprise ciblée
 
 ### D-169 — Une correction est une exécution à part entière, distinguée par son type
 
@@ -2445,6 +2543,10 @@ point de vue de ce que le flux permet de savoir.
 
 `UNKNOWN` est un aveu, et un aveu vaut mieux qu'un verdict inventé.
 
+---
+
+## Décisions de TASK-013 — Architecte NOX
+
 ### D-186 — OpenAI conçoit, Claude implémente
 
 **Décision.** NOX utilise deux modèles aux rôles disjoints. **OpenAI est l'Architecte** : il lit un
@@ -2612,6 +2714,12 @@ se conteste et se corrige avant de créer la tâche.
 champ, un minuteur ou un échec précédent. Le SDK est configuré avec `maxRetries: 0`. Une session
 accepte au plus dix générations, échecs compris, et une seule à la fois.
 
+**Statut — borne relevée.** La règle vaut toujours ; le chiffre non. TASK-014 l'a portée à
+**vingt**, une conception réelle demandant plus d'allers et retours qu'un formulaire à un tour
+([D-213](#d-213--le-transcript-est-borné-jamais-résumé)). Tout le reste de l'entrée — clic
+obligatoire, absence de réessai, échecs comptés, verrou par mise à jour conditionnelle — est
+inchangé.
+
 **Justification.** Chaque génération est facturée. Un réessai invisible transformerait un clic en
 plusieurs appels ; un appel au chargement de page en ferait un par ouverture d'onglet. `429`, délai
 dépassé et `5xx` remontent donc tels quels, avec un bouton — c'est l'utilisateur qui reclique.
@@ -2637,6 +2745,12 @@ volontaire — `READY` tout court aurait fini par être confondu, dans le code c
 
 **Décision.** La session est **réservée avant** la création de la tâche, par une mise à jour
 conditionnelle, et rendue si la création échoue. `appliedTaskId` porte un index unique.
+
+**Statut — en vigueur, mais visée.** Le mécanisme décrit ici est celui qui tourne. En revanche,
+la règle produit qu'il sert — une conversation, une tâche — n'est plus la cible : la direction
+retenue est **une conversation principale par projet**, durable
+([PROJECT_BRIEF.md](PROJECT_BRIEF.md) § 5.6, [ROADMAP.md](ROADMAP.md) `TASK-020`). La garantie
+d'unicité, elle, restera nécessaire quelle que soit la forme de la conversation.
 
 **Justification.** L'ordre inverse — créer puis marquer — laisserait un double clic produire deux
 tâches, avec deux numéros et deux documents Markdown, dont une seule serait rattachée. La seconde
@@ -2685,6 +2799,10 @@ n'est calculé.
 chiffre affiché par NOX serait faux à la première grille tarifaire modifiée, et un chiffre faux sur
 une facture est pire que pas de chiffre du tout. « Non fourni » est une réponse honnête ; un total
 reconstitué à partir d'une somme partielle ne le serait pas.
+
+---
+
+## Décisions de TASK-014 — conversation Architecte persistante
 
 ### D-204 — La conversation Architecte appartient à NOX
 
@@ -2867,6 +2985,10 @@ reconstruction, et ouvrir une nouvelle conversation ne coûte rien.
 
 La migration est purement additive : aucune donnée de TASK-013 n'a été recopiée ni reconstruite.
 
+---
+
+## Décisions de TASK-015 — review Architecte d'une exécution
+
 ### D-217 — La review Architecte est un objet distinct de la conversation
 
 **Décision.** L'analyse d'une exécution possède son propre contrat (`ArchitectReviewOutput`), son
@@ -2993,6 +3115,10 @@ lecture demandée —, et comparer deux analyses est précisément l'intérêt. 
 permettre une boucle accidentelle, et compter les échecs est indispensable : une analyse ratée a
 quand même joint le fournisseur. Le verrou est un échange conditionnel sur le compteur, pas une
 vérification suivie d'une écriture — c'est ce qu'un double clic exploiterait.
+
+---
+
+## Décisions de TASK-016 — workflow de développement guidé
 
 ### D-228 — Le workflow guidé est dérivé, jamais persisté
 
@@ -3127,6 +3253,10 @@ contredirait la page de la tâche. Une même tâche ne doit pas dire deux choses
 l'endroit où on la regarde.
 
 Un tableau de bord global reste possible plus tard, avec les requêtes qui le rendraient honnête.
+
+---
+
+## Décisions de TASK-017 — mémoire projet
 
 ### D-238 — La mémoire appartient à un projet, jamais à l'utilisateur
 

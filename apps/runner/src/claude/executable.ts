@@ -36,7 +36,7 @@
  */
 
 import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -220,8 +220,3 @@ export const probeClaudeVersion: ClaudeVersionProbe = (executable, timeoutMs) =>
       },
     );
   });
-
-/** Verifie l'existence d'un chemin, utilise par les tests de resolution. */
-export function executableExists(candidate: string): boolean {
-  return existsSync(candidate) && isExecutableFile(candidate);
-}
