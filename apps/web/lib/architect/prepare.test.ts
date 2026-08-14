@@ -82,8 +82,8 @@ describe("prepareArchitectGeneration", () => {
     // modele recopie ce qu'il lit : elle traverse la meme sanitation.
     const prepared = prepare({
       transcript: [
-        { role: "USER", content: "Voir C:/Users/theo/secret.txt" },
-        { role: "ARCHITECT", content: "Le depot est dans D:/Projets/Dev/nox." },
+        { role: "USER", content: "Voir C:/Users/theo/secret.txt", turnId: "t1" },
+        { role: "ARCHITECT", content: "Le depot est dans D:/Projets/Dev/nox.", turnId: "t1" },
       ],
     });
     assert.equal(prepared.prompt.input.includes("C:/Users"), false);
@@ -112,6 +112,43 @@ describe("prepareArchitectGeneration", () => {
 
     assert.equal(serialized.includes("Le repository vit dans"), false);
     assert.equal(serialized.includes("# Regles"), false);
+  });
+
+  it("prepare un tour dans un projet qui ne possede aucun document", () => {
+    // Un repository valide n'a pas forcement CLAUDE.md, AGENTS.md ni docs/. Un
+    // contexte projet vide est un contexte **valide** : le message de
+    // l'utilisateur suffit a former un tour. Confondre « contexte projet vide »
+    // et « rien a envoyer » rendrait l'Architecte inutilisable sur un projet
+    // neuf, c'est-a-dire exactement quand il sert le plus.
+    const prepared = prepare({
+      documents: [],
+      inventory: [],
+      tasks: [],
+      memories: [],
+      transcript: [],
+    });
+
+    assert.equal(prepared.manifest.sources.length, 0);
+    assert.equal(prepared.manifest.totalChars, 0);
+    assert.ok(prepared.manifest.missing.includes("CLAUDE.md"));
+    assert.deepEqual(prepared.availableDocuments, []);
+
+    // Ce qui compte : le tour existe quand meme, et il porte le message.
+    assert.ok(prepared.prompt.instructions.length > 0);
+    assert.ok(prepared.prompt.input.includes("Je veux exporter les taches en JSON."));
+    assert.match(prepared.contextFingerprint, /^[0-9a-f]{64}$/u);
+    assert.match(prepared.turnFingerprint, /^[0-9a-f]{64}$/u);
+    assert.equal(prepared.transcriptChars, "Je veux exporter les taches en JSON.".length);
+  });
+
+  it("distingue un contexte vide d'un contexte absent", () => {
+    // Deux tours sans document ne sont pas interchangeables : le message reste
+    // dans l'empreinte de tour, sans quoi un apercu perime passerait inapercu.
+    const first = prepare({ documents: [], inventory: [] });
+    const second = prepare({ documents: [], inventory: [], newMessage: "Autre chose." });
+
+    assert.equal(first.contextFingerprint, second.contextFingerprint);
+    assert.notEqual(first.turnFingerprint, second.turnFingerprint);
   });
 });
 

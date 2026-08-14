@@ -168,7 +168,9 @@ structurelle.
 Schéma Prisma, migrations versionnées, et fonctions d'accès. Quinze modèles :
 
 ```text
-Project ─┬─ Task ─┬─ TaskAcceptanceCriterion
+Project ─┬─ mainArchitectSessionId  →  la conversation principale
+         │
+         ├─ Task ─┬─ TaskAcceptanceCriterion
          │        ├─ TaskDocumentReference
          │        ├─ TaskValidationCommand
          │        └─ Run ─┬─ RunEvent
@@ -233,7 +235,13 @@ lib/architect/
 ├── context-diff.ts    comparaison de deux manifests, faits sûrs         (pur)
 ├── fingerprint.ts     empreintes de contexte, de tâche et de mémoire    (pur)
 ├── sanitize.ts        nettoyage de tout ce qui quitte la machine        (pur)
-├── transcript.ts      conversation locale transmise, sans fenêtre       (pur)
+├── transcript.ts      transcript local complet, tel qu'il est stocke     (pur)
+├── window.ts          tours recents transmis, tours anciens conserves    (pur)
+├── window-display.ts  ce que l'apercu en dit                             (pur)
+├── greeting.ts        message d'accueil, texte d'interface               (pur)
+├── composer.ts        message d'ouverture figé ou champ éditable         (pur)
+├── timeline.ts        messages et événements locaux, entrelacés          (pur)
+├── reveal.ts          découpage d'une réponse déjà reçue, durée bornée    (pur)
 ├── prepare.ts         contexte + transcript + prompt + empreintes       (pur)
 ├── review-bundle.ts   spécification + diff enregistré + validations     (pur)
 ├── review-prepare.ts  bundle + prompt de review + empreinte             (pur)
@@ -496,23 +504,74 @@ Review  →  feedback  →  préflight de correction  →  --resume  →  nouvea
 ### 6.7 Conversation Architecte
 
 ```text
-Contexte (liste fermée)  +  transcript  →  prompt  →  aperçu  →  clic  →  OpenAI
-                                                        ↓
-                                        empreinte comparée juste avant l'envoi
+Project  →  1 conversation principale, durable
+                    ↓
+message écrit  →  clic `Send`  →  contexte reconstruit  →  prompt  →  OpenAI
+                       ↓
+        inspection facultative du contexte — zéro appel
 ```
 
-- **La conversation appartient à NOX.** Le transcript vit dans SQLite et est reconstruit **en
-  entier** à chaque tour : ni `previous_response_id`, ni `conversation`, ni mode background, et
-  `store` reste `false`. Une conversation doit rester lisible après un changement de modèle, un
-  redémarrage, ou la disparition des réponses chez le fournisseur.
+**Une conversation par projet, et elle ne se ferme pas.** Le pointeur vit sur le projet, avec un
+index unique : deux ouvertures simultanées ne produisent qu'une conversation, et la session
+créée par le perdant disparaît avec sa transaction. Ouvrir la page **ne coûte aucun appel** — le
+message d'accueil est du texte d'interface, ni stocké, ni transmis, ni compté comme un tour.
+
+**Deux rôles de session, déclarés.** `PROJECT` pour la conversation principale ;
+`TASK_DESIGN_LEGACY` pour celles ouvertes avant `TASK-020`, qui restent lisibles à leur URL
+d'origine et ne sont ni fusionnées, ni converties, ni poursuivies. Le rôle décide de la borne de
+générations, de l'objet réservé pour créer une tâche et de la surface d'affichage : il est écrit,
+jamais déduit d'un champ vide.
+
+**Une conversation crée plusieurs tâches ; une proposition n'en crée jamais deux.** Le verrou
+d'unicité est descendu d'un cran — de la session à la génération. Réserver précède créer, et la
+main est rendue si la création échoue.
+
+**Le parcours est celui d'un chat.** On lit, on écrit, on envoie : un clic explicite, un appel au
+plus. Le contexte n'est pas relu depuis un aperçu, il est **reconstruit au moment de l'envoi** —
+le navigateur n'apporte que le texte du message et un compteur de messages, qui sert uniquement à
+reconnaître un onglet resté sur un état dépassé. L'inspection du contexte reste offerte, et
+n'autorise rien.
+
+Les sessions de conception de tâche gardent leur parcours en deux clics : aperçu obligatoire,
+puis envoi. Réécrire leur interaction reviendrait à réécrire l'histoire qu'elles racontent.
+
+**Ce qui n'existe qu'à l'écran.** Pendant un envoi, le fil montre le message soumis et trois
+points d'attente ; à l'arrivée, la réponse se révèle par blocs. Rien de tout cela n'est persisté,
+transmis ni compté — ce sont des états React, effacés dès que le tour se conclut, dans un sens
+comme dans l'autre.
+
+**Ce n'est pas du streaming.** La réponse arrive entière, en un appel, et elle est enregistrée
+avant le premier bloc affiché. Aucun protocole, aucune route, aucune option du fournisseur n'a
+changé : la révélation est une animation d'affichage, bornée en durée, et elle ne concerne que la
+réponse arrivée pendant que la page était ouverte. Un rechargement affiche tout d'un bloc.
+
+**Une tâche créée s'affiche dans le fil, sans y entrer.** L'événement est dérivé de
+`ArchitectGeneration.appliedTaskId` et rendu à côté du tour qui l'a proposé. Ce n'est pas un
+message : rien n'est écrit dans le transcript, et le fournisseur ne le voit jamais. La tâche se
+signalera d'elle-même au tour suivant, par la liste des tâches récentes.
+
+- **La conversation appartient à NOX.** Le transcript vit dans SQLite et est reconstruit à chaque
+  tour : ni `previous_response_id`, ni `conversation`, ni mode background, et `store` reste
+  `false`. Une conversation doit rester lisible après un changement de modèle, un redémarrage, ou
+  la disparition des réponses chez le fournisseur.
+- **Le transcript se fenêtre, il ne se refuse plus.** Seuls les tours les plus récents partent ;
+  les plus anciens restent en base et restent affichés. Aucun résumé, aucune compression, et
+  jamais un tour coupé en deux — une question sans sa réponse produirait un dialogue que personne
+  n'a tenu. Ce qui doit survivre à une longue conversation vit dans les documents et dans la
+  mémoire projet, relus en entier à chaque tour.
+- **L'empreinte comparée couvre le tour**, pas seulement le contexte : contexte projet, messages
+  retenus, message en attente. Sans le transcript, un message envoyé depuis un second onglet
+  passerait inaperçu — le projet, lui, n'aurait pas bougé.
 - **Le contexte est une liste fermée**, fixe et automatique : deux documents de conventions, six
   documents `docs/` nommés, les dix dernières tâches, la mémoire active. Le navigateur ne
   choisit aucun fichier.
 - **Chaque tour reconstruit son contexte** à partir du projet actuel. Il n'existe aucun
   « continuer avec l'ancien contexte » : NOX ne conserve que les manifests, et un bouton qui
   prétendrait rejouer un contexte passé serait un mensonge.
-- **Un contexte modifié après l'aperçu bloque l'appel.** Aucune génération n'est réservée,
-  aucun appel n'est fait, et il n'existe ni `Send anyway`, ni option de forçage.
+- **Un contexte modifié après l'aperçu bloque l'appel — dans le parcours en deux clics.** Aucune
+  génération n'est réservée, aucun appel n'est fait, et il n'existe ni `Send anyway`, ni option
+  de forçage. Dans une conversation projet la question ne se pose pas : l'envoi construit son
+  contexte lui-même, donc il n'y a aucun contexte ancien à confirmer.
 - **L'empreinte de contexte n'est pas une primitive de sécurité** : SHA-256 nu, contrairement à
   l'empreinte de dossier de travail du § 6.6, qui est un HMAC parce qu'elle décide d'une
   exécution. Ne jamais confondre les deux.

@@ -55,6 +55,7 @@ dans le code.
 | TASK-015 — review Architecte d'une exécution | D-217 → D-227 |
 | TASK-016 — workflow de développement guidé | D-228 → D-237 |
 | TASK-017 — mémoire projet | D-238 → D-249 |
+| TASK-020 — conversation projet persistante | D-250 → D-267 |
 
 ---
 
@@ -2746,11 +2747,14 @@ volontaire — `READY` tout court aurait fini par être confondu, dans le code c
 **Décision.** La session est **réservée avant** la création de la tâche, par une mise à jour
 conditionnelle, et rendue si la création échoue. `appliedTaskId` porte un index unique.
 
-**Statut — en vigueur, mais visée.** Le mécanisme décrit ici est celui qui tourne. En revanche,
-la règle produit qu'il sert — une conversation, une tâche — n'est plus la cible : la direction
-retenue est **une conversation principale par projet**, durable
-([PROJECT_BRIEF.md](PROJECT_BRIEF.md) § 5.6, [ROADMAP.md](ROADMAP.md) `TASK-020`). La garantie
-d'unicité, elle, restera nécessaire quelle que soit la forme de la conversation.
+**Statut — historique.** Ce mécanisme régit encore les sessions de conception de tâche, qui
+restent lisibles. Il ne régit plus la conception : depuis TASK-020, un projet possède une
+**conversation principale durable**, qui crée plusieurs tâches au fil du temps
+([D-250](#d-250--la-conversation-principale-appartient-au-projet-pas-à-une-tâche)).
+
+La garantie d'unicité, elle, n'a pas disparu — elle a simplement changé de porteur : ce n'est
+plus la session qui ne crée qu'une tâche, c'est la **proposition**
+([D-253](#d-253--le-verrou-de-création-descend-dun-cran)).
 
 **Justification.** L'ordre inverse — créer puis marquer — laisserait un double clic produire deux
 tâches, avec deux numéros et deux documents Markdown, dont une seule serait rattachée. La seconde
@@ -3425,3 +3429,303 @@ refusé parce qu'il contredit une convention non citée dans la tâche ?
 C'est une question légitime, et elle mérite sa propre décision plutôt qu'un effet de bord de
 TASK-017. La conversation Architecte, elle, reçoit la mémoire — c'est la surface où l'on **conçoit**,
 donc celle où le contexte projet sert.
+
+---
+
+## Décisions de TASK-020 — conversation Architecte projet
+
+### D-250 — La conversation principale appartient au projet, pas à une tâche
+
+**Décision.** Un projet possède **au plus une** conversation Architecte principale, durable. Elle
+ne se ferme pas : créer une tâche depuis une proposition n'y met pas fin, et l'utilisateur y
+revient un mois plus tard pour préparer la suite.
+
+**Justification.** Une conversation qui se ferme après avoir produit une tâche oblige à
+reconstruire le contexte à chaque conception — exactement le problème que NOX existe pour
+résoudre, réintroduit à l'intérieur de l'outil. Le modèle de TASK-013 était juste tant qu'une
+conversation servait à écrire **une** spécification ; il devient faux dès qu'on veut tenir un
+projet.
+
+Ce que cela n'autorise pas : la conversation ne planifie toujours pas de roadmap, ne génère
+toujours qu'une proposition à la fois, et ne crée toujours aucune tâche sans un clic.
+
+### D-251 — Deux rôles de session, déclarés et non devinés
+
+**Décision.** `ArchitectSession.kind` vaut `TASK_DESIGN_LEGACY` ou `PROJECT`. La valeur par
+défaut est la première, ce qui décrit exactement les sessions déjà enregistrées.
+
+**Justification.** Le rôle décide de trop de choses pour être déduit : borne de générations,
+possibilité de passer en `APPLIED`, objet à réserver pour créer une tâche, surface d'affichage,
+URL de provenance. Une convention implicite — « une session sans tâche appliquée est
+peut-être une conversation projet » — aurait été fausse le jour où une conversation projet
+n'aurait encore rien produit.
+
+La valeur par défaut n'est pas un repli : c'est la vérité historique. Toutes les sessions
+existantes ont bien été ouvertes pour concevoir une tâche.
+
+### D-252 — Le pointeur de conversation principale vit sur le projet
+
+**Décision.** `Project.mainArchitectSessionId`, avec un index unique. Deux ouvertures
+simultanées ne produisent qu'une conversation : la réservation est une mise à jour
+conditionnelle sur cette colonne, et la session créée par le perdant disparaît avec sa
+transaction.
+
+**Justification.** La garantie « au plus une par projet » doit être structurelle, pas vérifiée à
+l'écriture. Une ligne de `Project` ne porte qu'une valeur : la question ne se pose donc jamais,
+quelle que soit la façon dont deux requêtes s'entrelacent.
+
+L'alternative — un index unique sur `(projectId, kind)` — aurait fonctionné en s'appuyant sur le
+fait que SQLite considère les `NULL` comme distincts. Elle aurait fait dépendre un invariant
+métier d'une subtilité du moteur, et rendu le schéma plus difficile à lire qu'à écrire.
+
+La colonne ne porte pas de clé étrangère : la déclarer créerait un cycle
+`Project → ArchitectSession → Project` en actions référentielles. Elle ne protégerait de rien
+d'atteignable — aucune session Architecte n'est jamais supprimée dans NOX.
+
+### D-253 — Le verrou de création descend d'un cran
+
+**Décision.** `ArchitectGeneration.appliedTaskId`, avec un index unique, et une colonne
+`taskClaimedAt` pour distinguer « réservée » de « créée ». Le verrou de TASK-013 portait sur la
+session ; il porte désormais aussi sur la génération.
+
+**Justification.** C'est le déplacement qui fait tout TASK-020. Les deux invariants tiennent
+ensemble sans se contredire :
+
+- une conversation projet crée **plusieurs** tâches, au fil du temps ;
+- une proposition n'en crée **jamais deux**, y compris sur double clic.
+
+La mécanique est celle de TASK-013, inchangée : réserver avant de créer, rendre la main si la
+création échoue. Créer puis marquer laisserait un double clic produire deux tâches, dont une
+seule serait rattachée — la seconde serait un doublon orphelin, avec son numéro et son document
+Markdown.
+
+L'index unique de la session reste en place : il continue de protéger les sessions historiques.
+
+### D-254 — Une conversation projet n'a pas de borne de générations
+
+**Décision.** La borne de vingt générations ne s'applique qu'aux sessions de conception de tâche.
+Une conversation projet n'en a aucune.
+
+**Justification.** Une borne de vie a du sens pour une conversation qui doit finir ; elle n'en a
+aucun pour une conversation qui accompagne un projet pendant des mois. Un plafond atteint la
+rendrait définitivement muette, exactement quand elle sert le plus.
+
+Ce que la borne protégeait est protégé ailleurs, et mieux : chaque appel part d'un clic, le SDK
+ne réessaie jamais, et une seule génération peut être active à la fois. La justification
+d'origine — « ne compter que les réussites autoriserait une boucle infinie d'erreurs » —
+supposait un réessai automatique, qui n'a jamais existé.
+
+Les sessions historiques gardent leur borne : relever une limite rétroactivement changerait ce
+que ces sessions permettaient.
+
+### D-255 — Le transcript se fenêtre, il ne se refuse plus
+
+**Décision.** Au-delà du budget, les tours les plus anciens cessent d'être **transmis**. Ils ne
+sont ni supprimés, ni résumés, ni compressés : ils restent en base et restent affichés.
+
+**Justification.** TASK-014 refusait, et c'était défendable : la conversation avait de toute
+façon une fin proche. Une conversation de projet n'en a pas, et un refus définitif au vingtième
+tour est incompatible avec sa raison d'être.
+
+Ce qui remplace la mémoire perdue : rien, et c'est voulu. Le contexte durable d'un projet ne vit
+pas dans son transcript mais dans ses documents et dans sa mémoire, relus **en entier** à chaque
+tour. C'est précisément pourquoi TASK-017 existe. Une décision qui doit survivre à cinquante
+tours s'écrit en mémoire ; laissée dans une phrase de conversation, elle ne survivait déjà à
+rien.
+
+Aucun résumé automatique n'est introduit : il coûterait un appel pour perdre de l'information,
+et ajouterait une source d'erreur entre l'utilisateur et l'architecte.
+
+Une seule implémentation, appliquée partout : les sessions historiques bénéficient de la même
+fenêtre. Maintenir deux chemins de transcript aurait créé la divergence que NOX évite ailleurs.
+
+### D-256 — Une fenêtre prend des tours entiers, jamais des messages
+
+**Décision.** La sélection remonte du plus récent vers le plus ancien, s'arrête au premier tour
+qui ne tient pas, et ne reprend pas plus loin. Un tour n'est jamais coupé en deux.
+
+**Justification.** Transmettre une question sans sa réponse produirait un dialogue que personne
+n'a tenu. Et reprendre un tour ancien plus petit après en avoir sauté un gros produirait un fil
+troué : l'architecte lirait une réponse à une question qu'il n'a pas vue.
+
+Le message que l'utilisateur vient d'écrire est prioritaire sur l'histoire : c'est la question
+posée, et sa borne propre est très inférieure au budget de transcript — il reste donc toujours
+de la place pour au moins le tour le plus récent.
+
+### D-257 — L'empreinte comparée couvre le tour, pas seulement le contexte
+
+**Décision.** Ce qui est enregistré à l'aperçu et recomparé avant l'envoi est une empreinte de
+**tour** : contexte projet, messages retenus par la fenêtre, message en attente.
+
+**Justification.** L'empreinte de contexte ne couvre pas la conversation, et c'est voulu : sans
+cela, chaque message ferait dire « le projet a changé ». Tant qu'une session servait à concevoir
+une tâche, cela suffisait.
+
+Une conversation projet est ouverte longtemps, et parfois dans deux onglets. Le scénario devient
+concret : l'onglet A prépare son envoi, l'onglet B envoie un message, l'onglet A envoie à son
+tour — et répondrait à une conversation qui n'existe plus. Le contexte projet, lui, n'aurait pas
+bougé.
+
+Ce n'est toujours pas une primitive de sécurité : SHA-256 nu, contrairement à l'empreinte de
+dossier de travail de TASK-012, qui est un HMAC parce qu'elle décide d'une exécution.
+
+### D-258 — Le message d'accueil est de l'interface, jamais un message
+
+**Décision.** L'accueil affiché dans une conversation vide n'est ni stocké, ni transmis, ni
+compté comme un tour.
+
+**Justification.** Le stocker comme message d'architecte aurait deux coûts. Il partirait dans le
+transcript, et le modèle lirait une phrase qu'il n'a jamais écrite en la prenant pour la sienne.
+Et il faudrait l'écrire à la création de la conversation, ce qui donnerait à une ouverture de
+page le pouvoir d'écrire un message.
+
+Surtout, il ne coûte rien : demander à un modèle de dire bonjour serait un appel facturé pour
+une phrase connue d'avance. **Ouvrir une conversation, c'est zéro appel.**
+
+### D-259 — Un message utilisateur peut faire seize Kio
+
+**Décision.** `ARCHITECT_LIMITS.request` passe de 8 à 16 Kio.
+
+**Justification.** Une conversation projet commence souvent par un brief préparé ailleurs et
+collé d'un bloc ; huit Kio coupaient ce geste au milieu. Seize Kio restent très inférieurs au
+budget de transcript qui les contient : un message ne peut donc jamais, à lui seul, rendre un
+tour impossible.
+
+Aucune borne globale n'a été relevée. Le budget de contexte reste à 128 Kio, celui du transcript
+à 64 Kio : une conversation longue est gérée par la fenêtre, jamais par une croissance du
+prompt.
+
+### D-260 — L'entrée par demande disparaît, ses conversations restent
+
+**Décision.** Le formulaire qui ouvrait une session de conception de tâche est retiré. Les
+sessions déjà ouvertes restent lisibles, à leur URL d'origine, et une page d'historique les
+liste.
+
+**Justification.** Garder un bouton qui crée des sessions d'un modèle qu'on vient de remplacer
+produirait des conversations condamnées d'avance, avec leur borne de vingt générations et leur
+fermeture après une tâche. Le renommer aurait été pire : deux entrées pour deux modèles, sans
+que rien ne dise lequel choisir.
+
+L'accès aux anciennes conversations n'est pas touché, et c'est ce qui compte : elles racontent
+comment les tâches existantes ont été conçues.
+
+### D-261 — La conversation projet est un chat, pas un formulaire
+
+**Décision.** Le parcours quotidien d'une conversation projet est : écrire, cliquer `Send`, lire.
+L'aperçu du contexte n'est plus un passage obligé ; il devient une inspection, disponible et
+facultative. Les sessions de conception de tâche gardent leur parcours en deux clics.
+
+**Justification.** TASK-014 imposait `Review context` puis `Send to Architect`, et c'était juste :
+une session servait à écrire **une** spécification, on la relisait une fois, on l'envoyait. Une
+conversation qui accompagne un projet pendant des mois n'a pas ce rythme. Relire le manifest
+complet avant chaque phrase transforme une discussion en procédure, et une procédure qu'on répète
+cinquante fois n'est plus lue.
+
+Ce que la relecture obligatoire protégeait est protégé autrement, et mieux : le contexte est
+reconstruit **au moment de l'envoi**, donc il est forcément à jour. L'ancien mécanisme comparait
+deux empreintes pour détecter qu'un aperçu avait vieilli ; il n'y a plus d'aperçu à faire vieillir.
+
+Ce qui n'est pas perdu : le panneau montre toujours les documents envoyés, ceux qui manquent, la
+mémoire, les tâches récentes, la fenêtre de transcript et le **texte exact** du prompt. Il coûte
+toujours zéro appel. Il a change de place, pas de contenu — la transparence n'était pas une
+conséquence de l'obligation.
+
+### D-262 — Un envoi direct ne contourne aucune validation
+
+**Décision.** `sendArchitectMessage` valide le texte, vérifie la concurrence, reconstruit le
+contexte, enregistre le brouillon, réserve la génération, appelle, persiste. Elle rejoint
+`sendArchitectTurn` dans `dispatchArchitectTurn` : **une seule** implémentation de la réservation,
+de l'appel et de l'écriture des messages.
+
+**Justification.** Un second chemin vers le fournisseur aurait été la façon la plus sûre de perdre
+une garantie sans s'en apercevoir — le verrou de génération, la conclusion systématique, la
+sanitation, les bornes. Deux entrées, un seul couloir.
+
+Le brouillon reste le verrou. Ce n'est pas un vestige : `saveArchitectTurnDraft` refuse pendant
+qu'une génération est en vol, et cette mise à jour conditionnelle est exactement ce qui rend un
+double clic inoffensif. Inventer un second mécanisme d'exclusion aurait ajouté un risque pour
+remplacer quelque chose qui fonctionne.
+
+### D-263 — Le navigateur porte un compteur, jamais un contexte
+
+**Décision.** Un envoi transmet le texte du message et le nombre de messages que la page avait
+affichés. Le serveur compare ce nombre à ce qu'il lit en base et refuse s'il diffère.
+
+**Justification.** Sans aperçu enregistré, il fallait autre chose pour reconnaître un onglet resté
+ouvert sur un état dépassé — celui qui répondrait à une conversation qui a changé, créant une
+branche que personne ne verrait.
+
+Un compteur suffit, et c'est tout ce qu'on peut se permettre de recevoir : il ne décrit aucun
+contenu, ne porte aucun chemin, et ne peut qu'obtenir un refus. Renvoyer le contexte lui-même
+aurait donné au navigateur le pouvoir de décider ce qui part — exactement la frontière que NOX
+tient partout ailleurs.
+
+Un refus rend son texte à l'utilisateur. Perdre ce qu'il vient d'écrire serait la pire façon de
+refuser.
+
+### D-264 — Une tâche créée est un événement, jamais un message
+
+**Décision.** Le fil affiche `TASK-001 créée` à côté du tour qui l'a proposée, avec son titre et
+un lien. L'événement est dérivé de `ArchitectGeneration.appliedTaskId`. Aucun `ArchitectMessage`
+n'est écrit, et rien n'entre dans le prompt.
+
+**Justification.** L'écrire comme un message d'architecte lui ferait dire une phrase qu'il n'a
+jamais écrite — et la lui relire au tour suivant, comme s'il l'avait pensée. Le décompte de
+jetons s'en trouverait faussé, et le transcript ne serait plus le compte rendu fidèle d'une
+conversation.
+
+Le dériver de la base a une seconde vertu : un rafraîchissement le retrouve tel quel, sans qu'un
+état de navigateur ait besoin de survivre.
+
+L'architecte apprendra l'existence de la tâche autrement, et mieux : par la liste des dix
+dernières tâches, relue à chaque tour, qui porte son code, son titre et son statut réels.
+
+### D-265 — Un événement se lit à côté de sa cause
+
+**Décision.** L'événement se place après le **dernier** message de sa génération, jamais dans une
+liste séparée en bas de page.
+
+**Justification.** Une conversation projet crée plusieurs tâches au fil des mois. Réunies en fin
+de fil, elles seraient impossibles à relier à la discussion qui les a fait naître — or c'est
+précisément ce qu'on veut savoir en relisant : de quelle demande cette tâche est-elle sortie.
+
+Après le dernier message, et pas avant : le placer entre une question et sa réponse donnerait à
+lire une conséquence avant sa cause.
+
+### D-266 — La révélation progressive n'est pas du streaming
+
+**Décision.** Une réponse qui vient d'arriver se dévoile par blocs de quelques mots, en moins de
+deux secondes quelle que soit sa longueur. Le fournisseur, le Structured Output, la persistance et
+le contrat réseau sont **identiques** : la réponse est reçue entière et enregistrée avant que le
+premier bloc apparaisse.
+
+**Justification.** L'attente réelle est celle de l'appel, et elle est signalée par trois points.
+Ce qui suit n'est pas une attente : le texte est déjà là. Le révéler d'un coup après plusieurs
+secondes de silence donne une impression de saccade ; le révéler progressivement rend la lecture
+naturelle, pour un coût nul.
+
+Un vrai streaming aurait demandé un mode de réponse différent chez le fournisseur, une route de
+diffusion, un protocole, et une persistance partielle — quatre surfaces nouvelles pour un
+bénéfice qui est ici purement visuel. Le nom compte autant que le mécanisme : appeler cela
+« streaming » laisserait croire qu'on peut lire avant que le tour soit conclu, et qu'une réponse
+interrompue laisserait un fragment en base. Ni l'un ni l'autre n'est vrai.
+
+Les blocs se coupent entre les mots, et la durée est plafonnée. Une révélation lettre à lettre
+attire l'œil sur la mécanique, et une durée proportionnelle à la longueur transformerait une
+longue réponse en attente — une régression déguisée en animation.
+
+L'historique ne rejoue jamais. Une conversation relue est de l'histoire, pas une nouveauté.
+
+### D-267 — L'attente et la bulle d'envoi ne sont que de l'écran
+
+**Décision.** Pendant un envoi, le fil affiche le message soumis et trois points animés. Aucun des
+deux n'est écrit en base, transmis, ni compté. Ils sont **dérivés** de l'état d'envoi, et non
+rangés dans un état qu'il faudrait penser à vider.
+
+**Justification.** Écrire le message avant que le serveur ne conclue le tour créerait un second
+chemin de persistance — donc un message pouvant survivre à un échec, et un transcript qui ne
+serait plus le compte rendu fidèle d'une conversation. La bulle temporaire donne le même confort
+sans toucher à la base : dès que l'action rend la main, le vrai message a pris sa place.
+
+Dériver plutôt que stocker règle aussi le cas de l'échec sans code supplémentaire : il n'existe
+aucun état d'attente à effacer, donc aucun qui puisse rester bloqué.

@@ -8,7 +8,9 @@
  * module isole finirait par diverger.
  */
 
+import type { ArchitectTaskOrigin } from "@nox/database";
 import {
+  ARCHITECT_SESSION_KIND,
   TASK_PRIORITY,
   type ArchitectContextManifest,
   type ArchitectContextSource,
@@ -26,6 +28,42 @@ export function architectUrl(projectId: string): string {
 /** Page d'une session Architecte. */
 export function architectSessionUrl(projectId: string, sessionId: string): string {
   return `/projects/${projectId}/architect/${sessionId}`;
+}
+
+/** Page des conversations historiques d'un projet. */
+export function architectHistoryUrl(projectId: string): string {
+  return `/projects/${projectId}/architect/history`;
+}
+
+/**
+ * Ou mene « Designed with Architect », selon d'ou vient la tache.
+ *
+ * Deux modeles, deux surfaces. Une tache issue de la conversation projet mene a
+ * la conversation elle-meme, qui n'a pas d'identifiant dans son URL — il n'y en
+ * a qu'une. Une tache historique mene a sa session, qui est en lecture seule.
+ *
+ * Confondre les deux enverrait l'utilisateur vers un fil qu'il ne peut pas
+ * poursuivre, ou vers un fil qui n'a jamais parle de sa tache.
+ */
+export function architectOriginUrl(projectId: string, origin: ArchitectTaskOrigin): string {
+  return origin.kind === ARCHITECT_SESSION_KIND.PROJECT
+    ? architectUrl(projectId)
+    : architectSessionUrl(projectId, origin.sessionId);
+}
+
+/**
+ * Comment nommer cette provenance.
+ *
+ * Le numero du tour n'apparait que lorsqu'il existe : une session historique
+ * n'en a pas, et inventer « tour 1 » lui prêterait une conversation.
+ */
+export function architectOriginLabel(origin: ArchitectTaskOrigin): string {
+  if (origin.kind !== ARCHITECT_SESSION_KIND.PROJECT) {
+    return origin.code;
+  }
+  return origin.generationSequence === null
+    ? "Project Architect"
+    : `Project Architect · tour ${String(origin.generationSequence)}`;
 }
 
 /**

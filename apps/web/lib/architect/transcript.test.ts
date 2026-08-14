@@ -62,6 +62,7 @@ function generation(overrides: Partial<ArchitectGenerationView> = {}): Architect
     providerResponseId: null,
     usage: { inputTokens: null, outputTokens: null, totalTokens: null, cachedInputTokens: null },
     errorCode: null,
+    appliedTaskId: null,
     createdAt: "2026-08-10T09:00:00.000Z",
     ...overrides,
   };
@@ -78,6 +79,7 @@ function session(
     requestText: "Une demande.",
     clarificationText: null,
     status: "CONTINUE",
+    kind: "TASK_DESIGN_LEGACY",
     conversationVersion: 2,
     conversational: true,
     appliedTaskId: null,

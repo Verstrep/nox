@@ -18,18 +18,22 @@
 import {
   ARCHITECT_CONVERSATION_VERSION,
   ARCHITECT_GENERATION_STATUS,
-  ARCHITECT_LIMITS,
   ARCHITECT_MESSAGE_ROLE,
+  ARCHITECT_SESSION_KIND,
   ARCHITECT_SESSION_STATUS,
+  architectSessionGenerationLimit,
+  formatTaskCode,
   isArchitectErrorCode,
   isArchitectGenerationStatus,
   isArchitectMessageRole,
+  isArchitectSessionKind,
   isArchitectSessionStatus,
   isArchitectTurnState,
   type ArchitectContextManifest,
   type ArchitectErrorCode,
   type ArchitectGenerationStatus,
   type ArchitectMessageRole,
+  type ArchitectSessionKind,
   type ArchitectSessionStatus,
   type ArchitectTaskProposal,
   type ArchitectTurnState,
@@ -85,6 +89,8 @@ export type ArchitectGenerationView = {
   providerResponseId: string | null;
   usage: ArchitectUsage;
   errorCode: ArchitectErrorCode | null;
+  /** Tache creee depuis la proposition de ce tour, une fois seulement. */
+  appliedTaskId: string | null;
   createdAt: string;
 };
 
@@ -96,6 +102,8 @@ export type ArchitectSessionView = {
   requestText: string;
   clarificationText: string | null;
   status: ArchitectSessionStatus;
+  /** Role de la session : conversation principale, ou conception historique. */
+  kind: ArchitectSessionKind;
   /** `1` avant TASK-014 : consultable, jamais poursuivie. */
   conversationVersion: number;
   /** Vrai lorsque la session peut encore recevoir un tour. */
@@ -103,8 +111,13 @@ export type ArchitectSessionView = {
   appliedTaskId: string | null;
   /** Nombre de generations deja consommees, echecs compris. */
   generationCount: number;
-  /** Generations restantes avant la borne de la session. */
-  generationsLeft: number;
+  /**
+   * Generations restantes, ou `null` lorsque la session n'a pas de borne.
+   *
+   * Une conversation projet n'en a pas : elle accompagne le projet pendant des
+   * mois, et un plafond atteint la rendrait definitivement muette.
+   */
+  generationsLeft: number | null;
   /** Tour prepare et pas encore envoye, le cas echeant. */
   pendingTurn: ArchitectPendingTurn | null;
   createdAt: string;
@@ -140,6 +153,7 @@ type GenerationRow = {
   totalTokens: number | null;
   cachedInputTokens: number | null;
   errorCode: string | null;
+  appliedTaskId: string | null;
   createdAt: Date;
 };
 
@@ -150,6 +164,7 @@ type SessionRow = {
   requestText: string;
   clarificationText: string | null;
   status: string;
+  kind: string;
   conversationVersion: number;
   pendingMessageText: string | null;
   pendingContextFingerprint: string | null;
@@ -221,6 +236,7 @@ function toGeneration(row: GenerationRow): ArchitectGenerationView {
       cachedInputTokens: row.cachedInputTokens,
     },
     errorCode,
+    appliedTaskId: row.appliedTaskId,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -267,7 +283,12 @@ function toSummary(row: SessionRow): ArchitectSessionSummary {
     throw new InvalidArchitectRecordError(row.id, "statut de session", row.status);
   }
 
+  if (!isArchitectSessionKind(row.kind)) {
+    throw new InvalidArchitectRecordError(row.id, "role de session", row.kind);
+  }
+
   const consumed = row.nextGenerationSequence - 1;
+  const limit = architectSessionGenerationLimit(row.kind);
   return {
     id: row.id,
     projectId: row.projectId,
@@ -275,11 +296,12 @@ function toSummary(row: SessionRow): ArchitectSessionSummary {
     requestText: row.requestText,
     clarificationText: row.clarificationText,
     status: row.status,
+    kind: row.kind,
     conversationVersion: row.conversationVersion,
     conversational: row.conversationVersion >= ARCHITECT_CONVERSATION_VERSION.CONVERSATION,
     appliedTaskId: row.appliedTaskId,
     generationCount: consumed,
-    generationsLeft: Math.max(0, ARCHITECT_LIMITS.generations - consumed),
+    generationsLeft: limit === null ? null : Math.max(0, limit - consumed),
     pendingTurn: toPendingTurn(row),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -320,7 +342,7 @@ const CLEAR_PENDING_TURN = {
  */
 export async function createArchitectSession(
   db: DatabaseClient,
-  input: { projectId: string; requestText: string },
+  input: { projectId: string; requestText: string; kind?: ArchitectSessionKind },
 ): Promise<ArchitectSessionSummary | null> {
   const row = await db.$transaction(async (tx) => {
     const project = await tx.project.findUnique({
@@ -344,11 +366,111 @@ export async function createArchitectSession(
         requestText: input.requestText,
         clarificationText: null,
         conversationVersion: ARCHITECT_CONVERSATION_VERSION.CONVERSATION,
+        kind: input.kind ?? ARCHITECT_SESSION_KIND.TASK_DESIGN_LEGACY,
         status: ARCHITECT_SESSION_STATUS.OPEN,
       },
     });
   });
 
+  return row === null ? null : toSummary(row);
+}
+
+/**
+ * Conversation principale d'un projet, creee si elle n'existe pas encore.
+ *
+ * ## Pourquoi la creation est locale, et pourquoi elle est ici
+ *
+ * Ouvrir la page suffit a creer la conversation, et cela ne coute rien : une
+ * ligne SQLite, aucun appel au fournisseur, aucun message. La creer au premier
+ * message aurait laisse la page dans un etat batard — un fil qui existe a
+ * l'ecran mais pas en base — et complique chaque lecture ulterieure.
+ *
+ * ## Deux ouvertures simultanees
+ *
+ * La reservation porte sur `Project.mainArchitectSessionId`, par une mise a jour
+ * **conditionnelle** : `null` attendu, valeur posee. Une ligne de projet ne
+ * portant qu'une valeur, le second appel obtient 0 et repart lire celle du
+ * premier. La session qu'il venait de creer disparait avec la transaction : rien
+ * n'est laisse derriere.
+ */
+export async function ensureProjectArchitectSession(
+  db: DatabaseClient,
+  projectId: string,
+): Promise<ArchitectSessionSummary | null> {
+  const existing = await findProjectArchitectSession(db, projectId);
+  if (existing !== null) {
+    return existing;
+  }
+
+  try {
+    const row = await db.$transaction(async (tx) => {
+      const project = await tx.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, mainArchitectSessionId: true },
+      });
+      if (project === null) {
+        return null;
+      }
+      if (project.mainArchitectSessionId !== null) {
+        return tx.architectSession.findUnique({ where: { id: project.mainArchitectSessionId } });
+      }
+
+      const previous = await tx.architectSession.count({ where: { projectId } });
+      const created = await tx.architectSession.create({
+        data: {
+          projectId,
+          sequence: previous + 1,
+          // Une conversation projet n'a pas de « demande » d'ouverture : elle
+          // commence par un message comme les suivants. Le champ de TASK-013
+          // reste vide plutot que de recevoir un texte invente.
+          requestText: "",
+          clarificationText: null,
+          conversationVersion: ARCHITECT_CONVERSATION_VERSION.CONVERSATION,
+          kind: ARCHITECT_SESSION_KIND.PROJECT,
+          status: ARCHITECT_SESSION_STATUS.OPEN,
+        },
+      });
+
+      const claimed = await tx.project.updateMany({
+        where: { id: projectId, mainArchitectSessionId: null },
+        data: { mainArchitectSessionId: created.id },
+      });
+      if (claimed.count !== 1) {
+        // Un autre appel a gagne. Annuler la transaction efface la session que
+        // l'on vient de creer, et l'appelant relira celle du gagnant.
+        throw new ConcurrentProjectArchitectError();
+      }
+
+      return created;
+    });
+
+    return row === null ? null : toSummary(row);
+  } catch (error) {
+    if (error instanceof ConcurrentProjectArchitectError) {
+      return findProjectArchitectSession(db, projectId);
+    }
+    throw error;
+  }
+}
+
+/** Signale une ouverture concurrente, et n'existe que pour annuler sa transaction. */
+class ConcurrentProjectArchitectError extends Error {}
+
+/** Conversation principale d'un projet, sans la creer. */
+export async function findProjectArchitectSession(
+  db: DatabaseClient,
+  projectId: string,
+): Promise<ArchitectSessionSummary | null> {
+  const project = await db.project.findUnique({
+    where: { id: projectId },
+    select: { mainArchitectSessionId: true },
+  });
+  if (project === null || project.mainArchitectSessionId === null) {
+    return null;
+  }
+  const row = await db.architectSession.findUnique({
+    where: { id: project.mainArchitectSessionId },
+  });
   return row === null ? null : toSummary(row);
 }
 
@@ -383,25 +505,112 @@ export async function listArchitectSessions(
   return rows.map(toSummary);
 }
 
+/** D'ou vient une tache, lorsqu'un architecte l'a proposee. */
+export type ArchitectTaskOrigin = {
+  sessionId: string;
+  code: string;
+  kind: ArchitectSessionKind;
+  /** Numero du tour, lorsque la tache vient d'une conversation projet. */
+  generationSequence: number | null;
+};
+
 /**
  * Session Architecte a l'origine d'une tache, s'il y en a une.
  *
- * `appliedTaskId` porte un index unique : la relation est donc au plus un a un,
- * et le guide peut afficher « Designed with Architect » sans risquer de choisir
- * arbitrairement parmi plusieurs sessions.
+ * Deux chemins, parce qu'il y a deux modeles. Une session historique porte
+ * elle-meme sa tache ; une conversation projet la porte sur la **generation**
+ * qui l'a proposee — c'est ce deplacement qui lui permet d'en creer plusieurs.
  *
- * Retourne `null` pour une tache creee a la main — ce qui reste le cas ordinaire,
- * et n'a rien d'un defaut.
+ * Les deux liens portent un index unique : la relation reste au plus un a un
+ * dans les deux cas, et le guide n'a jamais a choisir arbitrairement.
+ *
+ * Retourne `null` pour une tache ecrite a la main, ce qui reste le cas ordinaire.
  */
 export async function findArchitectSessionForTask(
   db: DatabaseClient,
   taskId: string,
-): Promise<{ id: string; code: string } | null> {
-  const row = await db.architectSession.findFirst({
+): Promise<ArchitectTaskOrigin | null> {
+  const generation = await db.architectGeneration.findFirst({
     where: { appliedTaskId: taskId },
-    select: { id: true, sequence: true },
+    select: { sequence: true, session: { select: { id: true, sequence: true, kind: true } } },
   });
-  return row === null ? null : { id: row.id, code: formatArchitectSessionCode(row.sequence) };
+  if (generation !== null && isArchitectSessionKind(generation.session.kind)) {
+    return {
+      sessionId: generation.session.id,
+      code: formatArchitectSessionCode(generation.session.sequence),
+      kind: generation.session.kind,
+      generationSequence: generation.sequence,
+    };
+  }
+
+  const session = await db.architectSession.findFirst({
+    where: { appliedTaskId: taskId },
+    select: { id: true, sequence: true, kind: true },
+  });
+  if (session === null || !isArchitectSessionKind(session.kind)) {
+    return null;
+  }
+  return {
+    sessionId: session.id,
+    code: formatArchitectSessionCode(session.sequence),
+    kind: session.kind,
+    generationSequence: null,
+  };
+}
+
+/** Tache creee depuis une conversation, rattachee au tour qui l'a proposee. */
+export type ArchitectSessionTask = {
+  /** Generation dont la proposition a produit cette tache. */
+  generationId: string;
+  taskId: string;
+  code: string;
+  title: string;
+  createdAt: string;
+};
+
+/**
+ * Taches creees depuis une conversation, dans l'ordre des tours.
+ *
+ * Ces lignes n'ont **rien** a voir avec le transcript : elles sont derivees de
+ * `ArchitectGeneration.appliedTaskId`, la relation qui existait deja, et servent
+ * uniquement a l'affichage. Aucune n'entre dans le contexte transmis au
+ * fournisseur — une tache creee se signale d'elle-meme au tour suivant, par la
+ * liste des taches recentes.
+ *
+ * Une session de conception de tache n'en produit aucune : son verrou porte sur
+ * la session, pas sur la generation. C'est voulu, et cela laisse son affichage
+ * exactement tel qu'il etait.
+ */
+export async function listArchitectSessionTasks(
+  db: DatabaseClient,
+  sessionId: string,
+): Promise<ArchitectSessionTask[]> {
+  const rows = await db.architectGeneration.findMany({
+    where: { sessionId, appliedTaskId: { not: null } },
+    select: {
+      id: true,
+      appliedTask: { select: { id: true, sequence: true, title: true, createdAt: true } },
+    },
+    orderBy: { sequence: "asc" },
+  });
+
+  const tasks: ArchitectSessionTask[] = [];
+  for (const row of rows) {
+    // `appliedTaskId` non nul et `appliedTask` nul ne peut pas arriver — la cle
+    // etrangere l'interdit —, mais le type le permet et une tache absente ne
+    // justifie pas de faire echouer la page.
+    if (row.appliedTask === null) {
+      continue;
+    }
+    tasks.push({
+      generationId: row.id,
+      taskId: row.appliedTask.id,
+      code: formatTaskCode(row.appliedTask.sequence),
+      title: row.appliedTask.title,
+      createdAt: row.appliedTask.createdAt.toISOString(),
+    });
+  }
+  return tasks;
 }
 
 export type SaveTurnDraftInput = {
@@ -511,6 +720,7 @@ export async function startArchitectGeneration(
       select: {
         id: true,
         status: true,
+        kind: true,
         conversationVersion: true,
         nextGenerationSequence: true,
         pendingMessageText: true,
@@ -538,7 +748,11 @@ export async function startArchitectGeneration(
       // generation ne consomme le quota de la conversation.
       return { ok: false, reason: "changed" };
     }
-    if (session.nextGenerationSequence > ARCHITECT_LIMITS.generations) {
+    if (!isArchitectSessionKind(session.kind)) {
+      return { ok: false, reason: "not_found" };
+    }
+    const limit = architectSessionGenerationLimit(session.kind);
+    if (limit !== null && session.nextGenerationSequence > limit) {
       return { ok: false, reason: "limit" };
     }
 
@@ -816,25 +1030,138 @@ const TURN_STATUSES: readonly ArchitectGenerationStatus[] = [
 ];
 
 /**
- * La derniere proposition est-elle encore celle dont parle la conversation ?
+ * Proposition a partir de laquelle une tache peut encore etre creee.
  *
+ * ## Ce qui n'a pas change
+ *
+ * La derniere proposition doit encore etre celle dont parle la conversation.
  * Elle ne l'est plus des qu'un tour lui a succede : l'utilisateur a ecrit
  * quelque chose apres l'avoir lue, et l'architecte lui a repondu. Creer la tache
  * a partir d'une proposition que la discussion a deja depassee produirait
  * exactement ce que l'utilisateur venait de demander de changer.
+ *
+ * ## Ce qui change en TASK-020
+ *
+ * Ou se lit « deja utilisee ». Une session historique valait une tache : sa
+ * propre \`appliedTaskId\` suffisait. Une conversation projet en cree plusieurs au
+ * fil du temps, et c'est la **generation** qui ne doit pas en creer deux.
+ *
+ * L'invariant tient en deux lignes :
+ *
+ * - une conversation projet → plusieurs taches, au fil du temps ;
+ * - une proposition → une tache, jamais deux.
  */
-export function canCreateArchitectTask(session: ArchitectSessionView): boolean {
-  if (session.status === ARCHITECT_SESSION_STATUS.APPLIED || session.appliedTaskId !== null) {
-    return false;
-  }
+export function creatableArchitectProposal(
+  session: ArchitectSessionView,
+): ArchitectGenerationView | null {
   const proposal = latestArchitectProposal(session);
   if (proposal === null) {
-    return false;
+    return null;
   }
+
+  if (session.kind === ARCHITECT_SESSION_KIND.PROJECT) {
+    if (proposal.appliedTaskId !== null) {
+      return null;
+    }
+  } else if (
+    session.status === ARCHITECT_SESSION_STATUS.APPLIED ||
+    session.appliedTaskId !== null
+  ) {
+    return null;
+  }
+
   const lastTurn = session.generations.find((generation) =>
     TURN_STATUSES.includes(generation.status),
   );
-  return lastTurn !== undefined && lastTurn.id === proposal.id;
+  return lastTurn !== undefined && lastTurn.id === proposal.id ? proposal : null;
+}
+
+/** Une tache peut-elle encore etre creee depuis cette conversation ? */
+export function canCreateArchitectTask(session: ArchitectSessionView): boolean {
+  return creatableArchitectProposal(session) !== null;
+}
+
+export type ClaimArchitectGenerationResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "already_applied" | "not_ready" };
+
+/**
+ * Reserve le droit de creer la tache d'une **proposition**.
+ *
+ * Le pendant de \`claimArchitectSession\` pour une conversation projet, et pour
+ * la meme raison : reserver avant de creer, jamais l'inverse. Un double clic
+ * produirait sinon deux taches, dont une seule serait rattachee.
+ *
+ * La reservation est une mise a jour conditionnelle — proposition rendue, pas
+ * encore de tache —, donc atomique. Le second appel obtient 0 et repart avec
+ * \`already_applied\`, sans avoir rien cree.
+ *
+ * \`appliedTaskId\` reste \`null\` a ce stade : la tache n'existe pas encore. Une
+ * colonne dediee marque la reservation, pour la meme raison que le statut
+ * \`APPLIED\` d'une session historique — il faut pouvoir distinguer « reservee »
+ * de « creee », et rendre la main si la creation echoue.
+ */
+export async function claimArchitectGeneration(
+  db: DatabaseClient,
+  generationId: string,
+): Promise<ClaimArchitectGenerationResult> {
+  return db.$transaction(async (tx): Promise<ClaimArchitectGenerationResult> => {
+    const generation = await tx.architectGeneration.findUnique({
+      where: { id: generationId },
+      select: { id: true, status: true, appliedTaskId: true, taskClaimedAt: true },
+    });
+    if (generation === null) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (generation.appliedTaskId !== null || generation.taskClaimedAt !== null) {
+      return { ok: false, reason: "already_applied" };
+    }
+    if (generation.status !== ARCHITECT_GENERATION_STATUS.PROPOSAL_READY) {
+      return { ok: false, reason: "not_ready" };
+    }
+
+    const claimed = await tx.architectGeneration.updateMany({
+      where: {
+        id: generationId,
+        status: ARCHITECT_GENERATION_STATUS.PROPOSAL_READY,
+        appliedTaskId: null,
+        taskClaimedAt: null,
+      },
+      data: { taskClaimedAt: new Date() },
+    });
+
+    return claimed.count === 1 ? { ok: true } : { ok: false, reason: "already_applied" };
+  });
+}
+
+/** Rattache la tache creee a la proposition qui l'a produite. */
+export async function attachArchitectGenerationTask(
+  db: DatabaseClient,
+  generationId: string,
+  taskId: string,
+): Promise<boolean> {
+  const updated = await db.architectGeneration.updateMany({
+    where: { id: generationId, appliedTaskId: null },
+    data: { appliedTaskId: taskId },
+  });
+  return updated.count === 1;
+}
+
+/**
+ * Rend la main apres une creation qui n'a pas abouti.
+ *
+ * Le \`where\` exige \`appliedTaskId: null\` : une proposition dont la tache existe
+ * vraiment n'est jamais rouverte, quelle que soit la suite des evenements.
+ */
+export async function releaseArchitectGeneration(
+  db: DatabaseClient,
+  generationId: string,
+): Promise<boolean> {
+  const released = await db.architectGeneration.updateMany({
+    where: { id: generationId, appliedTaskId: null },
+    data: { taskClaimedAt: null },
+  });
+  return released.count === 1;
 }
 
 /** Questions du dernier tour, lorsqu'il en a pose. */

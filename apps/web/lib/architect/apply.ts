@@ -35,19 +35,42 @@
  */
 
 import {
+  attachArchitectGenerationTask,
   attachArchitectTask,
+  claimArchitectGeneration,
   claimArchitectSession,
   createTask,
+  releaseArchitectGeneration,
   releaseArchitectSession,
   type DatabaseClient,
 } from "@nox/database";
-import { checkValidationCommand, type DevelopmentTaskDetail } from "@nox/shared";
+import {
+  ARCHITECT_SESSION_KIND,
+  checkValidationCommand,
+  type ArchitectSessionKind,
+  type DevelopmentTaskDetail,
+} from "@nox/shared";
 
 import { readTaskSubmission, type TaskFormValues } from "../task-input.ts";
 
 export type ApplyProposalInput = {
   sessionId: string;
   projectId: string;
+  /**
+   * Role de la conversation : il decide de ce qui est reserve.
+   *
+   * Le modele historique est la valeur par defaut, comme dans la colonne qui le
+   * porte : c'est celui de toutes les sessions deja enregistrees. Une
+   * conversation projet, elle, se declare.
+   */
+  sessionKind?: ArchitectSessionKind;
+  /**
+   * Generation qui porte la proposition, pour une conversation projet.
+   *
+   * C'est elle qui est reservee, et non la session : une conversation projet
+   * cree plusieurs taches au fil du temps, une proposition n'en cree jamais deux.
+   */
+  generationId?: string | null;
   /** Champs du formulaire, tels que l'utilisateur les a laisses. */
   values: TaskFormValues;
 };
@@ -57,13 +80,15 @@ export type ApplyProposalResult =
   | { ok: false; message: string };
 
 const ALREADY_APPLIED_MESSAGE =
-  "Cette session a deja produit une tache. Ouvrez une nouvelle demande pour en preparer une autre.";
+  "Cette proposition a deja produit une tache. Continuez la conversation pour en preparer une autre.";
+
+const LEGACY_ALREADY_APPLIED_MESSAGE =
+  "Cette session a deja produit une tache. Ouvrez la conversation du projet pour en preparer une autre.";
 
 const NOT_READY_MESSAGE =
-  "Cette session ne porte aucune proposition prete. Relancez une generation avant de creer la tache.";
+  "Cette conversation ne porte aucune proposition prete. Envoyez un message avant de creer la tache.";
 
-const UNKNOWN_MESSAGE =
-  "Cette session n'existe plus. Revenez a la liste des demandes et recommencez.";
+const UNKNOWN_MESSAGE = "Cette conversation n'existe plus. Rechargez la page et recommencez.";
 
 /**
  * Cree la tache d'une session, une fois et une seule.
@@ -93,11 +118,27 @@ export async function applyArchitectProposal(
     }
   }
 
-  const claimed = await claimArchitectSession(db, input.sessionId);
+  // Deux modeles, deux reservations, et une seule suite : ce qui est reserve
+  // differe, ce qui en est fait ne differe pas. Une conversation projet reserve
+  // sa **proposition** ; une session historique se reserve elle-meme.
+  const project = input.sessionKind === ARCHITECT_SESSION_KIND.PROJECT;
+  const generationId = input.generationId ?? null;
+
+  if (project && generationId === null) {
+    return { ok: false, message: NOT_READY_MESSAGE };
+  }
+
+  const claimed = project
+    ? await claimArchitectGeneration(db, generationId as string)
+    : await claimArchitectSession(db, input.sessionId);
+
   if (!claimed.ok) {
     switch (claimed.reason) {
       case "already_applied":
-        return { ok: false, message: ALREADY_APPLIED_MESSAGE };
+        return {
+          ok: false,
+          message: project ? ALREADY_APPLIED_MESSAGE : LEGACY_ALREADY_APPLIED_MESSAGE,
+        };
       case "not_ready":
         return { ok: false, message: NOT_READY_MESSAGE };
       default:
@@ -105,22 +146,35 @@ export async function applyArchitectProposal(
     }
   }
 
+  /** Rend la main sur ce qui a ete reserve, quel que soit le modele. */
+  const release = async (): Promise<void> => {
+    if (project) {
+      await releaseArchitectGeneration(db, generationId as string);
+      return;
+    }
+    await releaseArchitectSession(db, input.sessionId);
+  };
+
   let created;
   try {
     created = await createTask(db, { projectId: input.projectId, ...submission.input });
   } catch (error) {
-    await releaseArchitectSession(db, input.sessionId);
+    await release();
     throw error;
   }
 
   if (created === null) {
-    // Le projet a disparu entre-temps : la session redevient applicable, meme si
-    // plus rien ne pourra jamais l'appliquer.
-    await releaseArchitectSession(db, input.sessionId);
+    // Le projet a disparu entre-temps : la reservation est rendue, meme si plus
+    // rien ne pourra jamais l'utiliser.
+    await release();
     return { ok: false, message: UNKNOWN_MESSAGE };
   }
 
-  await attachArchitectTask(db, input.sessionId, created.id);
+  if (project) {
+    await attachArchitectGenerationTask(db, generationId as string, created.id);
+  } else {
+    await attachArchitectTask(db, input.sessionId, created.id);
+  }
 
   // A partir d'ici la tache existe, et plus aucun echec ne la remet en cause.
   // La synchronisation de son document appartient a l'appelant, exactement comme

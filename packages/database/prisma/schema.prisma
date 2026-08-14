@@ -52,9 +52,33 @@ model Project {
   /// dans deux manifests Architecte, et l'historique deviendrait illisible.
   nextMemorySequence Int @default(1)
 
+  /// Conversation Architecte principale du projet, lorsqu'elle a ete ouverte.
+  ///
+  /// ## Pourquoi un pointeur plutot qu'une recherche par role
+  ///
+  /// Parce que la garantie « au plus une conversation principale » doit etre
+  /// structurelle, et non verifiee a l'ecriture. Une ligne de `Project` ne porte
+  /// qu'une valeur : deux ouvertures concurrentes ne peuvent donc pas produire
+  /// deux conversations principales, quelle que soit la façon dont elles
+  /// s'entrelacent.
+  ///
+  /// ## Une colonne, pas une relation Prisma
+  ///
+  /// Meme raison que `Run.parentRunId`, pour une cause differente : declarer la
+  /// relation ici creerait un cycle `Project → ArchitectSession → Project`, que
+  /// Prisma refuse de resoudre proprement en actions referentielles. L'index
+  /// unique reste pose, et il est la garantie qui compte.
+  ///
+  /// Le pointeur ne peut pas pendre : **aucune session Architecte n'est jamais
+  /// supprimee dans NOX**, et une conversation principale n'est ni supprimable,
+  /// ni reinitialisable.
+  mainArchitectSessionId String?
+
   tasks             Task[]
   architectSessions ArchitectSession[]
   memories          ProjectMemoryEntry[]
+
+  @@unique([mainArchitectSessionId])
 }
 
 /// Une entree de memoire projet : ce que NOX retient volontairement.
@@ -158,7 +182,16 @@ model Task {
   validationCommands TaskValidationCommand[]
   runs               Run[]
   reviewFeedbacks    ReviewFeedback[]
-  architectSession   ArchitectSession?
+
+  /// Session historique qui a cree cette tache, le cas echeant.
+  architectSession ArchitectSession?
+
+  /// Generation d'une conversation projet qui a cree cette tache, le cas echeant.
+  ///
+  /// Les deux sont exclusives en pratique — une tache vient d'un modele ou de
+  /// l'autre — mais rien ne l'impose au niveau du schema : deux liens vides sont
+  /// le cas normal, celui d'une tache ecrite a la main.
+  architectGeneration ArchitectGeneration? @relation("TaskFromGeneration")
 
   @@unique([projectId, sequence])
   @@index([projectId, status])
@@ -724,6 +757,18 @@ model ArchitectSession {
   /// poursuit plus. Une fausse reconstruction serait pire qu'une lecture seule.
   conversationVersion Int @default(1)
 
+  /// Valeur de `ArchitectSessionKind`.
+  ///
+  /// `TASK_DESIGN_LEGACY` par defaut, ce qui decrit exactement les sessions
+  /// existantes : elles ont ete ouvertes pour concevoir une tache, et se sont
+  /// fermees en la creant. La valeur par defaut n'est donc pas un repli, c'est
+  /// la verite historique.
+  ///
+  /// `PROJECT` designe la conversation principale d'un projet. Elle ne devient
+  /// jamais `APPLIED`, et `appliedTaskId` y reste toujours `null` : ses taches
+  /// sont portees par les generations qui les ont produites.
+  kind String @default("TASK_DESIGN_LEGACY")
+
   /// Texte du prochain message, prepare mais pas encore envoye.
   ///
   /// Le brouillon vit ici plutot que dans le navigateur pour une raison simple :
@@ -751,6 +796,10 @@ model ArchitectSession {
   nextGenerationSequence Int @default(1)
 
   /// Tache creee depuis cette session, une fois seulement.
+  ///
+  /// Champ du modele `TASK_DESIGN_LEGACY`, ou une session valait une tache.
+  /// Une session `PROJECT` ne l'ecrit jamais : elle peut produire plusieurs
+  /// taches au fil du temps, chacune rattachee a la generation qui l'a proposee.
   appliedTaskId String?
 
   createdAt DateTime @default(now())
@@ -871,12 +920,40 @@ model ArchitectGeneration {
   /// Valeur de `ArchitectErrorCode`, lorsque la generation a echoue.
   errorCode String?
 
+  /// Tache creee a partir de la proposition de cette generation.
+  ///
+  /// ## L'invariant central de TASK-020
+  ///
+  /// Une conversation de projet cree plusieurs taches au fil des mois ; une
+  /// **proposition**, elle, n'en cree jamais deux. L'index unique porte donc ici,
+  /// une generation plus bas que `ArchitectSession.appliedTaskId` — c'est
+  /// exactement ce deplacement qui fait passer de « une conversation, une tache »
+  /// a « une conversation, plusieurs taches ».
+  ///
+  /// `Restrict` comme sur la session : une tache creee depuis une proposition
+  /// n'est pas supprimable tant que cette proposition la designe. Le lien de
+  /// provenance vaut mieux qu'une suppression silencieuse.
+  appliedTaskId String?
+
+  /// Moment ou le droit de creer la tache a ete reserve.
+  ///
+  /// Reserver **avant** de creer, jamais l'inverse : sans cela, un double clic
+  /// produirait deux taches, dont une seule serait rattachee. La seconde serait
+  /// un doublon orphelin, avec son numero et son document Markdown.
+  ///
+  /// Cette colonne distingue « reservee » de « creee ». `appliedTaskId` reste
+  /// `null` entre les deux, et le redevient si la creation echoue. C'est le role
+  /// que joue le statut `APPLIED` pour une session historique.
+  taskClaimedAt DateTime?
+
   createdAt DateTime @default(now())
 
   /// `Cascade` comme `RunEvent` : une generation ne raconte rien sans sa session.
-  session  ArchitectSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  messages ArchitectMessage[]
+  session     ArchitectSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  appliedTask Task?              @relation("TaskFromGeneration", fields: [appliedTaskId], references: [id], onDelete: Restrict)
+  messages    ArchitectMessage[]
 
   @@unique([sessionId, sequence])
+  @@unique([appliedTaskId])
   @@index([sessionId, sequence])
 }

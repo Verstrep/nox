@@ -11,8 +11,13 @@ import { describe, it } from "node:test";
 
 import type { ArchitectContextManifest, ArchitectTaskProposal } from "@nox/shared";
 
+import type { ArchitectTaskOrigin } from "@nox/database";
+
 import {
   architectExcerpt,
+  architectHistoryUrl,
+  architectOriginLabel,
+  architectOriginUrl,
   architectSessionUrl,
   architectUrl,
   formatChars,
@@ -162,5 +167,46 @@ describe("architectExcerpt", () => {
     const excerpt = architectExcerpt("m".repeat(300));
     assert.equal(excerpt.length, 140);
     assert.ok(excerpt.endsWith("…"));
+  });
+});
+
+describe("provenance d'une tache", () => {
+  const projectOrigin: ArchitectTaskOrigin = {
+    sessionId: "s1",
+    code: "ARCH-001",
+    kind: "PROJECT",
+    generationSequence: 7,
+  };
+
+  const legacyOrigin: ArchitectTaskOrigin = {
+    sessionId: "s2",
+    code: "ARCH-002",
+    kind: "TASK_DESIGN_LEGACY",
+    generationSequence: null,
+  };
+
+  it("mene a la conversation du projet, sans identifiant dans l'URL", () => {
+    assert.equal(architectOriginUrl("p1", projectOrigin), architectUrl("p1"));
+  });
+
+  it("mene a la session historique, par son identifiant", () => {
+    assert.equal(architectOriginUrl("p1", legacyOrigin), architectSessionUrl("p1", "s2"));
+  });
+
+  it("nomme la conversation projet par son tour", () => {
+    assert.equal(architectOriginLabel(projectOrigin), "Project Architect · tour 7");
+  });
+
+  it("n'invente pas de tour quand il n'y en a pas", () => {
+    assert.equal(
+      architectOriginLabel({ ...projectOrigin, generationSequence: null }),
+      "Project Architect",
+    );
+    assert.equal(architectOriginLabel(legacyOrigin), "ARCH-002");
+  });
+
+  it("distingue l'historique de la conversation principale", () => {
+    assert.notEqual(architectHistoryUrl("p1"), architectUrl("p1"));
+    assert.ok(architectHistoryUrl("p1").startsWith(architectUrl("p1")));
   });
 });

@@ -98,8 +98,35 @@ describe("renderArchitectPrompt — determinisme", () => {
 });
 
 describe("renderArchitectPrompt — instructions", () => {
-  it("impose une seule tache", () => {
-    assert.ok(render().instructions.includes("une seule tache"));
+  it("dit que la conversation ne se termine pas", () => {
+    const instructions = render().instructions;
+
+    // TASK-020 : le prompt ne definit plus la conversation par sa fin.
+    assert.equal(instructions.includes("aboutir a **une seule tache de developpement**"), false);
+    assert.equal(instructions.includes("Une generation, une tache."), false);
+    assert.equal(instructions.includes("la session se ferme"), false);
+
+    assert.ok(instructions.includes("durable"));
+    assert.ok(instructions.includes("Cette conversation ne se termine pas"));
+    assert.ok(instructions.includes("Creer une tache n'y met pas fin"));
+  });
+
+  it("elargit CONTINUE a la discussion, sans exiger de question", () => {
+    const instructions = render().instructions;
+
+    assert.ok(instructions.includes("ce tour ne porte pas de proposition"));
+    assert.ok(instructions.includes("questions` peut rester vide"));
+  });
+
+  it("dit que les tours les plus anciens ne sont pas transmis", () => {
+    const instructions = render().instructions;
+
+    assert.ok(instructions.includes("Seuls ses tours les plus recents te sont transmis"));
+    assert.ok(instructions.includes("ne resume pas ce qui precede"));
+  });
+
+  it("impose une seule tache par proposition", () => {
+    assert.ok(render().instructions.includes("Une proposition porte **une** tache"));
   });
 
   it("impose le plus petit increment coherent", () => {

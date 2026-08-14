@@ -8,7 +8,9 @@ import Link from "next/link";
 
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
-import { architectSessionUrl } from "@/lib/architect/display";
+import type { ArchitectTaskOrigin } from "@nox/database";
+
+import { architectOriginLabel, architectOriginUrl } from "@/lib/architect/display";
 import { guidedActionHref, guidedProgressMark } from "@/lib/guided-workflow-display";
 import {
   architectReviewBlockerLabel,
@@ -129,7 +131,7 @@ export function GuidedWorkflow({
   projectId: string;
   taskId: string;
   state: GuidedWorkflowState;
-  architectSession: { id: string; code: string } | null;
+  architectSession: ArchitectTaskOrigin | null;
   pendingFeedbackExcerpt: string | null;
   anchorId: string;
 }) {
@@ -235,10 +237,10 @@ export function GuidedWorkflow({
             <p className="border-t border-zinc-800 pt-4 text-xs text-zinc-600">
               Designed with Architect ·{" "}
               <Link
-                href={architectSessionUrl(projectId, architectSession.id)}
+                href={architectOriginUrl(projectId, architectSession)}
                 className="font-mono text-zinc-500 underline hover:text-zinc-300"
               >
-                {architectSession.code}
+                {architectOriginLabel(architectSession)}
               </Link>
             </p>
           )}

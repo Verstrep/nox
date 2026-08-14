@@ -28,7 +28,7 @@ base SQLite dans le dossier du projet.
 | **Exécution** | Lancer Claude Code sur une tâche, suivre son activité en direct, l'interrompre |
 | **Review** | Relire un instantané Git immuable de ce qui a changé, avec le verdict des validations |
 | **Correction** | Écrire un feedback et reprendre la session Claude exactement là où elle s'était arrêtée |
-| **Architecte** | Concevoir une tâche en conversation avec un second modèle, sans lui donner le moindre outil |
+| **Architecte** | Une conversation durable par projet : concevoir, décider, préparer la suite — sans donner le moindre outil au modèle |
 | **Review Architecte** | Faire relire une exécution terminée et obtenir une recommandation motivée |
 | **Workflow guidé** | Savoir, sur la page d'une tâche, quelle est l'étape courante et ce qui a du sens ensuite |
 | **Mémoire projet** | Enregistrer décisions, contraintes, conventions et connaissances durables, et les faire suivre à l'Architecte |
@@ -239,7 +239,7 @@ Créer un projet          nom, description, chemin du repository Git
         ↓
 Documents                lire et écrire les Markdown du projet
         ↓
-Architect  (facultatif)  concevoir une tâche en conversation
+Architect  (facultatif)  la conversation durable du projet
         ↓
 Backlog                  la tâche existe en DRAFT, on la passe en Ready
         ↓
@@ -255,6 +255,10 @@ Approve  ·  Request changes  ·  Analyze with Architect
 Sur la page d'une tâche, le bloc **Development workflow** dit en permanence où l'on en est et ce
 qui a du sens ensuite. Il ne décide de rien : chaque action reste un clic sur la surface où la
 décision se prend déjà.
+
+La conversation Architecte d'un projet **ne se ferme pas**. Créer une tâche depuis une
+proposition n'y met pas fin : on y revient pour préparer la suivante, revenir sur une décision
+ou préparer une V2. L'ouvrir ne coûte aucun appel.
 
 Deux points à retenir avant un premier lancement :
 

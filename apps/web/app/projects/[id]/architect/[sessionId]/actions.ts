@@ -2,6 +2,7 @@
 
 import {
   clearArchitectTurnDraft,
+  creatableArchitectProposal,
   getArchitectSession,
   getDatabaseClient,
   getProjectById,
@@ -19,12 +20,21 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { applyArchitectProposal } from "@/lib/architect/apply";
+import { architectOpeningMessage } from "@/lib/architect/composer";
 import { loadArchitectConfig } from "@/lib/architect/config";
 import { architectSessionUrl } from "@/lib/architect/display";
-import { describeArchitectError, describeArchitectTextRefusal } from "@/lib/architect/errors";
+import {
+  describeArchitectError,
+  describeArchitectFailure,
+  describeArchitectTextRefusal,
+} from "@/lib/architect/errors";
 import { OpenAIArchitectProvider } from "@/lib/architect/openai";
 import { loadRecentArchitectTasks } from "@/lib/architect/recent-tasks";
-import { reviewArchitectTurn, sendArchitectTurn } from "@/lib/architect/service";
+import {
+  reviewArchitectTurn,
+  sendArchitectMessage,
+  sendArchitectTurn,
+} from "@/lib/architect/service";
 import { loadActiveProjectMemories } from "@/lib/memory";
 import { taskUrl } from "@/lib/task-display";
 import { applyTaskDocumentSync } from "@/lib/tasks";
@@ -34,6 +44,9 @@ import type { ComposerState, CreateFromProposalState } from "./form-state";
 
 const UNKNOWN_MESSAGE =
   "Cette conversation n'existe plus. Revenez a la liste des conversations et recommencez.";
+
+const STALE_PROPOSAL_MESSAGE =
+  "Cette proposition n'est plus celle dont parle la conversation. Relisez le dernier tour avant de creer la tache.";
 
 const UNEXPECTED_ERROR_MESSAGE =
   "Une erreur inattendue est survenue. Consultez les logs du serveur pour le detail.";
@@ -108,12 +121,15 @@ export async function reviewTurnAction(
       return composerFailure(ARCHITECT_ERROR.ARCHITECT_ALREADY_APPLIED, submitted);
     }
 
-    // Au premier tour, le message est celui d'ouverture, relu en base. Le
-    // navigateur n'en envoie donc aucun : c'est ce qui garantit que le texte
-    // affiche dans la liste des conversations et le premier message du
-    // transcript ne peuvent pas diverger.
-    const opening = loaded.session.messages.length === 0;
-    const message = opening ? loaded.session.requestText : submitted;
+    // Meme decision que le rendu, prise par le meme module : un texte d'ouverture
+    // fige gagne quand la session en a un, le formulaire sinon. Une conversation
+    // projet n'en a jamais — son premier message est saisi comme les suivants.
+    const message =
+      architectOpeningMessage({
+        kind: loaded.session.kind,
+        messageCount: loaded.session.messages.length,
+        requestText: loaded.session.requestText,
+      }) ?? submitted;
 
     const refusal = checkArchitectText(message, ARCHITECT_LIMITS.request);
     if (refusal !== null) {
@@ -199,13 +215,79 @@ export async function sendTurnAction(
     if (outcome.ok) {
       return { error: null, message: "" };
     }
-    return {
-      error: "code" in outcome ? describeArchitectError(outcome.code) : outcome.message,
-      message: "",
-    };
+    return { error: describeArchitectFailure(outcome, ARCHITECT_LIMITS.request), message: "" };
   } catch (error) {
     console.error("[nox] Echec d'un tour Architecte :", error);
     return { error: UNEXPECTED_ERROR_MESSAGE, message: "" };
+  }
+}
+
+/**
+ * Envoie un message : `Send`.
+ *
+ * **Le parcours quotidien d'une conversation projet.** Un clic explicite, un
+ * appel au maximum. Le navigateur transmet le texte du message et un compteur de
+ * messages ; tout le reste — projet, chemin du repository, documents, memoire,
+ * taches recentes, fenetre de transcript, modele, prompt, empreinte — est relu et
+ * reconstruit ici, au moment de l'envoi.
+ *
+ * Le compteur n'est pas une autorite : il ne porte aucun fragment de contexte et
+ * ne peut rien elargir. Il sert uniquement a reconnaitre un onglet reste ouvert
+ * sur un etat depasse, dont l'envoi creerait une seconde branche invisible.
+ *
+ * Aucune validation n'est contournee : `sendArchitectMessage` traverse les memes
+ * verifications, le meme verrou et le meme appel que le parcours en deux clics.
+ */
+export async function sendMessageAction(
+  _previousState: ComposerState,
+  formData: FormData,
+): Promise<ComposerState> {
+  const projectId = readField(formData, "projectId");
+  const sessionId = readField(formData, "sessionId");
+  const submitted = normalizeArchitectText(readField(formData, "message"));
+  const expectedMessageCount = Number.parseInt(readField(formData, "messageCount"), 10);
+
+  try {
+    const loaded = await loadSession(projectId, sessionId);
+    if (loaded === null) {
+      return { error: UNKNOWN_MESSAGE, message: submitted };
+    }
+
+    const config = loadArchitectConfig(process.env);
+    if (!config.ok) {
+      return composerFailure(ARCHITECT_ERROR.ARCHITECT_NOT_CONFIGURED, submitted);
+    }
+
+    const db = getDatabaseClient();
+    const outcome = await sendArchitectMessage(db, {
+      session: loaded.session,
+      projectName: loaded.project.name,
+      repositoryPath: loaded.project.repositoryPath,
+      message: submitted,
+      tasks: await loadRecentArchitectTasks(db, projectId),
+      memories: await loadActiveProjectMemories(projectId),
+      model: config.config.model,
+      provider: new OpenAIArchitectProvider({ apiKey: config.config.apiKey }),
+      environment: process.env,
+      // Un compteur illisible vaut « je ne sais pas », donc un refus : mieux
+      // vaut redemander un envoi que produire une branche silencieuse.
+      expectedMessageCount: Number.isInteger(expectedMessageCount) ? expectedMessageCount : -1,
+    });
+
+    revalidateSession(projectId, sessionId);
+
+    if (outcome.ok) {
+      return { error: null, message: "" };
+    }
+    // Le texte revient toujours : refuser un envoi ne justifie pas de faire
+    // perdre a l'utilisateur ce qu'il vient d'ecrire.
+    return {
+      error: describeArchitectFailure(outcome, ARCHITECT_LIMITS.request),
+      message: submitted,
+    };
+  } catch (error) {
+    console.error("[nox] Echec de l'envoi d'un message Architecte :", error);
+    return { error: UNEXPECTED_ERROR_MESSAGE, message: submitted };
   }
 }
 
@@ -279,8 +361,21 @@ export async function createTaskFromProposalAction(
       return { error: UNKNOWN_MESSAGE, values };
     }
 
+    // La proposition creable est relue en base, jamais recue du formulaire :
+    // c'est elle qui est reservee, et le navigateur n'a pas a la designer.
+    const creatable = creatableArchitectProposal(loaded.session);
+    if (creatable === null) {
+      return { error: STALE_PROPOSAL_MESSAGE, values };
+    }
+
     const db = getDatabaseClient();
-    const applied = await applyArchitectProposal(db, { sessionId, projectId, values });
+    const applied = await applyArchitectProposal(db, {
+      sessionId,
+      projectId,
+      sessionKind: loaded.session.kind,
+      generationId: creatable.id,
+      values,
+    });
     if (!applied.ok) {
       return { error: applied.message, values };
     }

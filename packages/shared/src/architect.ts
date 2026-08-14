@@ -204,8 +204,14 @@ export const ARCHITECT_LIMITS = {
    * Une seule borne pour tous : le premier message d'une conversation n'est pas
    * d'une autre nature que le quatrieme, et deux limites differentes pour la
    * meme chose finiraient par diverger.
+   *
+   * Seize Kio depuis TASK-020, contre huit auparavant. Une conversation projet
+   * commence souvent par un brief prepare ailleurs et colle d'un bloc ; huit Kio
+   * coupaient ce geste au milieu. La borne reste tres inferieure au budget de
+   * transcript qui la contient — un message ne peut donc jamais, a lui seul,
+   * rendre un tour impossible.
    */
-  request: 8 * 1024,
+  request: 16 * 1024,
   /** Precisions de TASK-013. Conservee pour relire les sessions d'alors. */
   clarification: 8 * 1024,
   /** Reponse publique de l'architecte, telle qu'elle est affichee et persistee. */
@@ -213,12 +219,26 @@ export const ARCHITECT_LIMITS = {
   /**
    * Transcript envoye au fournisseur.
    *
-   * Depasser cette borne **arrete** la conversation : NOX ne resume pas, ne
-   * fenetre pas, et ne supprime pas les premiers messages. Une decision prise au
-   * deuxieme message peut etre essentielle au quinzieme ; l'oublier en silence
-   * fabriquerait une memoire fictive, ce qui est pire qu'un refus lisible.
+   * Depuis TASK-020, depasser cette borne n'arrete plus la conversation : les
+   * tours les plus anciens cessent d'etre **transmis**, et restent lisibles en
+   * base. Une conversation de projet vit des mois ; un refus definitif au
+   * vingtieme tour la rendrait inutilisable exactement quand elle sert le plus.
+   *
+   * Ce qui n'a pas change : aucun resume automatique, aucune troncature au
+   * milieu d'un message, et l'apercu dit toujours combien de tours partent et
+   * combien restent. Le contexte durable, lui, vient des documents et de la
+   * memoire projet — c'est precisement leur role.
    */
   transcript: 64 * 1024,
+  /**
+   * Tours recents transmis au fournisseur.
+   *
+   * Une seconde borne, en nombre de tours, parce que la premiere est en
+   * caracteres : vingt tours brefs tiennent dans 64 Kio, mais former un contexte
+   * a partir de cent echanges courts serait aussi couteux et bien moins utile
+   * que d'en envoyer vingt.
+   */
+  windowTurns: 20,
   title: 160,
   objective: 5_000,
   context: 10_000,
@@ -229,15 +249,61 @@ export const ARCHITECT_LIMITS = {
   assumptions: { max: 10, length: 500 },
   questions: { max: 5, length: 300 },
   /**
-   * Generations d'une meme conversation, echecs compris.
+   * Generations d'une session de **conception de tache**, echecs compris.
    *
    * Vingt depuis TASK-014 : une conception reelle demande plusieurs allers et
    * retours, la ou TASK-013 n'en offrait qu'un ou deux. Compter aussi les echecs
    * reste indispensable — ne compter que les reussites autoriserait une boucle
    * infinie d'erreurs, chacune facturee.
+   *
+   * Cette borne ne s'applique **pas** a une conversation projet. Voir
+   * `architectSessionGenerationLimit`.
    */
   generations: 20,
 } as const;
+
+/**
+ * Role d'une session Architecte.
+ *
+ * Deux roles, et deux seulement. Ils ne se distinguent pas par un champ absent
+ * ni par une convention implicite : une session dit ce qu'elle est.
+ *
+ * - `TASK_DESIGN_LEGACY` : le modele de TASK-013 et TASK-014. Une session est
+ *   ouverte pour concevoir **une** tache, et devient `APPLIED` quand celle-ci
+ *   est creee. Aucune nouvelle session de ce type n'est ouverte depuis
+ *   TASK-020 ; celles qui existent restent lisibles, avec leurs regles d'alors.
+ * - `PROJECT` : la conversation principale d'un projet. Une par projet, durable,
+ *   et jamais `APPLIED` — creer une tache n'y met pas fin.
+ */
+export const ARCHITECT_SESSION_KIND = {
+  TASK_DESIGN_LEGACY: "TASK_DESIGN_LEGACY",
+  PROJECT: "PROJECT",
+} as const;
+
+export type ArchitectSessionKind =
+  (typeof ARCHITECT_SESSION_KIND)[keyof typeof ARCHITECT_SESSION_KIND];
+
+export const ARCHITECT_SESSION_KINDS: readonly ArchitectSessionKind[] =
+  Object.values(ARCHITECT_SESSION_KIND);
+
+export const isArchitectSessionKind = createStatusGuard(ARCHITECT_SESSION_KINDS);
+
+/**
+ * Nombre maximal de generations d'une session, ou `null` lorsqu'il n'y en a pas.
+ *
+ * Une conversation projet n'a pas de budget de vie : elle accompagne le projet
+ * pendant des mois, et un plafond atteint la rendrait definitivement muette. Ce
+ * que la borne de TASK-013 protegeait — un enchainement d'appels non voulus —
+ * est deja protege ailleurs, et mieux : chaque appel part d'un clic, le SDK ne
+ * reessaie jamais, et une seule generation peut etre active a la fois.
+ *
+ * Une session de conception de tache, elle, garde sa borne : son comportement
+ * est fige, et le relever changerait retroactivement ce que ses sessions
+ * permettaient.
+ */
+export function architectSessionGenerationLimit(kind: ArchitectSessionKind): number | null {
+  return kind === ARCHITECT_SESSION_KIND.PROJECT ? null : ARCHITECT_LIMITS.generations;
+}
 
 /**
  * Proposition de tache produite par l'Architecte.

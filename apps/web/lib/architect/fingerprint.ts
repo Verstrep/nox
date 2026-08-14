@@ -33,6 +33,7 @@
 import type {
   ArchitectPromptDocument,
   ArchitectPromptMemory,
+  ArchitectPromptMessage,
   ArchitectPromptTask,
 } from "@nox/shared";
 import { createHash, type Hash } from "node:crypto";
@@ -168,6 +169,49 @@ export function architectContextFingerprint(bundle: ArchitectContextBundle): str
 
   fieldList(hash, bundle.availableDocuments);
   fieldList(hash, bundle.manifest.missing);
+
+  return hash.digest("hex");
+}
+
+/**
+ * Empreinte de **tout** ce que le tour transmettra.
+ *
+ * ## Pourquoi elle a fallu en TASK-020
+ *
+ * L'empreinte de contexte ne couvre pas la conversation, et c'est voulu : sans
+ * cela, chaque message ferait dire « le projet a change ». Tant qu'une session
+ * servait a concevoir une tache, cela suffisait.
+ *
+ * Une conversation projet est ouverte longtemps, et parfois dans deux onglets.
+ * Le scenario devient concret : l'onglet A prepare son envoi, l'onglet B envoie
+ * un message, l'onglet A envoie a son tour. Le contexte projet n'a pas bouge —
+ * mais le transcript, si, et A repondrait a une conversation qui n'existe plus.
+ *
+ * Cette empreinte-ci couvre donc les trois : le contexte, les messages
+ * **retenus** par la fenetre, et le message en attente. C'est elle qui est
+ * enregistree a l'apercu et recomparee juste avant l'envoi.
+ *
+ * Comme celle du contexte, ce n'est pas une primitive de securite : SHA-256 nu,
+ * contrairement a l'empreinte de dossier de travail de TASK-012, qui est un HMAC
+ * parce qu'elle decide d'une execution.
+ */
+export function architectTurnFingerprint(parts: {
+  contextFingerprint: string;
+  transcript: readonly ArchitectPromptMessage[];
+  newMessage: string;
+}): string {
+  const hash = createHash("sha256");
+  field(hash, ARCHITECT_CONTEXT_FINGERPRINT_VERSION);
+  field(hash, parts.contextFingerprint);
+
+  hash.update(String(parts.transcript.length));
+  hash.update(" ");
+  for (const message of parts.transcript) {
+    field(hash, message.role);
+    field(hash, message.content);
+  }
+
+  field(hash, parts.newMessage);
 
   return hash.digest("hex");
 }

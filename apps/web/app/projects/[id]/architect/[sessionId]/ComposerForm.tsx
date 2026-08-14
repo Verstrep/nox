@@ -11,17 +11,24 @@ type ComposerFormProps = {
   /** Texte a reafficher : brouillon annule, ou message refuse. */
   draft: string;
   maxLength: number;
-  /** Tours restants avant la borne de la conversation. */
-  generationsLeft: number;
+  /** Tours restants, ou `null` lorsque la conversation n'a pas de borne. */
+  generationsLeft: number | null;
   /**
-   * Message d'ouverture, affiche en lecture seule au premier tour.
+   * Message d'ouverture immuable, affiche en lecture seule au premier tour.
    *
-   * Il a ete ecrit sur la page precedente et n'est plus modifiable : le serveur
+   * **N'existe que dans une session de conception de tache** (`TASK_DESIGN_LEGACY`).
+   * Il y a ete ecrit sur la page precedente et n'est plus modifiable : le serveur
    * le relit en base et ignore tout texte soumis. Sans cela, le texte affiche
    * dans la liste des conversations et le premier message du transcript
    * pourraient dire deux choses differentes.
+   *
+   * Une conversation projet vaut toujours `null` ici : elle n'a pas de message
+   * d'ouverture, elle commence par un message comme tous les suivants. C'est au
+   * rendu de le decider a partir du **role** de la session, jamais a partir du
+   * texte : une chaine vide n'est pas l'absence d'ouverture, et l'avoir traitee
+   * comme telle est precisement ce qui rendait la conversation projet muette.
    */
-  opening: string | null;
+  openingMessage: string | null;
 };
 
 /**
@@ -38,14 +45,14 @@ export function ComposerForm({
   draft,
   maxLength,
   generationsLeft,
-  opening,
+  openingMessage,
 }: ComposerFormProps) {
   const [state, formAction, pending] = useActionState(reviewTurnAction, INITIAL_COMPOSER_STATE);
   const fieldId = useId();
   const helpId = useId();
   const errorId = useId();
 
-  const exhausted = generationsLeft <= 0;
+  const exhausted = generationsLeft !== null && generationsLeft <= 0;
 
   return (
     <form action={formAction} className="flex flex-col gap-5">
@@ -62,7 +69,7 @@ export function ComposerForm({
         </p>
       )}
 
-      {opening === null ? (
+      {openingMessage === null ? (
         <div className="flex flex-col gap-2">
           <label htmlFor={fieldId} className="text-sm font-medium text-zinc-200">
             Message a l&apos;architecte
@@ -92,7 +99,7 @@ export function ComposerForm({
             id={helpId}
             className="whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-relaxed text-zinc-300"
           >
-            {opening}
+            {openingMessage}
           </p>
           <p className="text-xs leading-relaxed text-zinc-500">
             Ce texte a ouvert la conversation et n&apos;est plus modifiable. Pour repartir
@@ -113,9 +120,11 @@ export function ComposerForm({
         <span className="text-xs text-zinc-600">
           {exhausted
             ? "Conversation limit reached"
-            : generationsLeft === 1
-              ? "1 tour restant"
-              : `${String(generationsLeft)} tours restants`}
+            : generationsLeft === null
+              ? "Conversation durable"
+              : generationsLeft === 1
+                ? "1 tour restant"
+                : `${String(generationsLeft)} tours restants`}
         </span>
       </div>
 

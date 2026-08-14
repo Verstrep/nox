@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 13 août 2026, à l'issue de `TASK-018`.
+**Dernière mise à jour** : 14 août 2026, à l'issue de `TASK-020`.
 
 ---
 
@@ -34,11 +34,11 @@ automatiquement, aucun commit, aucun push, aucune estimation de coût.
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
 | Modèles Prisma | 15 |
-| Migrations appliquées | 11 |
+| Migrations appliquées | 12 |
 | Routes du runner | 16, dont une seule publique (`GET /health`) |
-| Routes de l'application web | 23 |
-| Tests automatisés | 2 403, dont 5 ignorés sous Windows |
-| Décisions consignées | 249 |
+| Routes de l'application web | 24 |
+| Tests automatisés | 2 461, dont 5 ignorés sous Windows |
+| Décisions consignées | 260 |
 
 ---
 
@@ -216,30 +216,46 @@ la garantie vit dans un index unique.
 
 ### 2.8 Architecte — conception d'une tâche
 
-**Disponible.** Une conversation avec un second modèle, chez OpenAI, qui aide à concevoir une
-tâche. Le contexte envoyé est une **liste fermée** : deux documents de conventions
-(`CLAUDE.md`, `AGENTS.md`), six documents `docs/` nommés, les dix dernières tâches, et la
-mémoire active du projet. Le transcript vit dans SQLite et est reconstruit en entier à chaque
-tour.
+**Disponible.** Chaque projet possède **une conversation Architecte principale et durable**,
+avec un second modèle chez OpenAI. On y conçoit, on y compare des options, on y revient. Créer
+une tâche depuis une proposition **n'y met pas fin** : la conversation reste ouverte, et produit
+d'autres tâches au fil du temps.
 
-Chaque tour affiche un aperçu du contexte avant l'appel, et signale ce qui a changé depuis le
-tour précédent. Une proposition relue et modifiée par l'utilisateur devient une tâche en
-`DRAFT`.
+Le contexte envoyé est une **liste fermée** : deux documents de conventions (`CLAUDE.md`,
+`AGENTS.md`), six documents `docs/` nommés, les dix dernières tâches, et la mémoire active du
+projet. Le transcript vit dans SQLite, en entier.
+
+Le parcours est celui d'un chat : on écrit, on clique `Send`, on lit la réponse. Un clic, un
+appel au plus. Le contexte est reconstruit côté serveur au moment de l'envoi ; on peut l'inspecter
+à tout moment — ce qui part, ce qui manque, quelle part de la conversation est transmise — sans
+que cela coûte le moindre appel ni conditionne l'envoi.
+
+Une proposition relue et modifiée par l'utilisateur devient une tâche en `DRAFT`. Le fil
+l'annonce alors par un événement local, à côté du tour qui l'a proposée, avec un lien vers elle.
+Cet événement ne rejoint jamais la conversation transmise.
+
+Ouvrir la conversation d'un projet **ne coûte aucun appel** : le message d'accueil affiché tant
+qu'elle est vide est du texte d'interface.
 
 **Limites.**
 
-- **Une conversation ne produit qu'une tâche.** Voir le § 3 : c'est la limitation la plus
-  structurante de l'état actuel.
-- Vingt tours par conversation, échecs compris, et 64 Kio de transcript. Au-delà, NOX refuse et
-  invite à ouvrir une nouvelle conversation : il ne résume pas, ne fenêtre pas, ne supprime pas
-  les premiers messages.
+- **Une proposition ne porte qu'une tâche.** Il n'existe ni plan de projet structuré, ni
+  génération de backlog : les tâches se proposent une par une, au fil de la discussion.
+- **Seuls les vingt tours les plus récents sont transmis**, dans la limite de 64 Kio. Les plus
+  anciens restent en base et restent affichés, mais ne partent plus. NOX ne les résume pas et ne
+  coupe jamais un tour en deux : ce qui doit survivre à une longue conversation s'écrit dans les
+  documents ou dans la mémoire projet.
+- **Les conversations de conception de tâche restent en lecture seule.** Ouvertes avant
+  `TASK-020`, elles se relisent avec leur tâche et leur consommation ; NOX ne les poursuit pas,
+  ne les fusionne pas et ne les convertit pas.
 - **La sélection du contexte est fixe.** Aucune interface ne permet de cocher un fichier : un
   document utile hors de la liste fermée n'atteindra pas l'architecte.
 - **Le contexte d'un tour passé n'est pas rejouable.** Seuls les manifests sont conservés, pas
   le texte des documents. NOX peut dire *avec quoi* un tour a été produit, jamais reconstituer
   ce contexte. Un diff de contexte dit qu'un document a changé et entre quelles révisions,
   jamais ce qui a changé dedans.
-- Les sessions ouvertes avant `TASK-014` restent en lecture seule.
+- Les sessions ouvertes avant `TASK-014` n'ont jamais enregistré de messages : elles restent
+  consultables, sans transcript reconstruit.
 - La consommation affichée est celle que le fournisseur rapporte. « Non fourni » veut dire ce
   qu'il dit.
 - Le détecteur de secrets de la sanitation n'est pas exhaustif — aucune expression régulière ne
@@ -251,7 +267,8 @@ n'a **aucun outil** : ni `tools`, ni `tool_choice`, ni `previous_response_id`, n
 `NOX_OPENAI_API_KEY` — le préfixe la place hors de portée de Claude Code par construction — et
 ne quitte jamais le serveur. Aucun modèle par défaut, aucune URL de base configurable, aucun
 réessai du SDK. Aucun appel n'est automatique : chaque clic est un appel, et chaque appel est
-facturé. Un contexte modifié après l'aperçu bloque l'envoi, sans option de forçage.
+facturé. Le navigateur ne transmet jamais de contexte — seulement le texte d'un message et un
+compteur qui ne décide de rien. Un onglet resté sur un état dépassé est refusé sans appel.
 
 ### 2.9 Review Architecte d'une exécution
 
@@ -345,27 +362,32 @@ modules.
 
 ---
 
-## 3. Limitation actuelle : une conversation, une tâche
+## 3. Où en est l'écart avec la cible
 
-**C'est l'écart le plus important entre l'implémentation et la cible.**
+### 3.1 Résolu par `TASK-020` : une conversation par projet
 
-Aujourd'hui, une conversation Architecte est ouverte pour concevoir **une** tâche. Elle est
-réservée avant la création, `appliedTaskId` porte un index unique, et pour concevoir une
-seconde tâche il faut ouvrir une nouvelle conversation.
+La limitation la plus structurante de l'état précédent — *une conversation Architecte produit une
+tâche, puis se ferme* — **n'existe plus**. Un projet a désormais une conversation principale,
+durable, qui crée plusieurs tâches au fil du temps.
 
-Cette règle a une justification qui reste valable : elle empêche une session de devenir un
-backlog parallèle, invisible depuis le backlog réel. Elle a été prise quand une conversation
-produisait une tâche isolée, sans plan de projet pour l'accueillir.
+Le verrou qui empêchait les doublons n'a pas disparu : il a changé de porteur. Ce n'est plus la
+conversation qui ne crée qu'une tâche, c'est la **proposition**. Deux clics simultanés sur
+« Create task » produisent toujours exactement une tâche.
 
-Elle **n'est pas la cible**. La direction retenue — [PROJECT_BRIEF.md](PROJECT_BRIEF.md) § 5.6,
-[ROADMAP.md](ROADMAP.md) `TASK-020` — est **une conversation principale par projet**, durable,
-dans laquelle on revient. Le contraire de ce que l'implémentation fait actuellement.
+### 3.2 Ce qui reste à faire
 
-Deux autres limites relèvent du même écart, et tomberont avec lui :
+La conversation existe ; ce qu'elle devrait alimenter n'existe pas encore.
 
-- une spécification ne se modifie pas après création — un plan vivant suppose de pouvoir
-  réécrire ce qui n'a pas été lancé ;
-- il n'existe aucune notion de plan, de backlog généré ni de dépendance entre tâches.
+- **Aucun Project Brief structuré, aucun plan de projet vivant.** La compréhension du projet
+  vit dans ses documents Markdown et dans sa mémoire, pas dans une représentation que NOX
+  saurait relire et réordonner.
+- **Aucune génération multi-tâches.** Une proposition porte une tâche ; produire un backlog
+  ordonné en une opération reste à faire.
+- **Une spécification ne se modifie pas après création.** Un plan vivant suppose de pouvoir
+  réécrire ce qui n'a pas encore été lancé.
+- **Aucune dépendance entre tâches**, aucune replanification structurée.
+
+Voir [ROADMAP.md](ROADMAP.md), `TASK-021` à `TASK-024`.
 
 ---
 
@@ -469,6 +491,7 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `TASK-018` : `f305cf9` (`feat: add structured project memory`),
-  contenant `TASK-017`.
-- `TASK-018` reste **locale**, non indexée et non commitée.
+- Commit de départ de `TASK-020` : `e6b4c89` (`docs: consolidate NOX project documentation`),
+  contenant `TASK-018`. `TASK-019` a été volontairement sautée : l'audit de `TASK-018` a conclu
+  qu'une tâche de nettoyage dédiée n'était pas justifiée.
+- `TASK-020` reste **locale**, non indexée et non commitée.

@@ -302,6 +302,48 @@ doit le dire explicitement et la justifier.
 ### 8.6 Architecte
 
 - **L'Architecte vit dans `apps/web`, côté serveur, et jamais dans le runner.**
+- **Un projet possède au plus une conversation Architecte principale.** La garantie est
+  structurelle : `Project.mainArchitectSessionId`, avec un index unique. Deux ouvertures
+  simultanées n'en produisent qu'une.
+- **Une conversation projet ne se ferme jamais.** Elle n'est jamais `APPLIED`, son
+  `appliedTaskId` reste toujours `null`, et créer une tâche n'y met pas fin.
+- **Une conversation projet crée plusieurs tâches au fil du temps ; une génération n'en crée
+  jamais deux.** Le verrou porte sur `ArchitectGeneration.appliedTaskId`, index unique compris.
+  Réserver précède créer, et la main est rendue si la création échoue.
+- **Le rôle d'une session est déclaré, jamais déduit.** `kind` vaut `PROJECT` ou
+  `TASK_DESIGN_LEGACY` ; un champ vide ne désigne rien.
+- **Les sessions de conception de tâche restent lisibles et inchangées.** Aucune n'est convertie,
+  fusionnée, migrée ni poursuivie, et leurs URL continuent de fonctionner.
+- **Ouvrir une conversation coûte zéro appel.** Le message d'accueil est du texte d'interface :
+  ni stocké, ni transmis, ni compté comme un tour.
+- **Seuls les tours les plus récents sont transmis.** Les plus anciens restent en base et restent
+  affichés. Aucun résumé automatique, aucune compression, et jamais un tour coupé en deux.
+- **La conversation projet est un chat.** Envoyer un message est **une** action humaine
+  explicite, qui déclenche au plus **un** appel. Aucun aperçu obligatoire ne s'intercale : c'est
+  l'envoi lui-même qui reconstruit le contexte côté serveur.
+- **L'inspection du contexte reste disponible, et n'autorise rien.** Elle coûte zéro appel,
+  montre le texte exact qui partirait, et ne conditionne aucun envoi. Une inspection périmée ne
+  bloque pas : l'envoi part avec le contexte d'aujourd'hui, jamais avec celui d'alors.
+- **Le navigateur ne porte jamais de contexte.** Un envoi transmet le texte du message et un
+  compteur de messages, rien d'autre. Ce compteur est un indice : il ne peut qu'obtenir un refus,
+  jamais élargir quoi que ce soit.
+- **Un onglet resté sur un état dépassé est refusé, sans appel**, et son texte lui est rendu.
+- **Un événement local n'est jamais un message.** Une tâche créée s'affiche dans le fil, dérivée
+  de `ArchitectGeneration.appliedTaskId` ; elle n'entre ni dans le transcript, ni dans le prompt,
+  ni dans le décompte de jetons, et aucun `ArchitectMessage` n'est écrit pour elle.
+- **L'attente est un état d'écran, jamais une ligne en base.** Les trois points affichés pendant
+  un envoi, et la bulle du message en cours d'envoi, ne sont ni stockés, ni transmis, ni comptés.
+  Ils disparaissent quand le tour aboutit **comme** quand il échoue : aucun état d'attente ne
+  peut rester bloqué.
+- **NOX ne fait aucun streaming.** La réponse est reçue entière, en un appel, et enregistrée avant
+  d'être affichée ; seule sa **révélation à l'écran** est progressive. Ni streaming réseau, ni
+  SSE, ni route supplémentaire, et le vocabulaire du code ne doit pas laisser croire l'inverse.
+  Cette animation est bornée en durée, ne concerne que la réponse arrivée pendant que la page
+  était ouverte, et l'historique s'affiche toujours d'un bloc.
+- **L'apparence d'un message ne change rien à ce qu'il est.** Alignement et couleur sont de
+  l'affichage : le contenu stocké est identique, et le fournisseur ne voit ni l'un ni l'autre.
+- **L'empreinte enregistrée à un aperçu couvre le tour entier** — contexte, transcript retenu,
+  message en attente — et non le seul contexte projet.
 - **L'Architecte n'a aucun outil.** L'appel ne déclare ni `tools`, ni `tool_choice`, ni
   `previous_response_id`, ni `conversation`, ni mode background. Cette garantie ne repose sur
   aucun prompt.
@@ -322,15 +364,16 @@ doit le dire explicitement et la justifier.
 - **Aucun appel n'est automatique** : ni au chargement, ni au changement d'un champ, ni
   périodiquement, ni après un échec. `maxRetries` vaut zéro. Chaque clic est un appel, et chaque
   appel est facturé.
-- **Vingt générations par session au maximum, échecs compris, et une seule à la fois.** Les
-  verrous sont des mises à jour conditionnelles en base, jamais une vérification suivie d'une
-  écriture.
+- **Une seule génération active à la fois.** Les verrous sont des mises à jour conditionnelles
+  en base, jamais une vérification suivie d'une écriture. Une session de conception de tâche
+  reste bornée à vingt générations ; une conversation projet n'a pas de borne de vie — ce qu'elle
+  protégeait est déjà assuré par le clic obligatoire, l'absence de réessai et le verrou d'unicité.
 - **La conversation appartient à NOX.** Le transcript vit dans SQLite et est reconstruit **en
   entier** à chaque tour ; `store` reste `false`. Il est borné, jamais résumé : au-delà, NOX
   refuse et invite à ouvrir une nouvelle conversation.
-- **Chaque tour reconstruit son contexte** à partir du projet actuel. Il n'existe aucun
-  « continuer avec l'ancien contexte », et un contexte modifié après l'aperçu bloque l'appel —
-  sans `Send anyway`.
+- **Chaque tour reconstruit son contexte** à partir du projet actuel, au moment de l'envoi. Il
+  n'existe aucun « continuer avec l'ancien contexte ». Dans le parcours en deux clics d'une
+  session de conception, un contexte modifié après l'aperçu bloque l'appel — sans `Send anyway`.
 - **L'empreinte de contexte n'est pas une primitive de sécurité** : SHA-256 nu, contrairement à
   l'empreinte de dossier de travail, qui est un HMAC parce qu'elle décide d'une exécution. Ne
   jamais confondre les deux.

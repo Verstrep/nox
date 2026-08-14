@@ -34,6 +34,7 @@
 
 import {
   findArchitectSessionForTask,
+  type ArchitectTaskOrigin,
   getArchitectReviewSummary,
   getDatabaseClient,
   getRunResumeContext,
@@ -69,8 +70,8 @@ import { describeRunnerFailure, type RunnerFailure } from "./runner/errors.ts";
 /** Ce que la page de la tache affiche en plus de l'etat derive. */
 export type GuidedWorkflowView = {
   state: GuidedWorkflowState;
-  /** Session Architecte a l'origine de la tache, lorsqu'il y en a une. */
-  architectSession: { id: string; code: string } | null;
+  /** D'ou vient la tache, lorsqu'un architecte l'a proposee. */
+  architectSession: ArchitectTaskOrigin | null;
   /** Extrait du feedback en attente, pour l'afficher sans le tronquer en base. */
   pendingFeedbackExcerpt: string | null;
 };

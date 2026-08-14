@@ -98,6 +98,26 @@ export function describeArchitectError(code: ArchitectErrorCode): string {
 }
 
 /**
+ * Phrase affichee pour un echec d'envoi, quelle qu'en soit la forme.
+ *
+ * Les trois formes d'echec — code stable, message deja redige, refus de saisie —
+ * se rejoignent ici. Les distinguer sur chaque site d'appel finirait par produire
+ * trois phrases differentes pour la meme cause.
+ */
+export function describeArchitectFailure(
+  failure: { code: ArchitectErrorCode } | { message: string } | { refusal: ArchitectTextRefusal },
+  max: number,
+): string {
+  if ("code" in failure) {
+    return describeArchitectError(failure.code);
+  }
+  if ("refusal" in failure) {
+    return describeArchitectTextRefusal(failure.refusal, max);
+  }
+  return failure.message;
+}
+
+/**
  * Phrase affichee pour un refus de saisie.
  *
  * La meme fonction sert a la demande produit et aux precisions : les deux

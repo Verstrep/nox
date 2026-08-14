@@ -24,6 +24,7 @@ import {
 } from "@nox/shared";
 import {
   createArchitectSession,
+  ensureProjectArchitectSession,
   createDatabaseClient,
   createProject,
   getArchitectSession,
@@ -36,6 +37,7 @@ import { FakeArchitectProvider, type ArchitectProviderResult } from "./provider.
 import {
   fetchArchitectContext,
   reviewArchitectTurn,
+  sendArchitectMessage,
   sendArchitectTurn,
   type ArchitectRepositoryPorts,
 } from "./service.ts";
@@ -310,15 +312,19 @@ describe("reviewArchitectTurn — preparation", () => {
     assert.equal(provider.calls.length, 0);
   });
 
-  it("enregistre le brouillon et son empreinte", async () => {
+  it("enregistre le brouillon et l'empreinte du tour", async () => {
+    // C'est l'empreinte de **tour** qui est retenue, et non celle du seul
+    // contexte projet : un message envoye depuis un second onglet doit rendre
+    // cet apercu perime, alors qu'il ne change aucun document.
     const { sessionId } = await newSession();
     const reviewed = await review(sessionId, "Je veux ameliorer la recherche.");
     assert.ok(reviewed.ok);
 
     const session = await getArchitectSession(db, sessionId);
     assert.equal(session?.pendingTurn?.messageText, "Je veux ameliorer la recherche.");
-    assert.equal(
-      session?.pendingTurn?.contextFingerprint,
+    assert.equal(session?.pendingTurn?.contextFingerprint, reviewed.turn.prepared.turnFingerprint);
+    assert.notEqual(
+      reviewed.turn.prepared.turnFingerprint,
       reviewed.turn.prepared.contextFingerprint,
     );
   });
@@ -358,16 +364,15 @@ describe("reviewArchitectTurn — preparation", () => {
     );
   });
 
-  it("refuse un transcript au-dela de la borne", async () => {
-    // Aucun resume, aucune fenetre : la conversation s'arrete, et le dit.
+  it("ne refuse plus un long transcript : il ecarte les tours les plus anciens", async () => {
+    // Depuis TASK-020, une conversation qui dure ne s'arrete pas. Le message que
+    // l'utilisateur vient d'ecrire est prioritaire ; l'histoire cede la place.
     const { sessionId } = await newSession();
-    const reviewed = await review(sessionId, "x".repeat(ARCHITECT_LIMITS.transcript + 1));
+    const reviewed = await review(sessionId, "Un message ordinaire.");
 
-    assert.equal(reviewed.ok, false);
-    assert.equal(
-      "code" in reviewed ? reviewed.code : null,
-      ARCHITECT_ERROR.ARCHITECT_CONVERSATION_TOO_LARGE,
-    );
+    assert.ok(reviewed.ok);
+    assert.equal(reviewed.turn.prepared.window.omittedTurns, 0);
+    assert.ok(reviewed.turn.prepared.transcriptChars <= ARCHITECT_LIMITS.transcript);
   });
 });
 
@@ -688,5 +693,201 @@ describe("sendArchitectTurn — refus", () => {
 
     assert.equal([left, right].filter((outcome) => outcome.ok).length, 1);
     assert.equal(provider.calls.length, 1);
+  });
+});
+
+
+// --- Envoi direct : le parcours d'une conversation projet ---------------------
+
+/** Ouvre une conversation projet, avec son role declare. */
+async function newProjectSession(): Promise<{ projectId: string; sessionId: string }> {
+  counter += 1;
+  const project = await createProject(db, {
+    name: `Projet direct ${String(counter)}`,
+    description: null,
+    repositoryPath: path.join(workspace, `depot-direct-${String(counter)}`),
+  });
+  const session = await ensureProjectArchitectSession(db, project.id);
+  assert.ok(session !== null);
+  return { projectId: project.id, sessionId: session.id };
+}
+
+/** Envoie un message : c'est `Send`, en un seul clic. */
+async function sendMessage(
+  sessionId: string,
+  provider: FakeArchitectProvider,
+  message: string,
+  overrides: TurnOverrides & { expectedMessageCount?: number } = {},
+) {
+  const session = await getArchitectSession(db, sessionId);
+  assert.ok(session !== null);
+  return sendArchitectMessage(db, {
+    session,
+    projectName: "NOX",
+    repositoryPath: path.join(workspace, "depot"),
+    message,
+    tasks: [],
+    memories: [],
+    model: "modele-de-test",
+    provider,
+    environment: ENVIRONMENT,
+    ports: overrides.ports ?? ports(),
+    expectedMessageCount: overrides.expectedMessageCount ?? session.messages.length,
+  });
+}
+
+describe("sendArchitectMessage — un clic, un appel", () => {
+  it("envoie le premier message d'une conversation neuve", async () => {
+    const { sessionId } = await newProjectSession();
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+
+    const outcome = await sendMessage(sessionId, provider, "Que veux-tu construire ?");
+
+    assert.ok(outcome.ok);
+    assert.equal(provider.calls.length, 1);
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.messages.length, 2);
+    assert.equal(session?.messages[0]?.content, "Que veux-tu construire ?");
+    // Le brouillon a servi de verrou, puis a disparu avec le tour.
+    assert.equal(session?.pendingTurn, null);
+  });
+
+  it("transmet les tours precedents au message suivant", async () => {
+    const { sessionId } = await newProjectSession();
+    const first = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    assert.ok((await sendMessage(sessionId, first, "Premier message.")).ok);
+
+    const second = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    assert.ok((await sendMessage(sessionId, second, "Second message.")).ok);
+
+    const sent = second.calls[0]?.input ?? "";
+    assert.ok(sent.includes("Premier message."), "le premier message est transmis");
+    assert.ok(sent.includes("Second message."), "le nouveau message aussi");
+  });
+
+  it("refuse un message vide sans appeler personne", async () => {
+    const { sessionId } = await newProjectSession();
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+
+    const outcome = await sendMessage(sessionId, provider, "");
+
+    assert.equal(outcome.ok, false);
+    assert.equal("refusal" in outcome ? outcome.refusal : null, "empty");
+    assert.equal(provider.calls.length, 0);
+    assert.equal((await getArchitectSession(db, sessionId))?.generations.length, 0);
+  });
+
+  it("refuse un message d'espaces sans appeler personne", async () => {
+    const { sessionId } = await newProjectSession();
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+
+    const outcome = await sendMessage(sessionId, provider, "   \n  ");
+
+    assert.equal("refusal" in outcome ? outcome.refusal : null, "blank");
+    assert.equal(provider.calls.length, 0);
+  });
+
+  it("refuse un message trop long sans appeler personne", async () => {
+    const { sessionId } = await newProjectSession();
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+
+    const outcome = await sendMessage(
+      sessionId,
+      provider,
+      "a".repeat(ARCHITECT_LIMITS.request + 1),
+    );
+
+    assert.equal("refusal" in outcome ? outcome.refusal : null, "too_long");
+    assert.equal(provider.calls.length, 0);
+    assert.equal((await getArchitectSession(db, sessionId))?.generations.length, 0);
+  });
+
+  it("refuse un onglet reste sur un etat depasse", async () => {
+    const { sessionId } = await newProjectSession();
+    const first = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    assert.ok((await sendMessage(sessionId, first, "L'onglet B parle.")).ok);
+
+    // L'onglet A a ete rendu avant ce tour : il croit la conversation vide.
+    const stale = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const outcome = await sendMessage(sessionId, stale, "L'onglet A repond a l'ancien fil.", {
+      expectedMessageCount: 0,
+    });
+
+    assert.equal(
+      "code" in outcome ? outcome.code : null,
+      ARCHITECT_ERROR.ARCHITECT_CONTEXT_CHANGED,
+    );
+    assert.equal(stale.calls.length, 0, "aucun appel n'est parti");
+    assert.equal((await getArchitectSession(db, sessionId))?.messages.length, 2);
+  });
+
+  it("ne lance qu'un appel sur double envoi concurrent", async () => {
+    const { sessionId } = await newProjectSession();
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON), success(CONTINUE_JSON)]);
+
+    const [left, right] = await Promise.all([
+      sendMessage(sessionId, provider, "Double clic."),
+      sendMessage(sessionId, provider, "Double clic."),
+    ]);
+
+    assert.equal([left, right].filter((outcome) => outcome.ok).length, 1);
+    assert.equal(provider.calls.length, 1);
+    assert.equal((await getArchitectSession(db, sessionId))?.messages.length, 2);
+  });
+
+  it("conclut la generation quand la reponse est invalide", async () => {
+    const { sessionId } = await newProjectSession();
+    const provider = new FakeArchitectProvider([success({ schemaVersion: 2, state: "NOPE" })]);
+
+    const outcome = await sendMessage(sessionId, provider, "Un message.");
+
+    assert.equal(
+      "code" in outcome ? outcome.code : null,
+      ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+    );
+    const session = await getArchitectSession(db, sessionId);
+    // Le verrou est rendu : la conversation reste utilisable.
+    assert.notEqual(session?.status, "GENERATING");
+    assert.equal(session?.messages.length, 0);
+  });
+
+  it("n'est borne par aucun nombre de tours", async () => {
+    const { sessionId } = await newProjectSession();
+    const total = ARCHITECT_LIMITS.generations + 2;
+    const provider = new FakeArchitectProvider(
+      Array.from({ length: total }, () => success(CONTINUE_JSON)),
+    );
+
+    for (let index = 0; index < total; index += 1) {
+      assert.ok(
+        (await sendMessage(sessionId, provider, `Message ${String(index)}.`)).ok,
+        `tour ${String(index + 1)}`,
+      );
+    }
+
+    assert.equal(provider.calls.length, total);
+  });
+
+  it("utilise le contexte courant, jamais celui d'une inspection precedente", async () => {
+    const { sessionId } = await newProjectSession();
+
+    // Une inspection enregistre un brouillon avec l'empreinte d'alors.
+    assert.ok((await review(sessionId, "Texte inspecte.")).ok);
+
+    // Le projet change, puis l'envoi part avec un autre texte.
+    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const outcome = await sendMessage(sessionId, provider, "Texte reellement envoye.", {
+      ports: ports({ revision: REVISED.revision }),
+    });
+
+    assert.ok(outcome.ok, "une inspection perimee ne bloque pas l'envoi");
+    const sent = provider.calls[0]?.input ?? "";
+    assert.ok(sent.includes("Texte reellement envoye."));
+    assert.equal(sent.includes("Texte inspecte."), false);
+    assert.ok(sent.includes(REVISED.revision.slice(0, 4)), "le contexte est celui d'aujourd'hui");
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.messages[0]?.content, "Texte reellement envoye.");
   });
 });

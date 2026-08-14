@@ -20,12 +20,10 @@
  */
 
 import {
-  ARCHITECT_LIMITS,
   ARCHITECT_PROMPT_VERSION,
   renderArchitectPrompt,
   type ArchitectContextManifest,
   type ArchitectPrompt,
-  type ArchitectPromptMessage,
   type DevelopmentTaskDetail,
   type ProjectDocumentSummary,
   type ProjectMemoryEntry,
@@ -36,9 +34,16 @@ import { buildArchitectContext, type FetchedArchitectDocument } from "./context.
 import {
   architectContextFingerprint,
   architectTaskRevision,
+  architectTurnFingerprint,
   projectMemoryRevision,
 } from "./fingerprint.ts";
 import { createArchitectSanitizer } from "./sanitize.ts";
+import {
+  selectTranscriptWindow,
+  transcriptBudget,
+  type TranscriptEntry,
+  type TranscriptWindow,
+} from "./window.ts";
 
 export type PrepareArchitectInput = {
   projectName: string;
@@ -49,7 +54,7 @@ export type PrepareArchitectInput = {
   /** Memoire du projet, dans l'ordre des codes. Les archivees sont ecartees. */
   memories: readonly ProjectMemoryEntry[];
   /** Messages deja echanges, du plus ancien au plus recent. */
-  transcript: readonly ArchitectPromptMessage[];
+  transcript: readonly TranscriptEntry[];
   /** Message que l'utilisateur vient d'ecrire. */
   newMessage: string;
   /** Modele lu dans la configuration serveur ; entre dans l'empreinte d'entree. */
@@ -61,12 +66,20 @@ export type PreparedArchitectGeneration = {
   manifest: ArchitectContextManifest;
   prompt: ArchitectPrompt;
   availableDocuments: string[];
-  /** Empreinte du contexte projet seul. */
+  /** Empreinte du contexte projet seul : documents, memoire, taches recentes. */
   contextFingerprint: string;
-  /** Taille du transcript reellement transmis, en caracteres. */
+  /**
+   * Empreinte de **tout** ce qui part : contexte, transcript retenu, message.
+   *
+   * C'est elle qui est enregistree a l'apercu et recomparee juste avant
+   * l'envoi. Sans le transcript, un message envoye depuis un second onglet
+   * passerait inapercu : le contexte projet, lui, n'aurait pas bouge.
+   */
+  turnFingerprint: string;
+  /** Ce qui a ete retenu du transcript, et ce qui ne l'a pas ete. */
+  window: TranscriptWindow;
+  /** Taille du transcript reellement transmis, message compris. */
   transcriptChars: number;
-  /** Vrai lorsque le transcript depasse la borne : le tour est impossible. */
-  transcriptTooLarge: boolean;
   /** Empreinte deterministe de l'entree logique. Diagnostic, jamais securite. */
   inputHash: string;
 };
@@ -131,15 +144,19 @@ export function prepareArchitectGeneration(
     memoryRevision: projectMemoryRevision,
   });
 
-  const transcript: ArchitectPromptMessage[] = input.transcript.map((message) => ({
+  // La sanitation precede la fenetre, et non l'inverse : le budget doit se
+  // mesurer sur le texte reellement transmis, comme celui de la memoire projet.
+  const sanitized: TranscriptEntry[] = input.transcript.map((message) => ({
     role: message.role,
     content: sanitize(message.content),
     proposal: message.proposal ?? null,
+    turnId: message.turnId,
   }));
   const newMessage = sanitize(input.newMessage);
 
-  const transcriptChars =
-    transcript.reduce((total, message) => total + message.content.length, 0) + newMessage.length;
+  const window = selectTranscriptWindow(sanitized, transcriptBudget(newMessage.length));
+  const transcript = window.messages;
+  const transcriptChars = window.chars + newMessage.length;
 
   const prompt = renderArchitectPrompt({
     projectName: sanitize(input.projectName),
@@ -152,13 +169,16 @@ export function prepareArchitectGeneration(
     newMessage,
   });
 
+  const contextFingerprint = architectContextFingerprint(bundle);
+
   return {
     manifest: bundle.manifest,
     prompt,
     availableDocuments: bundle.availableDocuments,
-    contextFingerprint: architectContextFingerprint(bundle),
+    contextFingerprint,
+    turnFingerprint: architectTurnFingerprint({ contextFingerprint, transcript, newMessage }),
+    window,
     transcriptChars,
-    transcriptTooLarge: transcriptChars > ARCHITECT_LIMITS.transcript,
     inputHash: architectInputHash({
       promptVersion: ARCHITECT_PROMPT_VERSION,
       model: input.model,

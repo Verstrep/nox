@@ -36,13 +36,16 @@
 import {
   ARCHITECT_ERROR,
   ARCHITECT_GENERATION_STATUS,
+  ARCHITECT_LIMITS,
   ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SCHEMA_NAME,
   ARCHITECT_TURN_STATE,
   buildArchitectTurnSchema,
+  checkArchitectText,
   readArchitectTurn,
   type ArchitectContextManifest,
   type ArchitectErrorCode,
+  type ArchitectTextRefusal,
   type ArchitectTurn,
   type DevelopmentTaskDetail,
   type ProjectDocumentSummary,
@@ -223,10 +226,6 @@ export async function prepareArchitectTurn(input: TurnInput): Promise<PrepareTur
     environment: input.environment,
   });
 
-  if (prepared.transcriptTooLarge) {
-    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CONVERSATION_TOO_LARGE };
-  }
-
   const previous = lastComparableGeneration(input.session);
   const previousManifest = previous?.manifest ?? null;
 
@@ -263,7 +262,10 @@ export async function reviewArchitectTurn(
   const saved = await saveArchitectTurnDraft(db, {
     sessionId: input.session.id,
     messageText: input.message,
-    contextFingerprint: prepared.turn.prepared.contextFingerprint,
+    // C'est l'empreinte de **tour** qui est enregistree, et non celle du seul
+    // contexte projet : un message envoye depuis un second onglet doit rendre
+    // cet apercu perime, alors qu'il ne change aucun document.
+    contextFingerprint: prepared.turn.prepared.turnFingerprint,
     manifest: prepared.turn.prepared.manifest,
   });
   if (!saved) {
@@ -276,7 +278,9 @@ export async function reviewArchitectTurn(
 export type SendTurnOutcome =
   | { ok: true; generation: ArchitectGenerationView; turn: ArchitectTurn }
   | { ok: false; code: ArchitectErrorCode }
-  | { ok: false; message: string };
+  | { ok: false; message: string }
+  /** Le texte saisi a ete refuse. Aucun appel, aucune generation reservee. */
+  | { ok: false; refusal: ArchitectTextRefusal };
 
 /** Traduit un refus de reservation en code stable. */
 function reservationCode(
@@ -305,16 +309,11 @@ export type SendTurnInput = Omit<TurnInput, "message"> & {
 };
 
 /**
- * Envoie le tour prepare.
+ * Envoie le tour prepare — parcours de conception de tache.
  *
- * Ne leve jamais : toute panne devient un code, et la generation reservee est
- * conclue en base dans **tous** les cas. Une generation laissee `RUNNING`
- * bloquerait la conversation pour toujours, puisque c'est elle qui porte le
- * verrou.
- *
- * Le message de l'utilisateur vient du brouillon relu en base, jamais du
- * formulaire : c'est ce qui garantit qu'on envoie le texte qui a ete
- * prévisualisé, et qu'un rafraichissement apres reponse ne reemet rien.
+ * Le message vient du brouillon relu en base, jamais du formulaire, et
+ * l'empreinte enregistree a l'apercu doit encore correspondre. C'est le
+ * parcours en deux clics de TASK-014, inchange.
  */
 export async function sendArchitectTurn(
   db: DatabaseClient,
@@ -332,22 +331,130 @@ export async function sendArchitectTurn(
     return prepared;
   }
 
-  if (prepared.turn.prepared.contextFingerprint !== pending.contextFingerprint) {
+  if (prepared.turn.prepared.turnFingerprint !== pending.contextFingerprint) {
     // Aucun appel, aucune generation reservee, aucun quota consomme. Le
     // brouillon reste : l'utilisateur relit le contexte mis a jour et renvoie.
     return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CONTEXT_CHANGED };
   }
 
+  return dispatchArchitectTurn(db, {
+    session: input.session,
+    prepared: prepared.turn.prepared,
+    message: pending.messageText,
+    model: input.model,
+    provider: input.provider,
+    expectedFingerprint: pending.contextFingerprint,
+  });
+}
+
+export type SendMessageInput = TurnInput & {
+  provider: ArchitectProvider;
+  /**
+   * Nombre de messages que le navigateur croyait deja echanges.
+   *
+   * **Indice, jamais autorite.** Il ne decrit pas le contexte et n'en porte
+   * aucun fragment : il sert uniquement a detecter qu'un onglet reste ouvert sur
+   * un etat depasse. Le serveur compare a ce qu'il lit en base, et refuse sans
+   * appeler personne — repondre a une conversation qui a change entre-temps
+   * produirait une branche silencieuse dont l'utilisateur ne verrait rien.
+   */
+  expectedMessageCount: number;
+};
+
+/**
+ * Envoie un message directement — parcours de conversation projet.
+ *
+ * Un clic, un appel. Le contexte, le transcript, la memoire et les taches
+ * recentes sont reconstruits **ici**, au moment de l'envoi : le navigateur
+ * n'apporte que le texte du message et un compteur qui ne decide de rien.
+ *
+ * Aucune etape n'est contournee. La validation du texte, la fenetre de
+ * transcript, les bornes, l'empreinte de tour, la reservation et l'appel sont
+ * exactement ceux du parcours en deux clics — c'est la meme fonction qui les
+ * execute. Ce qui disparait est l'obligation de **regarder** l'apercu, pas
+ * l'apercu lui-meme.
+ */
+export async function sendArchitectMessage(
+  db: DatabaseClient,
+  input: SendMessageInput,
+): Promise<SendTurnOutcome> {
+  // 1. Le texte, avant tout le reste : un message vide ne doit rien couter, pas
+  //    meme une lecture du repository.
+  const refusal = checkArchitectText(input.message, ARCHITECT_LIMITS.request);
+  if (refusal !== null) {
+    return { ok: false, refusal };
+  }
+
+  // 2. L'onglet parle-t-il encore de la conversation courante ?
+  if (input.expectedMessageCount !== input.session.messages.length) {
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CONTEXT_CHANGED };
+  }
+
+  // 3. Le contexte courant, cote serveur.
+  const prepared = await prepareArchitectTurn(input);
+  if (!prepared.ok) {
+    return prepared;
+  }
+
+  // 4. Le brouillon est le verrou : `saveArchitectTurnDraft` refuse pendant
+  //    qu'une generation est en vol. C'est ce qui rend un double clic inoffensif
+  //    sans qu'aucun second mecanisme soit invente.
+  const saved = await saveArchitectTurnDraft(db, {
+    sessionId: input.session.id,
+    messageText: input.message,
+    contextFingerprint: prepared.turn.prepared.turnFingerprint,
+    manifest: prepared.turn.prepared.manifest,
+  });
+  if (!saved) {
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_GENERATION_ACTIVE };
+  }
+
+  return dispatchArchitectTurn(db, {
+    session: input.session,
+    prepared: prepared.turn.prepared,
+    message: input.message,
+    model: input.model,
+    provider: input.provider,
+    expectedFingerprint: prepared.turn.prepared.turnFingerprint,
+  });
+}
+
+type DispatchInput = {
+  session: ArchitectSessionView;
+  prepared: PreparedArchitectGeneration;
+  message: string;
+  model: string;
+  provider: ArchitectProvider;
+  expectedFingerprint: string;
+};
+
+/**
+ * Reserve, appelle, enregistre.
+ *
+ * **Le seul endroit d'ou un appel au fournisseur peut partir.** Les deux
+ * parcours — apercu puis envoi, ou envoi direct — s'y rejoignent : il n'existe
+ * donc qu'une implementation de la reservation, de la conclusion et de
+ * l'ecriture des messages, et aucune ne peut deriver de l'autre.
+ *
+ * Ne leve jamais : toute panne devient un code, et la generation reservee est
+ * conclue en base dans **tous** les cas. Une generation laissee `RUNNING`
+ * bloquerait la conversation pour toujours, puisque c'est elle qui porte le
+ * verrou.
+ */
+async function dispatchArchitectTurn(
+  db: DatabaseClient,
+  input: DispatchInput,
+): Promise<SendTurnOutcome> {
   const reserved = await startArchitectGeneration(db, {
     sessionId: input.session.id,
     model: input.model,
-    promptVersion: prepared.turn.prepared.prompt.version,
-    inputHash: prepared.turn.prepared.inputHash,
-    contextFingerprint: prepared.turn.prepared.contextFingerprint,
-    manifest: prepared.turn.prepared.manifest,
+    promptVersion: input.prepared.prompt.version,
+    inputHash: input.prepared.inputHash,
+    contextFingerprint: input.prepared.contextFingerprint,
+    manifest: input.prepared.manifest,
     // Second controle, dans la transaction : deux clics simultanes ne peuvent
     // pas tous deux trouver le brouillon intact.
-    expectedFingerprint: pending.contextFingerprint,
+    expectedFingerprint: input.expectedFingerprint,
   });
   if (!reserved.ok) {
     return { ok: false, code: reservationCode(reserved.reason) };
@@ -375,8 +482,8 @@ export async function sendArchitectTurn(
   try {
     result = await input.provider.generateTaskTurn({
       model: input.model,
-      instructions: prepared.turn.prepared.prompt.instructions,
-      input: prepared.turn.prepared.prompt.input,
+      instructions: input.prepared.prompt.instructions,
+      input: input.prepared.prompt.input,
       schemaName: ARCHITECT_SCHEMA_NAME,
       schema: buildArchitectTurnSchema(),
       timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
@@ -392,7 +499,7 @@ export async function sendArchitectTurn(
     return fail(result.code);
   }
 
-  const validated = readArchitectTurn(result.value.raw, prepared.turn.prepared.availableDocuments);
+  const validated = readArchitectTurn(result.value.raw, input.prepared.availableDocuments);
   if (!validated.ok) {
     // La reponse respectait le schema strict et reste inacceptable : c'est
     // exactement le cas que la validation metier existe pour attraper.
@@ -427,7 +534,7 @@ export async function sendArchitectTurn(
     // Le tour a abouti : les deux messages deviennent historiques, et le
     // brouillon disparait dans la meme transaction.
     messages: [
-      { role: ARCHITECT_MESSAGE_ROLE.USER, content: pending.messageText },
+      { role: ARCHITECT_MESSAGE_ROLE.USER, content: input.message },
       { role: ARCHITECT_MESSAGE_ROLE.ARCHITECT, content: turn.message },
     ],
   });

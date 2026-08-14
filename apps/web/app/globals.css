@@ -25,3 +25,49 @@ body {
 ::selection {
   background-color: rgb(94 234 212 / 0.25);
 }
+
+/*
+  Attente d'une reponse de l'architecte.
+
+  Les trois points s'eclairent l'un apres l'autre : c'est le decalage qui donne
+  le mouvement, pas la vitesse. Discret volontairement — une attente signalee
+  bruyamment parait plus longue qu'elle ne l'est.
+*/
+@keyframes nox-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.nox-dot {
+  animation: nox-dot 1.2s ease-in-out infinite;
+}
+
+.nox-dot-2 {
+  animation-delay: 0.2s;
+}
+
+.nox-dot-3 {
+  animation-delay: 0.4s;
+}
+
+/*
+  Moins de mouvement : les points restent lisibles, mais immobiles. Le defilement
+  cesse aussi d'etre anime — sauter directement au bon endroit est exactement ce
+  que cette preference demande.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .nox-dot {
+    animation: none;
+    opacity: 0.6;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+}

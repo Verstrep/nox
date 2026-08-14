@@ -1,11 +1,13 @@
-import { TASK_STATUS } from "@nox/shared";
+import { ARCHITECT_SESSION_KIND, TASK_STATUS } from "@nox/shared";
+import { findProjectArchitectSession, getDatabaseClient, listArchitectSessions } from "@nox/database";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { architectHistoryUrl, architectUrl } from "@/lib/architect/display";
 import { loadProjectDocuments } from "@/lib/documents";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatIsoDateTime } from "@/lib/format";
 import { taskStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
 import { countTasksByStatus } from "@/lib/task-display";
@@ -49,6 +51,15 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // meme runner arrete.
   const tasks = await loadProjectTasks(project.id);
   const taskCounts = countTasksByStatus(tasks);
+
+  // La conversation principale est **lue**, jamais creee ici : ouvrir la page
+  // d'un projet ne doit rien ecrire. Elle apparait au premier passage sur sa
+  // propre page, et `null` veut simplement dire « pas encore ouverte ».
+  const db = getDatabaseClient();
+  const architect = await findProjectArchitectSession(db, project.id);
+  const legacyArchitectSessions = (await listArchitectSessions(db, project.id)).filter(
+    (session) => session.kind !== ARCHITECT_SESSION_KIND.PROJECT,
+  ).length;
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -145,21 +156,51 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
         <SectionCard
           title="Architecte"
-          description="Transformer une demande produit en tache structuree, a partir du contexte du projet."
+          description="La conversation durable de ce projet : concevoir, decider, preparer la suite."
           action={
             <Link
-              href={`/projects/${project.id}/architect`}
+              href={architectUrl(project.id)}
               className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
             >
-              Architect
+              {architect === null ? "Open conversation" : "Continue conversation"}
             </Link>
           }
         >
           <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
-            L&apos;architecte lit les documents du projet et ses taches recentes, puis propose une
-            tache que vous relisez avant de la creer. Il ne lance rien, ne modifie aucun fichier, et
-            ne voit ni le code, ni les diffs, ni les sorties de Claude Code.
+            L&apos;architecte lit les documents du projet, sa memoire et ses taches recentes. Il
+            repond, compare des options, et propose une tache quand un prochain increment est
+            clair — vous la relisez avant de la creer. Creer une tache ne ferme pas la
+            conversation : vous y revenez pour la suite.
           </p>
+          <p className="mt-3 max-w-prose text-sm leading-relaxed text-zinc-500">
+            Il ne lance rien, ne modifie aucun fichier, et ne voit ni le code, ni les diffs, ni les
+            sorties de Claude Code. Ouvrir la conversation ne coute aucun appel.
+          </p>
+
+          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-zinc-800 pt-4 text-xs text-zinc-600">
+            {architect === null ? (
+              <span>Aucun tour echange pour le moment.</span>
+            ) : (
+              <span>
+                {architect.generationCount === 0
+                  ? "Aucun tour echange"
+                  : architect.generationCount === 1
+                    ? "1 tour echange"
+                    : `${String(architect.generationCount)} tours echanges`}{" "}
+                · derniere activite {formatIsoDateTime(architect.updatedAt)}
+              </span>
+            )}
+            {legacyArchitectSessions === 0 ? null : (
+              <Link
+                href={architectHistoryUrl(project.id)}
+                className="underline hover:text-zinc-400"
+              >
+                {legacyArchitectSessions === 1
+                  ? "1 conversation historique"
+                  : `${String(legacyArchitectSessions)} conversations historiques`}
+              </Link>
+            )}
+          </div>
         </SectionCard>
 
         <SectionCard

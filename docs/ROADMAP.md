@@ -36,6 +36,8 @@ vide à une exécution relue.
 | 15 | Review Architecte | Bundle issu de l'instantané, verdict et garde d'approbation |
 | 16 | Workflow guidé | Étape courante et prochaine action, dérivées, sans stockage ni IA |
 | 17 | Mémoire projet | Décisions durables, budget refusé à l'écriture, injection tracée |
+| 18 | Consolidation documentaire | Un rôle par document, vision réalignée, audit technique |
+| 20 | Conversation projet | Une conversation durable par projet, plusieurs tâches dans le temps |
 
 **Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
 automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
@@ -43,15 +45,27 @@ résumé silencieux, aucune estimation de coût.
 
 ---
 
-## Étape en cours
+## Étapes récentes
 
-### `TASK-018` — Consolidation documentaire et réalignement produit
+### `TASK-018` — Consolidation documentaire et réalignement produit — terminée
 
-Remettre chaque information dans le document qui en est responsable, réaligner les documents
-de vision sur la direction ci-dessous, et auditer le repository pour identifier la dette
-technique réelle.
+Chaque information remise dans le document qui en est responsable, documents de vision réalignés
+sur la direction ci-dessous, repository audité. Aucun changement fonctionnel.
 
-Aucun changement fonctionnel.
+### `TASK-019` — Nettoyage de dette technique — **sautée**
+
+L'audit de `TASK-018` n'a trouvé ni sous-système obsolète, ni couche dupliquée, ni fichier mort :
+seulement deux helpers de quatre lignes, consignés pour être traités en marge d'une tâche qui
+touchera déjà ces fichiers. Une tâche dédiée n'était pas justifiée.
+
+### `TASK-020` — Project Architect : conversation principale persistante — terminée
+
+Un projet possède désormais une conversation Architecte durable, qui ne se ferme pas quand une
+tâche est créée et qui en produit plusieurs au fil du temps. Les conversations de conception de
+tâche restent lisibles, en lecture seule.
+
+C'était le pivot de toute la suite : le plan, le backlog et la replanification supposent tous un
+endroit durable où la conception vit.
 
 ---
 
@@ -86,20 +100,7 @@ Human validation only when necessary
 Validated delivery
 ```
 
-### `TASK-019` — Nettoyage de dette technique
-
-**Conditionnelle.** N'a lieu de se faire que si `TASK-018` prouve une dette suffisante. Une
-tâche de nettoyage motivée par « le code pourrait être plus propre » coûte une review et
-n'apporte rien.
-
-### `TASK-020` — Project Architect : conversation principale persistante
-
-Une conversation rattachée au projet, et non à une tâche à concevoir. On y revient.
-
-C'est le pivot de toute la suite : le plan, le backlog et la replanification supposent tous un
-endroit durable où la conception vit.
-
-### `TASK-021` — Project Brief structuré et plan de V1 vivant
+### `TASK-021` — Project Brief structuré et plan de V1 vivant — **suivante**
 
 Une compréhension du projet tenue par NOX, structurée et modifiable, et le premier plan qui en
 découle.
