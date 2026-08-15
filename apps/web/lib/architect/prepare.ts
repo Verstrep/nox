@@ -20,14 +20,19 @@
  */
 
 import {
-  ARCHITECT_PROMPT_VERSION,
+  architectTurnSchemaVersion,
   renderArchitectPrompt,
   type ArchitectContextManifest,
   type ArchitectPrompt,
+  type ArchitectPromptBrief,
+  type ArchitectPromptV1Plan,
+  type ArchitectSessionKind,
+  type ArchitectTurnSchemaVersion,
   type DevelopmentTaskDetail,
   type ProjectDocumentSummary,
   type ProjectMemoryEntry,
 } from "@nox/shared";
+import type { ProjectUpdateBase } from "@nox/database";
 import { createHash } from "node:crypto";
 
 import { buildArchitectContext, type FetchedArchitectDocument } from "./context.ts";
@@ -46,6 +51,8 @@ import {
 } from "./window.ts";
 
 export type PrepareArchitectInput = {
+  /** Role de la session : il decide du prompt et de la version de contrat. */
+  sessionKind: ArchitectSessionKind;
   projectName: string;
   repositoryPath: string;
   documents: readonly FetchedArchitectDocument[];
@@ -53,6 +60,10 @@ export type PrepareArchitectInput = {
   tasks: readonly DevelopmentTaskDetail[];
   /** Memoire du projet, dans l'ordre des codes. Les archivees sont ecartees. */
   memories: readonly ProjectMemoryEntry[];
+  /** Brief produit courant, deja sanitise. `null` s'il n'a jamais ete defini. */
+  projectBrief: ArchitectPromptBrief | null;
+  /** Plan de V1 courant, deja sanitise. */
+  projectV1Plan: ArchitectPromptV1Plan | null;
   /** Messages deja echanges, du plus ancien au plus recent. */
   transcript: readonly TranscriptEntry[];
   /** Message que l'utilisateur vient d'ecrire. */
@@ -82,6 +93,21 @@ export type PreparedArchitectGeneration = {
   transcriptChars: number;
   /** Empreinte deterministe de l'entree logique. Diagnostic, jamais securite. */
   inputHash: string;
+  /** Version de contrat attendue de la reponse, derivee du role de la session. */
+  turnSchemaVersion: ArchitectTurnSchemaVersion;
+  /**
+   * Etat structure **vu par le fournisseur** pour ce tour.
+   *
+   * C'est la seule source autorisee des revisions de base d'une proposition de
+   * mise a jour. Elle est produite ici, au moment de construire le contexte, et
+   * transportee en memoire serveur jusqu'a la persistance du resultat.
+   *
+   * Relire l'etat courant a l'arrivee de la reponse serait plus simple et faux :
+   * l'utilisateur peut avoir modifie son plan pendant l'appel, et la proposition
+   * serait alors etiquetee comme batie sur un etat que le modele n'a jamais vu.
+   * Le controle de peremption ne detecterait plus rien.
+   */
+  baseStructuredState: ProjectUpdateBase;
 };
 
 /**
@@ -139,6 +165,8 @@ export function prepareArchitectGeneration(
     inventory: input.inventory,
     tasks: input.tasks,
     memories: input.memories,
+    projectBrief: input.projectBrief,
+    projectV1Plan: input.projectV1Plan,
     sanitize,
     taskRevision: architectTaskRevision,
     memoryRevision: projectMemoryRevision,
@@ -159,10 +187,13 @@ export function prepareArchitectGeneration(
   const transcriptChars = window.chars + newMessage.length;
 
   const prompt = renderArchitectPrompt({
+    sessionKind: input.sessionKind,
     projectName: sanitize(input.projectName),
     instructionDocuments: bundle.instructionDocuments,
     contextDocuments: bundle.contextDocuments,
     projectMemory: bundle.projectMemory,
+    projectBrief: bundle.projectBrief,
+    projectV1Plan: bundle.projectV1Plan,
     recentTasks: bundle.recentTasks,
     availableDocuments: bundle.availableDocuments,
     transcript,
@@ -179,8 +210,13 @@ export function prepareArchitectGeneration(
     turnFingerprint: architectTurnFingerprint({ contextFingerprint, transcript, newMessage }),
     window,
     transcriptChars,
+    turnSchemaVersion: architectTurnSchemaVersion(input.sessionKind),
+    baseStructuredState: {
+      briefRevision: bundle.projectBrief?.revision ?? null,
+      planRevision: bundle.projectV1Plan?.revision ?? null,
+    },
     inputHash: architectInputHash({
-      promptVersion: ARCHITECT_PROMPT_VERSION,
+      promptVersion: prompt.version,
       model: input.model,
       instructions: prompt.instructions,
       input: prompt.input,

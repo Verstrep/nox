@@ -29,6 +29,11 @@
  */
 
 import { checkValidationCommand } from "./claude-commands.js";
+import {
+  PROJECT_UPDATE_ACTIONS,
+  readArchitectProjectUpdate,
+  type ArchitectProjectUpdateProposal,
+} from "./project-plan.js";
 import { createStatusGuard } from "./statuses.js";
 import { TASK_PRIORITIES, isTaskPriority, type TaskPriority } from "./tasks.js";
 
@@ -42,8 +47,28 @@ export const ARCHITECT_SCHEMA_VERSION = 1;
  * questions eventuelles, et une proposition ou rien. La proposition qu'il porte
  * garde, elle, sa version 1 — sa forme n'a pas change, et les propositions
  * persistees avant TASK-014 restent lisibles telles quelles.
+ *
+ * C'est la version des sessions de **conception de tache**. Les conversations
+ * projet sont passees a la version 3 en TASK-021.
  */
 export const ARCHITECT_TURN_SCHEMA_VERSION = 2;
+
+/**
+ * Version du contrat de tour d'une **conversation projet**.
+ *
+ * Elle ajoute un champ, et un seul : `projectUpdate`. Le reste du tour est
+ * identique, et c'est deliberat — une conversation projet ouverte avant
+ * TASK-021 doit pouvoir continuer sans que ses tours passes deviennent
+ * illisibles.
+ *
+ * Les generations enregistrees en version 2 le restent. NOX ne migre aucun
+ * payload : un tour dit quelle version il suivait, et se relit avec elle.
+ */
+export const ARCHITECT_TURN_SCHEMA_VERSION_V3 = 3;
+
+export type ArchitectTurnSchemaVersion =
+  | typeof ARCHITECT_TURN_SCHEMA_VERSION
+  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V3;
 
 /**
  * Issue d'un tour de conversation.
@@ -303,6 +328,26 @@ export const isArchitectSessionKind = createStatusGuard(ARCHITECT_SESSION_KINDS)
  */
 export function architectSessionGenerationLimit(kind: ArchitectSessionKind): number | null {
   return kind === ARCHITECT_SESSION_KIND.PROJECT ? null : ARCHITECT_LIMITS.generations;
+}
+
+/**
+ * Version de contrat d'un tour, selon le role de la session.
+ *
+ * **Le role est declare, jamais deduit.** Une conversation projet parle la
+ * version 3 et peut donc proposer une mise a jour du projet ; une session de
+ * conception de tache reste en version 2, avec exactement le contrat qu'elle
+ * avait le jour de son ouverture.
+ *
+ * Faire dependre la version du `kind` plutot que d'un reglage evite la seule
+ * erreur qui compte ici : envoyer a une session ancienne un schema qu'elle n'a
+ * jamais su lire.
+ */
+export function architectTurnSchemaVersion(
+  kind: ArchitectSessionKind,
+): ArchitectTurnSchemaVersion {
+  return kind === ARCHITECT_SESSION_KIND.PROJECT
+    ? ARCHITECT_TURN_SCHEMA_VERSION_V3
+    : ARCHITECT_TURN_SCHEMA_VERSION;
 }
 
 /**
@@ -579,12 +624,25 @@ export function readArchitectProposal(
  * et n'en persiste aucun.
  */
 export type ArchitectTurn = {
-  schemaVersion: typeof ARCHITECT_TURN_SCHEMA_VERSION;
+  schemaVersion: ArchitectTurnSchemaVersion;
   state: ArchitectTurnState;
   message: string;
   questions: string[];
   /** Proposition complete, ou `null` lorsque la discussion continue. */
   proposal: ArchitectTaskProposal | null;
+  /**
+   * Mise a jour du projet proposee par ce tour, ou `null`.
+   *
+   * Toujours `null` en version 2 : une session de conception de tache ne
+   * propose pas de mise a jour du projet, et le champ n'apparait meme pas dans
+   * son schema.
+   *
+   * **Independante de `state`.** `state` decrit la proposition de *tache*, et
+   * rien d'autre : les quatre combinaisons sont valides, y compris un
+   * `CONTINUE` qui propose une mise a jour du projet sans proposer de tache —
+   * c'est meme le cas le plus courant au debut d'un projet.
+   */
+  projectUpdate: ArchitectProjectUpdateProposal | null;
 };
 
 export type ArchitectTurnResult =
@@ -605,12 +663,13 @@ export type ArchitectTurnResult =
 export function readArchitectTurn(
   value: unknown,
   availableDocuments: readonly string[],
+  expectedVersion: ArchitectTurnSchemaVersion = ARCHITECT_TURN_SCHEMA_VERSION,
 ): ArchitectTurnResult {
   if (!isRecord(value)) {
     return refuse("turn", "La reponse de l'architecte n'est pas une structure lisible.");
   }
 
-  if (value["schemaVersion"] !== ARCHITECT_TURN_SCHEMA_VERSION) {
+  if (value["schemaVersion"] !== expectedVersion) {
     return refuse(
       "schemaVersion",
       "La reponse de l'architecte ne suit pas la version de contrat attendue.",
@@ -642,6 +701,23 @@ export function readArchitectTurn(
     );
   }
 
+  // La mise a jour du projet se lit **avant** la proposition de tache, et
+  // independamment d'elle : `state` ne dit rien a son sujet, et les quatre
+  // combinaisons sont legitimes. En version 2 le champ n'existe pas, et un
+  // fournisseur qui en rendrait un malgre tout serait simplement ignore : une
+  // session de conception de tache n'a jamais eu le droit d'en proposer.
+  let projectUpdate: ArchitectProjectUpdateProposal | null = null;
+  if (expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V3) {
+    const rawUpdate: unknown = value["projectUpdate"];
+    if (isRecord(rawUpdate)) {
+      const readUpdate = readArchitectProjectUpdate(rawUpdate);
+      if (!readUpdate.ok) {
+        return refuse(readUpdate.refusal.field, readUpdate.refusal.message);
+      }
+      projectUpdate = readUpdate.proposal;
+    }
+  }
+
   const rawProposal: unknown = value["proposal"];
 
   if (state === ARCHITECT_TURN_STATE.CONTINUE) {
@@ -653,7 +729,14 @@ export function readArchitectTurn(
     }
     return {
       ok: true,
-      turn: { schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION, state, message, questions, proposal: null },
+      turn: {
+        schemaVersion: expectedVersion,
+        state,
+        message,
+        questions,
+        proposal: null,
+        projectUpdate,
+      },
     };
   }
 
@@ -677,13 +760,14 @@ export function readArchitectTurn(
   return {
     ok: true,
     turn: {
-      schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION,
+      schemaVersion: expectedVersion,
       state,
       message,
       // Une proposition prete n'attend rien : les questions eventuelles du
       // modele seraient contradictoires, et sont ignorees plutot qu'affichees.
       questions: [],
       proposal: validated.proposal,
+      projectUpdate,
     },
   };
 }
@@ -733,31 +817,107 @@ function proposalFieldSchemas(): Record<string, Record<string, unknown>> {
  * `readArchitectTurn` les fait respecter. C'est exactement la raison pour
  * laquelle un schema strict ne dispense jamais d'une validation metier.
  */
-export function buildArchitectTurnSchema(): Record<string, unknown> {
+export function buildArchitectTurnSchema(
+  version: ArchitectTurnSchemaVersion = ARCHITECT_TURN_SCHEMA_VERSION,
+): Record<string, unknown> {
   const fields = proposalFieldSchemas();
 
+  const properties: Record<string, unknown> = {
+    schemaVersion: { type: "integer", enum: [version] },
+    state: { type: "string", enum: [...ARCHITECT_TURN_STATES] },
+    message: {
+      type: "string",
+      description:
+        "Reponse redigee pour l'utilisateur : options, compromis, recommandation. Jamais de raisonnement interne.",
+    },
+    questions: shortStrings(
+      `Questions decisionnelles, au plus ${String(ARCHITECT_LIMITS.questions.max)}, uniquement si l'etat est ${ARCHITECT_TURN_STATE.CONTINUE}.`,
+    ),
+    proposal: {
+      type: ["object", "null"],
+      description: `Proposition de tache, uniquement si l'etat est ${ARCHITECT_TURN_STATE.PROPOSAL_READY}.`,
+      additionalProperties: false,
+      required: Object.keys(fields),
+      properties: fields,
+    },
+  };
+
+  const required = ["schemaVersion", "state", "message", "questions", "proposal"];
+
+  if (version === ARCHITECT_TURN_SCHEMA_VERSION_V3) {
+    properties["projectUpdate"] = projectUpdateSchema();
+    required.push("projectUpdate");
+  }
+
+  return { type: "object", additionalProperties: false, required, properties };
+}
+
+/**
+ * Schema d'une section de mise a jour du projet.
+ *
+ * `action` et `value` sont **toujours** presents, et c'est ce qui rend
+ * l'absence de sens ambigu possible : un champ omis n'a jamais a etre
+ * interprete, puisqu'aucun ne peut l'etre. La coherence entre les deux —
+ * `UNCHANGED` sans valeur, `SET` avec — reste verifiee par
+ * `readArchitectProjectUpdate` : le mode strict garantit une forme, jamais un
+ * invariant.
+ */
+function projectUpdateSection(
+  label: string,
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["schemaVersion", "state", "message", "questions", "proposal"],
+    required: ["action", "value"],
     properties: {
-      schemaVersion: { type: "integer", enum: [ARCHITECT_TURN_SCHEMA_VERSION] },
-      state: { type: "string", enum: [...ARCHITECT_TURN_STATES] },
-      message: {
+      action: {
         type: "string",
-        description:
-          "Reponse redigee pour l'utilisateur : options, compromis, recommandation. Jamais de raisonnement interne.",
+        enum: [...PROJECT_UPDATE_ACTIONS],
+        description: `UNCHANGED laisse ${label} tel quel ; SET le remplace entierement par value.`,
       },
-      questions: shortStrings(
-        `Questions decisionnelles, au plus ${String(ARCHITECT_LIMITS.questions.max)}, uniquement si l'etat est ${ARCHITECT_TURN_STATE.CONTINUE}.`,
-      ),
-      proposal: {
+      value: {
         type: ["object", "null"],
-        description: `Proposition de tache, uniquement si l'etat est ${ARCHITECT_TURN_STATE.PROPOSAL_READY}.`,
+        description: `Nouvel etat complet de ${label}. null lorsque l'action est UNCHANGED.`,
         additionalProperties: false,
         required: Object.keys(fields),
         properties: fields,
       },
+    },
+  };
+}
+
+function projectUpdateSchema(): Record<string, unknown> {
+  const brief = {
+    summary: { type: "string", description: "Le projet en quelques phrases." },
+    problem: { type: "string", description: "Le probleme resolu." },
+    targetUsers: { type: "string", description: "A qui le produit s'adresse." },
+    desiredOutcome: { type: "string", description: "Le resultat vise." },
+    goals: shortStrings("Objectifs du produit."),
+    nonGoals: shortStrings("Ce que le produit ne cherche pas a faire."),
+  };
+
+  const plan = {
+    goal: { type: "string", description: "Ce que la V1 doit accomplir." },
+    inScope: shortStrings("Ce qui fait partie de la V1."),
+    outOfScope: shortStrings("Ce qui n'en fait pas partie."),
+    technicalDirection: { type: "string", description: "La direction technique retenue." },
+    milestones: shortStrings("Capacites atteintes, jamais des taches a faire."),
+  };
+
+  return {
+    type: ["object", "null"],
+    description:
+      "Mise a jour proposee du Project Brief et du Living V1 Plan. null lorsque ce tour n'etablit rien de durable. Independante de state et de proposal.",
+    additionalProperties: false,
+    required: ["reason", "brief", "plan"],
+    properties: {
+      reason: {
+        type: "string",
+        description: "Pourquoi cette mise a jour, en une ou deux phrases.",
+      },
+      brief: projectUpdateSection("le Project Brief", brief),
+      plan: projectUpdateSection("le Living V1 Plan", plan),
     },
   };
 }
@@ -775,8 +935,11 @@ export const ARCHITECT_SCHEMA_NAME = "nox_architect_turn";
  * texte, ni secret — seulement de quoi retrouver la version utilisee.
  */
 export type ArchitectContextSource = {
-  kind: "INSTRUCTIONS" | "DOCUMENT" | "TASK" | "MEMORY";
-  /** Chemin relatif d'un document, code d'une tache, ou code d'une memoire. */
+  kind: "INSTRUCTIONS" | "DOCUMENT" | "TASK" | "MEMORY" | "PROJECT_BRIEF" | "PROJECT_V1_PLAN";
+  /**
+   * Chemin relatif d'un document, code d'une tache, code d'une memoire, ou nom
+   * fixe de l'etat structure — il n'y en a qu'un de chaque par projet.
+   */
   identifier: string;
   /** Revision SHA-256 du contenu envoye, lorsqu'elle existe. */
   revision: string | null;
@@ -801,7 +964,24 @@ export type ArchitectContextManifest = {
   missing: string[];
 };
 
-const CONTEXT_SOURCE_KINDS: readonly string[] = ["INSTRUCTIONS", "DOCUMENT", "TASK", "MEMORY"];
+const CONTEXT_SOURCE_KINDS: readonly string[] = [
+  "INSTRUCTIONS",
+  "DOCUMENT",
+  "TASK",
+  "MEMORY",
+  "PROJECT_BRIEF",
+  "PROJECT_V1_PLAN",
+];
+
+/**
+ * Identifiants de l'etat structure dans le manifest.
+ *
+ * Fixes, parce qu'un projet ne possede qu'un brief et qu'un plan. Les nommer
+ * evite qu'ils se confondent avec `docs/PROJECT_BRIEF.md`, qui est un document
+ * du repository et une source **distincte**.
+ */
+export const ARCHITECT_BRIEF_IDENTIFIER = "Project Brief";
+export const ARCHITECT_V1_PLAN_IDENTIFIER = "Living V1 Plan";
 
 function isContextSource(value: unknown): value is ArchitectContextSource {
   return (

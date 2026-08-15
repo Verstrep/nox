@@ -32,6 +32,7 @@ base SQLite dans le dossier du projet.
 | **Review Architecte** | Faire relire une exécution terminée et obtenir une recommandation motivée |
 | **Workflow guidé** | Savoir, sur la page d'une tâche, quelle est l'étape courante et ce qui a du sens ensuite |
 | **Mémoire projet** | Enregistrer décisions, contraintes, conventions et connaissances durables, et les faire suivre à l'Architecte |
+| **Project plan** | Tenir le Project Brief et le Living V1 Plan du projet, à la main ou en appliquant une proposition relue de l'Architecte |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
 modèles, aucun commit, aucun push, aucun résumé silencieux, aucune estimation de coût. Les

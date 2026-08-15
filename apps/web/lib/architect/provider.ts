@@ -25,7 +25,15 @@
  * — un retour d'erreur remonte a l'utilisateur, qui recliquera s'il le souhaite.
  */
 
-import type { ArchitectErrorCode, ArchitectUsage } from "@nox/shared";
+import {
+  ARCHITECT_TURN_SCHEMA_VERSION_V3,
+  ARCHITECT_TURN_STATE,
+  PROJECT_UPDATE_ACTION,
+  type ArchitectErrorCode,
+  type ArchitectUsage,
+  type ProjectBriefInput,
+  type ProjectV1PlanInput,
+} from "@nox/shared";
 
 export type ArchitectProviderInput = {
   model: string;
@@ -99,4 +107,110 @@ export class FakeArchitectProvider implements ArchitectProvider {
     this.reviewCalls.push(input);
     return this.#next(input);
   }
+}
+
+/**
+ * Reponses de tour programmables, pour les tests et le test fonctionnel.
+ *
+ * ## Pourquoi ces constructeurs existent
+ *
+ * Parce que `state` et `projectUpdate` sont **independants**, et que cette
+ * independance doit etre exercee, pas seulement affirmee. Les quatre
+ * combinaisons sont donc constructibles explicitement :
+ *
+ * ```text
+ * A  CONTINUE        tache non   mise a jour non
+ * B  CONTINUE        tache non   mise a jour oui
+ * C  PROPOSAL_READY  tache oui   mise a jour non
+ * D  PROPOSAL_READY  tache oui   mise a jour oui
+ * ```
+ *
+ * Aucune de ces valeurs ne quitte les tests : ce sont des reponses simulees,
+ * jamais un appel.
+ */
+export type FakeTaskProposal = {
+  title: string;
+  priority: string;
+  objective: string;
+  context?: string | null;
+  acceptanceCriteria: string[];
+  outOfScope?: string[];
+  documentReferences?: string[];
+  validationCommands?: string[];
+  assumptions?: string[];
+};
+
+export type FakeProjectUpdate = {
+  reason: string;
+  brief?: ProjectBriefInput | null;
+  plan?: ProjectV1PlanInput | null;
+};
+
+/** Une section de mise a jour, dans la forme attendue par le contrat v3. */
+function fakeSection<TValue>(value: TValue | null | undefined): {
+  action: string;
+  value: TValue | null;
+} {
+  return value === null || value === undefined
+    ? { action: PROJECT_UPDATE_ACTION.UNCHANGED, value: null }
+    : { action: PROJECT_UPDATE_ACTION.SET, value };
+}
+
+/**
+ * Construit la charge utile d'un tour de conversation projet.
+ *
+ * Rend l'objet **brut**, tel qu'un fournisseur le renverrait : il traversera
+ * ensuite `readArchitectTurn` comme n'importe quelle reponse reelle. Court-
+ * circuiter cette validation ferait des tests une preuve de rien.
+ */
+export function fakeProjectTurn(options: {
+  message?: string;
+  questions?: string[];
+  proposal?: FakeTaskProposal | null;
+  projectUpdate?: FakeProjectUpdate | null;
+}): Record<string, unknown> {
+  const proposal = options.proposal ?? null;
+  const update = options.projectUpdate ?? null;
+
+  return {
+    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V3,
+    state:
+      proposal === null ? ARCHITECT_TURN_STATE.CONTINUE : ARCHITECT_TURN_STATE.PROPOSAL_READY,
+    message: options.message ?? "Voici ce que je propose.",
+    questions: options.questions ?? [],
+    proposal:
+      proposal === null
+        ? null
+        : {
+            title: proposal.title,
+            priority: proposal.priority,
+            objective: proposal.objective,
+            context: proposal.context ?? null,
+            acceptanceCriteria: proposal.acceptanceCriteria,
+            outOfScope: proposal.outOfScope ?? [],
+            documentReferences: proposal.documentReferences ?? [],
+            validationCommands: proposal.validationCommands ?? [],
+            assumptions: proposal.assumptions ?? [],
+          },
+    projectUpdate:
+      update === null
+        ? null
+        : {
+            reason: update.reason,
+            brief: fakeSection(update.brief),
+            plan: fakeSection(update.plan),
+          },
+  };
+}
+
+/** Enveloppe une charge utile dans une reponse reussie du fournisseur. */
+export function fakeProviderSuccess(raw: unknown): ArchitectProviderResult {
+  return {
+    ok: true,
+    value: {
+      raw,
+      responseId: "resp_fake",
+      usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: null },
+    },
+  };
 }

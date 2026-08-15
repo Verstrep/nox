@@ -1,0 +1,11 @@
+-- TASK-021 : conserver ce que l'utilisateur a reellement applique.
+--
+-- `proposedJson` porte la reponse du fournisseur et ne bouge jamais. Une
+-- proposition peut etre modifiee avant d'etre appliquee ; sans cette colonne,
+-- cette modification serait invisible et l'historique laisserait croire que le
+-- projet a recu exactement ce que le modele avait suggere.
+--
+-- Purement additive : une colonne nullable, sur une table dont aucune ligne
+-- n'existe encore en production. Aucune table n'est reconstruite, aucune donnee
+-- n'est reecrite, aucune contrainte existante n'est modifiee.
+ALTER TABLE "ArchitectProjectUpdate" ADD COLUMN "appliedJson" TEXT;

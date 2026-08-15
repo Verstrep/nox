@@ -72,6 +72,15 @@ const CONTINUE_JSON = {
   proposal: null,
 };
 
+/**
+ * Tour de discussion d'une **conversation projet**.
+ *
+ * Version 3 : le contrat d'une session `PROJECT` depuis TASK-021. `projectUpdate`
+ * y est toujours present, et vaut `null` quand le tour n'etablit rien de durable
+ * — ce qui est le cas ordinaire.
+ */
+const CONTINUE_V3 = { ...CONTINUE_JSON, schemaVersion: 3, projectUpdate: null };
+
 /** Tour portant une proposition complete. */
 const READY_JSON = {
   schemaVersion: 2,
@@ -104,6 +113,27 @@ function success(raw: unknown): ArchitectProviderResult {
 
 /** Documents relus apres modification du projet. */
 const REVISED = { revision: "b".repeat(64) };
+
+/** Aucun brief, aucun plan : l'etat de depart de tout projet. */
+const NO_STRUCTURED_STATE = {
+  brief: { present: false, stored: null, prompt: null, revision: null, chars: 0 },
+  plan: { present: false, stored: null, prompt: null, revision: null, chars: 0 },
+  combinedChars: 0,
+};
+
+/**
+ * Nettoyeur et revisions du test.
+ *
+ * Deterministes et sans `node:crypto` : ce test ne verifie pas la forme d'une
+ * revision, seulement qu'elle circule au bon endroit.
+ */
+const PLAN_TOOLS = {
+  sanitize: (value: string): string => value,
+  revisions: {
+    brief: (): string => "revision-brief-de-test",
+    plan: (): string => "revision-plan-de-test",
+  },
+};
 
 /**
  * Ports simules : un inventaire et deux documents, sans runner.
@@ -194,6 +224,9 @@ async function review(sessionId: string, message: string, overrides: TurnOverrid
     message,
     tasks: [],
     memories: [],
+    structuredState: NO_STRUCTURED_STATE,
+    projectId: session.projectId,
+    planTools: PLAN_TOOLS,
     model: "modele-de-test",
     environment: ENVIRONMENT,
     ports: overrides.ports ?? ports(),
@@ -214,6 +247,9 @@ async function send(
     repositoryPath: path.join(workspace, "depot"),
     tasks: [],
     memories: [],
+    structuredState: NO_STRUCTURED_STATE,
+    projectId: session.projectId,
+    planTools: PLAN_TOOLS,
     model: "modele-de-test",
     provider,
     environment: ENVIRONMENT,
@@ -728,6 +764,9 @@ async function sendMessage(
     message,
     tasks: [],
     memories: [],
+    structuredState: NO_STRUCTURED_STATE,
+    projectId: session.projectId,
+    planTools: PLAN_TOOLS,
     model: "modele-de-test",
     provider,
     environment: ENVIRONMENT,
@@ -739,7 +778,7 @@ async function sendMessage(
 describe("sendArchitectMessage — un clic, un appel", () => {
   it("envoie le premier message d'une conversation neuve", async () => {
     const { sessionId } = await newProjectSession();
-    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const provider = new FakeArchitectProvider([success(CONTINUE_V3)]);
 
     const outcome = await sendMessage(sessionId, provider, "Que veux-tu construire ?");
 
@@ -755,10 +794,10 @@ describe("sendArchitectMessage — un clic, un appel", () => {
 
   it("transmet les tours precedents au message suivant", async () => {
     const { sessionId } = await newProjectSession();
-    const first = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const first = new FakeArchitectProvider([success(CONTINUE_V3)]);
     assert.ok((await sendMessage(sessionId, first, "Premier message.")).ok);
 
-    const second = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const second = new FakeArchitectProvider([success(CONTINUE_V3)]);
     assert.ok((await sendMessage(sessionId, second, "Second message.")).ok);
 
     const sent = second.calls[0]?.input ?? "";
@@ -768,7 +807,7 @@ describe("sendArchitectMessage — un clic, un appel", () => {
 
   it("refuse un message vide sans appeler personne", async () => {
     const { sessionId } = await newProjectSession();
-    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const provider = new FakeArchitectProvider([success(CONTINUE_V3)]);
 
     const outcome = await sendMessage(sessionId, provider, "");
 
@@ -780,7 +819,7 @@ describe("sendArchitectMessage — un clic, un appel", () => {
 
   it("refuse un message d'espaces sans appeler personne", async () => {
     const { sessionId } = await newProjectSession();
-    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const provider = new FakeArchitectProvider([success(CONTINUE_V3)]);
 
     const outcome = await sendMessage(sessionId, provider, "   \n  ");
 
@@ -790,7 +829,7 @@ describe("sendArchitectMessage — un clic, un appel", () => {
 
   it("refuse un message trop long sans appeler personne", async () => {
     const { sessionId } = await newProjectSession();
-    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const provider = new FakeArchitectProvider([success(CONTINUE_V3)]);
 
     const outcome = await sendMessage(
       sessionId,
@@ -805,11 +844,11 @@ describe("sendArchitectMessage — un clic, un appel", () => {
 
   it("refuse un onglet reste sur un etat depasse", async () => {
     const { sessionId } = await newProjectSession();
-    const first = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const first = new FakeArchitectProvider([success(CONTINUE_V3)]);
     assert.ok((await sendMessage(sessionId, first, "L'onglet B parle.")).ok);
 
     // L'onglet A a ete rendu avant ce tour : il croit la conversation vide.
-    const stale = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const stale = new FakeArchitectProvider([success(CONTINUE_V3)]);
     const outcome = await sendMessage(sessionId, stale, "L'onglet A repond a l'ancien fil.", {
       expectedMessageCount: 0,
     });
@@ -824,7 +863,7 @@ describe("sendArchitectMessage — un clic, un appel", () => {
 
   it("ne lance qu'un appel sur double envoi concurrent", async () => {
     const { sessionId } = await newProjectSession();
-    const provider = new FakeArchitectProvider([success(CONTINUE_JSON), success(CONTINUE_JSON)]);
+    const provider = new FakeArchitectProvider([success(CONTINUE_V3), success(CONTINUE_V3)]);
 
     const [left, right] = await Promise.all([
       sendMessage(sessionId, provider, "Double clic."),
@@ -856,7 +895,7 @@ describe("sendArchitectMessage — un clic, un appel", () => {
     const { sessionId } = await newProjectSession();
     const total = ARCHITECT_LIMITS.generations + 2;
     const provider = new FakeArchitectProvider(
-      Array.from({ length: total }, () => success(CONTINUE_JSON)),
+      Array.from({ length: total }, () => success(CONTINUE_V3)),
     );
 
     for (let index = 0; index < total; index += 1) {
@@ -876,7 +915,7 @@ describe("sendArchitectMessage — un clic, un appel", () => {
     assert.ok((await review(sessionId, "Texte inspecte.")).ok);
 
     // Le projet change, puis l'envoi part avec un autre texte.
-    const provider = new FakeArchitectProvider([success(CONTINUE_JSON)]);
+    const provider = new FakeArchitectProvider([success(CONTINUE_V3)]);
     const outcome = await sendMessage(sessionId, provider, "Texte reellement envoye.", {
       ports: ports({ revision: REVISED.revision }),
     });

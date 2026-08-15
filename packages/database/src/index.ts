@@ -171,3 +171,45 @@ export {
   toDatabaseFilePath,
   toSqliteUrl,
 } from "./paths.js";
+
+export {
+  buildStructuredStateFromRows,
+  getProjectBrief,
+  getProjectV1Plan,
+  loadProjectStructuredState,
+  readProjectPlanRows,
+  sanitizedBrief,
+  sanitizedBriefChars,
+  sanitizedV1Plan,
+  sanitizedV1PlanChars,
+  saveProjectBrief,
+  saveProjectV1Plan,
+  writeProjectBriefRow,
+  writeProjectV1PlanRow,
+} from "./project-plan.js";
+
+export type {
+  ProjectPlanQueryClient,
+  ProjectPlanRevisions,
+  ProjectPlanRows,
+  ProjectPlanSanitizer,
+  ProjectPlanTools,
+  ProjectPlanWriteResult,
+  ProjectStructuredState,
+} from "./project-plan.js";
+
+export {
+  applyArchitectProjectUpdate,
+  createArchitectProjectUpdate,
+  dismissArchitectProjectUpdate,
+  getArchitectProjectUpdate,
+  getArchitectProjectUpdateForGeneration,
+  listArchitectProjectUpdatesForSession,
+} from "./architect-project-update.js";
+
+export type {
+  ArchitectProjectUpdateView,
+  CreateProjectUpdateResult,
+  ProjectUpdateActionResult,
+  ProjectUpdateBase,
+} from "./architect-project-update.js";

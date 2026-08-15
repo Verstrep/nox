@@ -31,10 +31,12 @@
  */
 
 import type {
+  ArchitectPromptBrief,
   ArchitectPromptDocument,
   ArchitectPromptMemory,
   ArchitectPromptMessage,
   ArchitectPromptTask,
+  ArchitectPromptV1Plan,
 } from "@nox/shared";
 import { createHash, type Hash } from "node:crypto";
 
@@ -118,6 +120,51 @@ export function projectMemoryRevision(memory: ArchitectPromptMemory): string {
   return hash.digest("hex");
 }
 
+/**
+ * Revision du brief produit, calculee sur le texte reellement envoye.
+ *
+ * ## Pourquoi le texte sanitise
+ *
+ * Meme raison que la memoire : la revision doit decrire ce que le fournisseur a
+ * **recu**. Un brief dont la sanitation a masque une valeur `NOX_*` part
+ * different de ce qui est stocke, et hacher la saisie brute ferait croire a
+ * l'historique qu'un autre texte avait ete transmis.
+ *
+ * ## Pourquoi l'ordre des listes compte
+ *
+ * Deux objectifs intervertis ne se lisent pas pareil, donc ne produisent pas le
+ * meme prompt. Chaque champ est precede de sa longueur, et chaque liste de son
+ * nombre d'entrees : sans cela, deplacer une frontiere entre deux champs
+ * produirait la meme empreinte pour deux briefs differents.
+ *
+ * `id`, `createdAt` et `updatedAt` n'y figurent pas. Un horodatage dit quand une
+ * ligne a ete touchee, pas ce qu'elle contient — et une reecriture a l'identique
+ * ne doit pas se signaler comme un changement.
+ */
+export function projectBriefRevision(brief: ArchitectPromptBrief): string {
+  const hash = createHash("sha256");
+  field(hash, "project-brief/1");
+  field(hash, brief.summary);
+  field(hash, brief.problem);
+  field(hash, brief.targetUsers);
+  field(hash, brief.desiredOutcome);
+  fieldList(hash, brief.goals);
+  fieldList(hash, brief.nonGoals);
+  return hash.digest("hex");
+}
+
+/** Revision du plan de V1. Memes regles que le brief. */
+export function projectV1PlanRevision(plan: ArchitectPromptV1Plan): string {
+  const hash = createHash("sha256");
+  field(hash, "project-v1-plan/1");
+  field(hash, plan.goal);
+  field(hash, plan.technicalDirection);
+  fieldList(hash, plan.inScope);
+  fieldList(hash, plan.outOfScope);
+  fieldList(hash, plan.milestones);
+  return hash.digest("hex");
+}
+
 /** Ajoute un document, contenu et sort de troncature compris. */
 function fieldDocument(hash: Hash, document: ArchitectPromptDocument): void {
   field(hash, document.path);
@@ -139,6 +186,13 @@ function fieldDocument(hash: Hash, document: ArchitectPromptDocument): void {
 export function architectContextFingerprint(bundle: ArchitectContextBundle): string {
   const hash = createHash("sha256");
   field(hash, ARCHITECT_CONTEXT_FINGERPRINT_VERSION);
+
+  // L'etat structure entre dans l'empreinte : modifier un resume, reordonner
+  // une etape ou definir un plan change ce qui part, donc doit se signaler.
+  // Une absence est distinguee d'un objet vide — les deux ne disent pas la meme
+  // chose au fournisseur.
+  field(hash, bundle.projectBrief === null ? "no-brief" : bundle.projectBrief.revision);
+  field(hash, bundle.projectV1Plan === null ? "no-plan" : bundle.projectV1Plan.revision);
 
   hash.update(String(bundle.instructionDocuments.length));
   hash.update(" ");

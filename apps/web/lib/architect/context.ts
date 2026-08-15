@@ -39,12 +39,16 @@
  */
 
 import {
+  ARCHITECT_BRIEF_IDENTIFIER,
+  ARCHITECT_V1_PLAN_IDENTIFIER,
   PROJECT_MEMORY_STATUS,
   type ArchitectContextManifest,
   type ArchitectContextSource,
   type ArchitectPromptDocument,
   type ArchitectPromptMemory,
+  type ArchitectPromptBrief,
   type ArchitectPromptTask,
+  type ArchitectPromptV1Plan,
   type DevelopmentTaskDetail,
   type ProjectDocumentSummary,
   type ProjectMemoryEntry,
@@ -123,6 +127,20 @@ export type ArchitectContextInput = {
    * dans le constructeur, pas dans la discipline de l'appelant.
    */
   memories: readonly ProjectMemoryEntry[];
+  /**
+   * Brief produit courant, deja sanitise et porteur de sa revision.
+   *
+   * `null` signifie « jamais defini ». Un brief defini mais vide est un objet
+   * present dont les champs sont vides : les deux ne se confondent pas, et le
+   * prompt le dit explicitement.
+   *
+   * Il arrive **deja nettoye** parce que sa revision et son budget se mesurent
+   * sur le texte transmis, et que ce calcul a lieu a l'ecriture. Le renettoyer
+   * ici produirait le meme texte pour un travail double.
+   */
+  projectBrief: ArchitectPromptBrief | null;
+  /** Plan de V1 courant, deja sanitise. */
+  projectV1Plan: ArchitectPromptV1Plan | null;
   /** Nettoyeur applique a **toute** chaine transmise. */
   sanitize: (value: string) => string;
   /**
@@ -143,10 +161,42 @@ export type ArchitectContextBundle = {
   contextDocuments: ArchitectPromptDocument[];
   /** Entrees actives, sanitisees, dans l'ordre des codes. */
   projectMemory: ArchitectPromptMemory[];
+  projectBrief: ArchitectPromptBrief | null;
+  projectV1Plan: ArchitectPromptV1Plan | null;
   recentTasks: ArchitectPromptTask[];
   /** Liste fermee des chemins referencables par une proposition. */
   availableDocuments: string[];
 };
+
+/**
+ * Cout d'un brief, mesure sur le texte transmis.
+ *
+ * Le meme calcul qu'a l'ecriture : une valeur acceptee par la couche de
+ * persistance tient donc necessairement dans le contexte. Deux mesures
+ * differentes finiraient par autoriser un brief que le contexte ne pourrait pas
+ * transporter.
+ */
+function briefChars(brief: ArchitectPromptBrief): number {
+  return (
+    brief.summary.length +
+    brief.problem.length +
+    brief.targetUsers.length +
+    brief.desiredOutcome.length +
+    brief.goals.reduce((total, entry) => total + entry.length, 0) +
+    brief.nonGoals.reduce((total, entry) => total + entry.length, 0)
+  );
+}
+
+/** Cout d'un plan de V1. */
+function planChars(plan: ArchitectPromptV1Plan): number {
+  return (
+    plan.goal.length +
+    plan.technicalDirection.length +
+    plan.inScope.reduce((total, entry) => total + entry.length, 0) +
+    plan.outOfScope.reduce((total, entry) => total + entry.length, 0) +
+    plan.milestones.reduce((total, entry) => total + entry.length, 0)
+  );
+}
 
 /**
  * Coupe un texte en gardant son debut et sa fin.
@@ -280,6 +330,40 @@ export function buildArchitectContext(input: ArchitectContextInput): ArchitectCo
     return { path, revision: found.revision, truncated, content: text };
   };
 
+  // L'etat structure passe **avant tout le reste**, et pour deux raisons.
+  //
+  // La premiere est le sens : c'est l'intention produit actuelle, validee par
+  // l'utilisateur, quand un document du repository peut avoir pris du retard.
+  //
+  // La seconde est arithmetique, et c'est elle qui tient la garantie « jamais
+  // tronque ». Son budget d'ecriture vaut 16 Kio, les conventions consomment au
+  // plus 64 Kio, la memoire active 48 Kio : les trois categories qui ne doivent
+  // jamais etre coupees tiennent exactement dans les 128 Kio du contexte. Taches
+  // et documents se partagent ce qui reste, et eux ont le droit d'etre coupes.
+  if (input.projectBrief !== null) {
+    const chars = briefChars(input.projectBrief);
+    remaining -= chars;
+    sources.push({
+      kind: "PROJECT_BRIEF",
+      identifier: ARCHITECT_BRIEF_IDENTIFIER,
+      revision: input.projectBrief.revision,
+      includedChars: chars,
+      truncated: false,
+    });
+  }
+
+  if (input.projectV1Plan !== null) {
+    const chars = planChars(input.projectV1Plan);
+    remaining -= chars;
+    sources.push({
+      kind: "PROJECT_V1_PLAN",
+      identifier: ARCHITECT_V1_PLAN_IDENTIFIER,
+      revision: input.projectV1Plan.revision,
+      includedChars: chars,
+      truncated: false,
+    });
+  }
+
   const instructionDocuments: ArchitectPromptDocument[] = [];
   for (const path of ARCHITECT_INSTRUCTION_DOCUMENTS) {
     const document = takeDocument(path, "INSTRUCTIONS");
@@ -366,6 +450,8 @@ export function buildArchitectContext(input: ArchitectContextInput): ArchitectCo
     instructionDocuments,
     contextDocuments,
     projectMemory,
+    projectBrief: input.projectBrief,
+    projectV1Plan: input.projectV1Plan,
     recentTasks,
     availableDocuments: buildAvailableDocuments(input.inventory),
   };

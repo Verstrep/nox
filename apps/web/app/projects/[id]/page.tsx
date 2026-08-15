@@ -9,6 +9,13 @@ import { architectHistoryUrl, architectUrl } from "@/lib/architect/display";
 import { loadProjectDocuments } from "@/lib/documents";
 import { formatDateTime, formatIsoDateTime } from "@/lib/format";
 import { taskStatusLabel } from "@/lib/labels";
+import {
+  briefSectionState,
+  planSectionState,
+  planSectionStateLabel,
+  planUrl,
+} from "@/lib/plan-display";
+import { loadStructuredState } from "@/lib/project-plan";
 import { loadProject } from "@/lib/projects";
 import { countTasksByStatus } from "@/lib/task-display";
 import { loadProjectTasks } from "@/lib/tasks";
@@ -57,6 +64,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // propre page, et `null` veut simplement dire « pas encore ouverte ».
   const db = getDatabaseClient();
   const architect = await findProjectArchitectSession(db, project.id);
+
+  // L'etat structure vient de SQLite : la carte reste exacte runner arrete, et
+  // l'afficher ne coute aucun appel au fournisseur.
+  const structured = await loadStructuredState(db, project);
+  const briefState = briefSectionState(structured.brief.present, structured.brief.stored);
+  const v1PlanState = planSectionState(structured.plan.present, structured.plan.stored);
   const legacyArchitectSessions = (await listArchitectSessions(db, project.id)).filter(
     (session) => session.kind !== ARCHITECT_SESSION_KIND.PROJECT,
   ).length;
@@ -133,6 +146,36 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           ) : (
             <p className="text-sm text-amber-200/90">{documents.message}</p>
           )}
+        </SectionCard>
+
+        <SectionCard
+          title="Project plan"
+          description="Project Brief et Living V1 Plan : l'intention produit actuelle de ce projet."
+          action={
+            <Link
+              href={planUrl(project.id)}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Open plan
+            </Link>
+          }
+        >
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Brief</dt>
+              <dd className="mt-1 text-sm text-zinc-300">{planSectionStateLabel(briefState)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">V1 plan</dt>
+              <dd className="mt-1 text-sm text-zinc-300">{planSectionStateLabel(v1PlanState)}</dd>
+            </div>
+          </dl>
+
+          <p className="mt-5 max-w-prose text-sm leading-relaxed text-zinc-400">
+            Cet etat accompagne chaque conversation Architecte, et prime sur la documentation du
+            repository pour l&apos;intention produit. NOX ne le modifie jamais seul : une
+            proposition de l&apos;Architecte attend toujours votre validation.
+          </p>
         </SectionCard>
 
         <SectionCard

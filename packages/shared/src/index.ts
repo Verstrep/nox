@@ -252,10 +252,12 @@ export {
   ARCHITECT_SESSION_STATUS,
   ARCHITECT_SESSION_STATUSES,
   ARCHITECT_TURN_SCHEMA_VERSION,
+  ARCHITECT_TURN_SCHEMA_VERSION_V3,
   ARCHITECT_TURN_STATE,
   ARCHITECT_TURN_STATES,
   EMPTY_ARCHITECT_USAGE,
   architectSessionGenerationLimit,
+  architectTurnSchemaVersion,
   buildArchitectTurnSchema,
   checkArchitectText,
   isArchitectContextManifest,
@@ -283,6 +285,7 @@ export type {
   ArchitectSessionKind,
   ArchitectSessionStatus,
   ArchitectTaskProposal,
+  ArchitectTurnSchemaVersion,
   ArchitectTextRefusal,
   ArchitectTurn,
   ArchitectTurnResult,
@@ -302,6 +305,12 @@ export {
   MESSAGE_OPEN,
   USER_MESSAGE_CLOSE,
   USER_MESSAGE_OPEN,
+  ARCHITECT_PROMPT_VERSION_V4,
+  BRIEF_CLOSE,
+  BRIEF_OPEN,
+  PLAN_CLOSE,
+  PLAN_OPEN,
+  architectPromptVersion,
   neutralizeArchitectMarkers,
   renderArchitectPrompt,
 } from "./architect-prompt.js";
@@ -401,6 +410,66 @@ export type {
   ProjectMemoryStatus,
   ProjectMemoryValues,
 } from "./project-memory.js";
+
+export {
+  ARCHITECT_BRIEF_IDENTIFIER,
+  ARCHITECT_V1_PLAN_IDENTIFIER,
+} from "./architect.js";
+
+export {
+  ARCHITECT_PROJECT_UPDATE_STATUS,
+  ARCHITECT_PROJECT_UPDATE_STATUSES,
+  PROJECT_PLAN_LIMITS,
+  PROJECT_UPDATE_ACTION,
+  PROJECT_UPDATE_ACTIONS,
+  PROJECT_UPDATE_REASON_LIMIT,
+  checkProjectBriefInput,
+  checkProjectV1PlanInput,
+  isArchitectProjectUpdateStatus,
+  isProjectBriefEmpty,
+  isProjectUpdateAction,
+  isProjectV1PlanEmpty,
+  normalizeProjectPlanList,
+  normalizeProjectPlanText,
+  projectBriefChars,
+  projectUpdateTarget,
+  projectUpdateTouchesSomething,
+  projectV1PlanChars,
+  readArchitectProjectUpdate,
+  unchangedProjectUpdateSection,
+} from "./project-plan.js";
+
+export type {
+  ArchitectProjectUpdateProposal,
+  ArchitectProjectUpdateResult,
+  ArchitectProjectUpdateStatus,
+  ArchitectPromptBrief,
+  ArchitectPromptV1Plan,
+  ProjectBrief,
+  ProjectBriefCheck,
+  ProjectBriefInput,
+  ProjectPlanField,
+  ProjectPlanRefusal,
+  ProjectUpdateAction,
+  ProjectUpdateRefusal,
+  ProjectUpdateSection,
+  ProjectUpdateTarget,
+  ProjectV1Plan,
+  ProjectV1PlanCheck,
+  ProjectV1PlanInput,
+} from "./project-plan.js";
+
+export {
+  PROJECT_UPDATE_FIELD_KIND,
+  buildArchitectProjectUpdateReview,
+} from "./project-update-review.js";
+
+export type {
+  ProjectUpdateFieldKind,
+  ProjectUpdateReview,
+  ProjectUpdateReviewField,
+  ProjectUpdateReviewSection,
+} from "./project-update-review.js";
 
 export {
   GUIDED_ACTION,

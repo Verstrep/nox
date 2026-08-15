@@ -77,59 +77,56 @@ sont le socle.
 - Enregistrer explicitement décisions, contraintes, conventions et connaissances durables, et
   les injecter de façon bornée et traçable dans le contexte de l'Architecte.
 
+### 1.10 Project Brief structuré et Living V1 Plan
+
+- Tenir l'intention produit du projet dans deux objets structurés, édités à la main, transmis
+  à l'Architecte à chaque tour, et bornés par un budget commun.
+- Laisser l'Architecte **proposer** de les modifier, relire la proposition champ par champ,
+  la corriger, puis l'appliquer ou l'écarter. Seule une application humaine change l'état.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Project Brief structuré
+### 2.1 Génération multi-tâches et backlog ordonné
 
-Une compréhension du projet, tenue par NOX : ce qu'on construit, pour qui, avec quelle stack,
-sous quelles contraintes. Structurée, relue et modifiable par l'utilisateur — pas un texte
-libre de plus.
+Le Living V1 Plan décrit **des capacités visées**, jamais des tâches. Le transformer en un
+backlog de tâches ordonnées — plutôt qu'une tâche isolée à la fois — reste à faire. Chaque
+tâche resterait créée en brouillon, relue et validée par l'utilisateur.
 
-### 2.2 Living Project Plan
-
-Un plan de travail rattaché au projet, contenant plusieurs tâches ordonnées, qui se relit et
-se réordonne à mesure que le projet avance.
-
-### 2.3 Génération multi-tâches
-
-Produire un backlog à partir d'une conception, plutôt qu'une tâche isolée. Chaque tâche reste
-créée en brouillon, relue et validée par l'utilisateur.
-
-### 2.4 Amorçage d'un projet — `TASK-000`
+### 2.2 Amorçage d'un projet — `TASK-000`
 
 Le premier pas d'un projet vide : initialiser le repository, poser la structure, produire les
 documents de référence. Aujourd'hui, ce travail se fait entièrement hors de NOX.
 
-### 2.5 Dépendances entre tâches
+### 2.3 Dépendances entre tâches
 
 Dire qu'une tâche en attend une autre, et que l'ordre n'est pas qu'une préférence d'affichage.
 
-### 2.6 Modification des tâches futures
+### 2.4 Modification des tâches futures
 
 Une spécification ne se modifie pas après création. Tant que le plan est vivant, cette
 contrainte devient bloquante : replanifier suppose de pouvoir réécrire ce qui n'a pas encore
 été lancé.
 
-### 2.7 Tableau de bord d'un projet
+### 2.5 Tableau de bord d'un projet
 
 Une vue qui répond « où en est ce projet » sans ouvrir chaque tâche.
 
-### 2.8 File d'exécution
+### 2.6 File d'exécution
 
 Enchaîner plusieurs tâches prêtes, sans qu'un enchaînement devienne une autonomie : chaque
 départ reste décidé, et une exécution reste seule active.
 
-### 2.9 Validation intelligente
+### 2.7 Validation intelligente
 
 Distinguer ce qu'une commande peut prouver, ce qu'une relecture par l'Architecte peut établir,
 et ce qui exige réellement un test humain — pour ne solliciter l'humain que dans le troisième
 cas.
 
-### 2.10 Livraison Git contrôlée
+### 2.8 Livraison Git contrôlée
 
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.

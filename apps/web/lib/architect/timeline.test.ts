@@ -16,6 +16,7 @@ import { ARCHITECT_MESSAGE_ROLE } from "@nox/shared";
 import {
   buildArchitectTimeline,
   type TimelineMessage,
+  type TimelineProjectUpdate,
   type TimelineTask,
 } from "./timeline.ts";
 
@@ -43,12 +44,23 @@ function task(generationId: string, taskId: string, code: string): TimelineTask 
   return { generationId, taskId, code, title: `Titre de ${code}` };
 }
 
+function update(
+  generationId: string,
+  updateId: string,
+  status: TimelineProjectUpdate["status"] = "PENDING",
+): TimelineProjectUpdate {
+  return { generationId, updateId, status, briefChanges: 2, planChanges: 0 };
+}
+
 /** Resume lisible du fil : « u a T:TASK-001 ». */
 function shape(entries: ReturnType<typeof buildArchitectTimeline>): string {
   return entries
     .map((entry) => {
       if (entry.kind === "task") {
         return `T:${entry.code}`;
+      }
+      if (entry.kind === "update") {
+        return `U:${entry.status}`;
       }
       return entry.role === ARCHITECT_MESSAGE_ROLE.USER ? "u" : "a";
     })
@@ -173,5 +185,77 @@ describe("frontiere avec le fournisseur", () => {
     for (const forbidden of ["transcript", "prepare", "provider", "fetch", "await"]) {
       assert.equal(code.includes(forbidden), false, `le code ne mentionne pas ${forbidden}`);
     }
+  });
+});
+
+describe("propositions de mise a jour du projet", () => {
+  it("place la carte apres la reponse du tour qui l'a produite", () => {
+    const entries = buildArchitectTimeline(
+      [user("1", "g1"), architect("2", "g1")],
+      [],
+      [update("g1", "u1")],
+    );
+
+    assert.equal(shape(entries), "u a U:PENDING");
+  });
+
+  it("rend la proposition avant la tache creee au meme tour", () => {
+    // La proposition est ce que l'architecte a suggere ; la tache est ce que
+    // l'utilisateur en a fait. Lire la consequence avant sa cause deroute.
+    const entries = buildArchitectTimeline(
+      [user("1", "g1"), architect("2", "g1")],
+      [task("g1", "t1", "TASK-001")],
+      [update("g1", "u1")],
+    );
+
+    assert.equal(shape(entries), "u a U:PENDING T:TASK-001");
+  });
+
+  it("rattache chaque proposition a son propre tour", () => {
+    const entries = buildArchitectTimeline(
+      [user("1", "g1"), architect("2", "g1"), user("3", "g2"), architect("4", "g2")],
+      [],
+      [update("g1", "u1"), update("g2", "u2")],
+    );
+
+    assert.equal(shape(entries), "u a U:PENDING u a U:PENDING");
+  });
+
+  it("rend le statut enregistre, sans le deduire", () => {
+    // Le statut vient de la base : un rafraichissement rend la meme carte, et
+    // aucun etat de navigateur n'en decide.
+    const entries = buildArchitectTimeline(
+      [user("1", "g1"), architect("2", "g1")],
+      [],
+      [update("g1", "u1", "APPLIED")],
+    );
+
+    assert.equal(shape(entries), "u a U:APPLIED");
+  });
+
+  it("n'oublie pas une proposition dont le tour n'a laisse aucun message", () => {
+    const entries = buildArchitectTimeline([user("1", null)], [], [update("g9", "u9")]);
+    assert.equal(shape(entries), "u U:PENDING");
+  });
+
+  it("ne rend aucune carte quand aucune proposition n'existe", () => {
+    const entries = buildArchitectTimeline([user("1", "g1"), architect("2", "g1")], []);
+    assert.equal(shape(entries), "u a");
+  });
+
+  it("ne cree aucun message pour une proposition", () => {
+    // Une carte n'est pas un message : elle n'a ni role, ni contenu, et ne peut
+    // donc pas entrer dans le transcript transmis.
+    const entries = buildArchitectTimeline(
+      [user("1", "g1"), architect("2", "g1")],
+      [],
+      [update("g1", "u1")],
+    );
+
+    assert.equal(entries.filter((entry) => entry.kind === "message").length, 2);
+    const card = entries.find((entry) => entry.kind === "update");
+    assert.ok(card !== undefined);
+    assert.equal("content" in card, false);
+    assert.equal("role" in card, false);
   });
 });

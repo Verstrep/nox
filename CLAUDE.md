@@ -438,7 +438,35 @@ doit le dire explicitement et la justifier.
 - **La progression affichée compte cinq étapes fixes**, jamais une par exécution.
 - **Une action qui engage une IA est annoncée, et elle seule.**
 
-### 8.9 Mémoire projet
+### 8.9 État structuré du projet
+
+- **Le Project Brief et le Living V1 Plan sont l'intention produit courante**, structurée et
+  validée par l'utilisateur. La **mémoire projet** porte des décisions, contraintes,
+  conventions et connaissances durables explicites. La **documentation du repository** décrit
+  l'état du dépôt, et peut avoir pris du retard sur l'intention produit. Trois sources, trois
+  rôles ; les confondre est l'erreur que ce paragraphe existe pour empêcher.
+- **Une mise à jour proposée par l'Architecte n'est qu'une proposition.** Seule une application
+  explicitement humaine change l'état structuré du projet.
+- **Édition manuelle, Apply et Dismiss n'appellent ni OpenAI, ni Claude Code, ni le runner, et
+  ne touchent jamais Git.** Ce sont des écritures SQLite ; les pages fonctionnent runner arrêté
+  et sans configuration OpenAI.
+- **Les révisions de base d'une proposition sont celles réellement vues par le fournisseur**,
+  capturées à la préparation du tour — jamais relues après l'appel. C'est le seul endroit de NOX
+  où relire l'état courant côté serveur serait la mauvaise réponse.
+- **La proposition du fournisseur et la valeur appliquée par l'humain restent historiquement
+  distinctes.** `proposedJson` n'est jamais réécrit ; `appliedJson` porte ce qui a été retenu.
+- **Une proposition périmée n'est jamais fusionnée automatiquement.** Toute divergence de
+  révision — brief ou plan — la refuse, et aucun chemin de code ne mène d'un conflit à un appel.
+- **Le brief et le plan partagent un seul budget de 16 Kio**, mesuré après sanitation, refusé à
+  l'écriture et jamais tronqué.
+- **Absent et défini-mais-vide sont deux états distincts**, du schéma jusqu'à l'écran. Ouvrir
+  une page n'en crée jamais aucun.
+- **Aucune matérialisation en Markdown.** L'état structuré de NOX n'est pas
+  `docs/PROJECT_BRIEF.md`, et aucune synchronisation n'existe entre les deux.
+- **Une carte de proposition n'est pas un message.** Elle est dérivée de la base, et n'entre ni
+  dans le transcript, ni dans le prompt, ni dans le décompte de jetons.
+
+### 8.10 Mémoire projet
 
 - **Elle est contrôlée par l'utilisateur, et par lui seul.** Aucune entrée n'est créée, modifiée
   ou archivée automatiquement : ni depuis une conversation, ni depuis une proposition, ni depuis

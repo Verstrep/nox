@@ -45,6 +45,12 @@ export const ARCHITECT_CONTEXT_CHANGE = {
   MEMORY_ADDED: "MEMORY_ADDED",
   MEMORY_MODIFIED: "MEMORY_MODIFIED",
   MEMORY_REMOVED: "MEMORY_REMOVED",
+  BRIEF_ADDED: "BRIEF_ADDED",
+  BRIEF_MODIFIED: "BRIEF_MODIFIED",
+  BRIEF_REMOVED: "BRIEF_REMOVED",
+  PLAN_ADDED: "PLAN_ADDED",
+  PLAN_MODIFIED: "PLAN_MODIFIED",
+  PLAN_REMOVED: "PLAN_REMOVED",
 } as const;
 
 export type ArchitectContextChangeKind =
@@ -94,6 +100,20 @@ const CHANGE_KINDS: Record<
     added: ARCHITECT_CONTEXT_CHANGE.MEMORY_ADDED,
     modified: ARCHITECT_CONTEXT_CHANGE.MEMORY_MODIFIED,
     removed: ARCHITECT_CONTEXT_CHANGE.MEMORY_REMOVED,
+  },
+  // `REMOVED` n'a pas d'interface pour le produire : aucune suppression n'est
+  // offerte, une ligne creee reste. Il est conserve parce qu'un manifest
+  // historique peut decrire un etat qui n'existe plus, et qu'une comparaison
+  // muette serait pire qu'un fait rare.
+  PROJECT_BRIEF: {
+    added: ARCHITECT_CONTEXT_CHANGE.BRIEF_ADDED,
+    modified: ARCHITECT_CONTEXT_CHANGE.BRIEF_MODIFIED,
+    removed: ARCHITECT_CONTEXT_CHANGE.BRIEF_REMOVED,
+  },
+  PROJECT_V1_PLAN: {
+    added: ARCHITECT_CONTEXT_CHANGE.PLAN_ADDED,
+    modified: ARCHITECT_CONTEXT_CHANGE.PLAN_MODIFIED,
+    removed: ARCHITECT_CONTEXT_CHANGE.PLAN_REMOVED,
   },
 };
 

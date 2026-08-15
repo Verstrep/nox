@@ -45,6 +45,7 @@ import {
   readArchitectTurn,
   type ArchitectContextManifest,
   type ArchitectErrorCode,
+  type ArchitectProjectUpdateProposal,
   type ArchitectTextRefusal,
   type ArchitectTurn,
   type DevelopmentTaskDetail,
@@ -58,6 +59,9 @@ import {
   type ArchitectGenerationView,
   type ArchitectSessionView,
   type DatabaseClient,
+  type ProjectPlanTools,
+  type ProjectStructuredState,
+  type ProjectUpdateBase,
 } from "@nox/database";
 
 import { listProjectDocuments, readProjectDocument } from "../runner/client.ts";
@@ -66,6 +70,7 @@ import { ARCHITECT_DOCUMENT_ALLOWLIST, type FetchedArchitectDocument } from "./c
 import { diffArchitectManifests, type ArchitectContextChange } from "./context-diff.ts";
 import { ARCHITECT_REQUEST_TIMEOUT_MS } from "./config.ts";
 import { prepareArchitectGeneration, type PreparedArchitectGeneration } from "./prepare.ts";
+import { checkProviderProjectUpdate } from "./project-update.ts";
 import type { ArchitectProvider } from "./provider.ts";
 import { architectTranscript } from "./transcript.ts";
 
@@ -157,6 +162,25 @@ export type TurnInput = {
    * entrer. C'est exactement le traitement reserve aux documents.
    */
   memories: readonly ProjectMemoryEntry[];
+  /**
+   * Etat structure du projet, relu en base a chaque tour.
+   *
+   * Relu, jamais fige : c'est ce qui garantit qu'un brief modifie a la main
+   * entre deux messages part avec le message suivant. Il n'entre pas dans la
+   * fenetre de transcript — un tour de conversation vieillit, l'intention
+   * produit courante non.
+   */
+  structuredState: ProjectStructuredState;
+  /** Projet auquel rattacher une eventuelle proposition de mise a jour. */
+  projectId: string;
+  /**
+   * Nettoyeur et revisions de l'etat structure.
+   *
+   * Les memes que ceux qui ont produit `structuredState` : le budget d'une
+   * proposition se mesure sur le texte qui partirait reellement, et deux
+   * assemblages differents finiraient par accepter ce que l'autre refuse.
+   */
+  planTools: ProjectPlanTools;
   model: string;
   environment: Record<string, string | undefined>;
   ports?: ArchitectRepositoryPorts;
@@ -214,12 +238,15 @@ export async function prepareArchitectTurn(input: TurnInput): Promise<PrepareTur
   }
 
   const prepared = prepareArchitectGeneration({
+    sessionKind: input.session.kind,
     projectName: input.projectName,
     repositoryPath: input.repositoryPath,
     documents: fetched.context.documents,
     inventory: fetched.context.inventory,
     tasks: input.tasks,
     memories: input.memories,
+    projectBrief: input.structuredState.brief.prompt,
+    projectV1Plan: input.structuredState.plan.prompt,
     transcript: architectTranscript(input.session),
     newMessage: input.message,
     model: input.model,
@@ -344,6 +371,9 @@ export async function sendArchitectTurn(
     model: input.model,
     provider: input.provider,
     expectedFingerprint: pending.contextFingerprint,
+    projectId: input.projectId,
+    structuredState: input.structuredState,
+    planTools: input.planTools,
   });
 }
 
@@ -416,6 +446,9 @@ export async function sendArchitectMessage(
     model: input.model,
     provider: input.provider,
     expectedFingerprint: prepared.turn.prepared.turnFingerprint,
+    projectId: input.projectId,
+    structuredState: input.structuredState,
+    planTools: input.planTools,
   });
 }
 
@@ -426,6 +459,10 @@ type DispatchInput = {
   model: string;
   provider: ArchitectProvider;
   expectedFingerprint: string;
+  projectId: string;
+  /** Etat structure courant, pour revalider une proposition avant de l'ecrire. */
+  structuredState: ProjectStructuredState;
+  planTools: ProjectPlanTools;
 };
 
 /**
@@ -485,7 +522,7 @@ async function dispatchArchitectTurn(
       instructions: input.prepared.prompt.instructions,
       input: input.prepared.prompt.input,
       schemaName: ARCHITECT_SCHEMA_NAME,
-      schema: buildArchitectTurnSchema(),
+      schema: buildArchitectTurnSchema(input.prepared.turnSchemaVersion),
       timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
     });
   } catch (error) {
@@ -499,7 +536,11 @@ async function dispatchArchitectTurn(
     return fail(result.code);
   }
 
-  const validated = readArchitectTurn(result.value.raw, input.prepared.availableDocuments);
+  const validated = readArchitectTurn(
+    result.value.raw,
+    input.prepared.availableDocuments,
+    input.prepared.turnSchemaVersion,
+  );
   if (!validated.ok) {
     // La reponse respectait le schema strict et reste inacceptable : c'est
     // exactement le cas que la validation metier existe pour attraper.
@@ -521,6 +562,44 @@ async function dispatchArchitectTurn(
   const turn = validated.turn;
   const ready = turn.state === ARCHITECT_TURN_STATE.PROPOSAL_READY;
 
+  // La mise a jour du projet est revalidee contre l'etat **courant** avant
+  // d'etre ecrite. Une proposition hors bornes n'est pas persistee : elle
+  // offrirait un bouton condamne a echouer. Le tour entier devient alors une
+  // sortie invalide, comme n'importe quelle reponse inexploitable.
+  let projectUpdate: {
+    projectId: string;
+    proposed: ArchitectProjectUpdateProposal;
+    baseState: ProjectUpdateBase;
+  } | null = null;
+
+  if (turn.projectUpdate !== null) {
+    const check = checkProviderProjectUpdate(
+      input.structuredState,
+      turn.projectUpdate,
+      input.planTools,
+    );
+    if (!check.ok) {
+      console.error("[nox] Mise a jour de projet refusee :", check.reason);
+      await finishArchitectGeneration(db, {
+        generationId,
+        status: ARCHITECT_GENERATION_STATUS.FAILED,
+        providerResponseId: result.value.responseId,
+        usage: result.value.usage,
+        errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+      });
+      return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
+    }
+
+    projectUpdate = {
+      projectId: input.projectId,
+      proposed: turn.projectUpdate,
+      // Les revisions **vues par le fournisseur**, capturees a la preparation du
+      // tour. Pas celles d'aujourd'hui : l'utilisateur a pu enregistrer un plan
+      // pendant que l'appel etait en vol.
+      baseState: input.prepared.baseStructuredState,
+    };
+  }
+
   const generation = await finishArchitectGeneration(db, {
     generationId,
     status: ready
@@ -537,6 +616,8 @@ async function dispatchArchitectTurn(
       { role: ARCHITECT_MESSAGE_ROLE.USER, content: input.message },
       { role: ARCHITECT_MESSAGE_ROLE.ARCHITECT, content: turn.message },
     ],
+    // Ecrite dans la meme transaction que la conclusion du tour et ses messages.
+    projectUpdate,
   });
 
   if (generation === null) {

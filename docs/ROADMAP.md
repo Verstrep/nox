@@ -38,6 +38,7 @@ vide à une exécution relue.
 | 17 | Mémoire projet | Décisions durables, budget refusé à l'écriture, injection tracée |
 | 18 | Consolidation documentaire | Un rôle par document, vision réalignée, audit technique |
 | 20 | Conversation projet | Une conversation durable par projet, plusieurs tâches dans le temps |
+| 21 | Plan de projet structuré | Project Brief et Living V1 Plan, proposés par l'Architecte, appliqués par l'humain |
 
 **Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
 automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
@@ -66,6 +67,20 @@ tâche restent lisibles, en lecture seule.
 
 C'était le pivot de toute la suite : le plan, le backlog et la replanification supposent tous un
 endroit durable où la conception vit.
+
+### `TASK-021` — Project Brief structuré et Living V1 Plan — terminée
+
+NOX tient désormais l'intention produit d'un projet dans deux objets structurés, distincts de
+ses documents Markdown : ce qu'on construit et pour qui d'un côté, ce que la V1 doit accomplir
+de l'autre. Ils s'éditent à la main, accompagnent chaque tour de l'Architecte, et priment sur la
+documentation du repository pour l'intention produit.
+
+L'Architecte peut **proposer** de les modifier. La proposition se relit champ par champ, se
+corrige, puis s'applique ou s'écarte — et seule une application humaine change quoi que ce soit.
+Une proposition bâtie sur un état devenu obsolète est refusée, jamais fusionnée.
+
+C'est le premier cycle « le modèle propose, l'humain relit et corrige, NOX applique » de
+l'outil. `TASK-022` le réutilisera pour le backlog.
 
 ---
 
@@ -100,15 +115,11 @@ Human validation only when necessary
 Validated delivery
 ```
 
-### `TASK-021` — Project Brief structuré et plan de V1 vivant — **suivante**
+### `TASK-022` — Planification multi-tâches et génération de backlog — **suivante**
 
-Une compréhension du projet tenue par NOX, structurée et modifiable, et le premier plan qui en
-découle.
-
-### `TASK-022` — Planification multi-tâches et génération de backlog
-
-Produire plusieurs tâches ordonnées à partir d'une conception, chacune créée en brouillon et
-relue avant d'être mise en file.
+Transformer le Living V1 Plan validé en un backlog structuré de plusieurs tâches, avec
+découpage, ordre et validation humaine — sans développer encore la file d'exécution. Chaque
+tâche reste créée en brouillon et relue avant d'être mise en file.
 
 ### `TASK-023` — Amorçage d'un projet — `TASK-000`
 

@@ -115,12 +115,15 @@ describe("l'attente n'est pas un message", () => {
       { role: "ARCHITECT", content: "Voici comment je m'y prendrais.", proposal: null, turnId: "g1" },
     ];
     const prepared = prepareArchitectGeneration({
+      sessionKind: "PROJECT",
       projectName: "NOX",
       repositoryPath: "D:/Projets/Dev/nox",
       documents: [],
       inventory: [],
       tasks: [],
       memories: [],
+      projectBrief: null,
+      projectV1Plan: null,
       transcript,
       newMessage: "Et ensuite ?",
       model: "modele-de-test",

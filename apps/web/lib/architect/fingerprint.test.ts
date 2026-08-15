@@ -57,6 +57,8 @@ function bundle(overrides: Partial<ArchitectContextBundle> = {}): ArchitectConte
     manifest: { schemaVersion: 1, sources: [], totalChars: 0, missing: ["AGENTS.md"] },
     instructionDocuments: [document()],
     contextDocuments: [document({ path: "docs/ARCHITECTURE.md", revision: "b".repeat(64) })],
+    projectBrief: null,
+    projectV1Plan: null,
     projectMemory: [],
     recentTasks: [task()],
     availableDocuments: ["CLAUDE.md", "docs/ARCHITECTURE.md"],

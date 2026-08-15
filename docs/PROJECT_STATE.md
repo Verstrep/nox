@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 14 août 2026, à l'issue de `TASK-020`.
+**Dernière mise à jour** : 15 août 2026, à l'issue de `TASK-021`.
 
 ---
 
@@ -18,10 +18,12 @@ La chaîne complète existe et fonctionne : concevoir une tâche, la lancer, la 
 relire ce qui a changé, demander une correction, la faire relire, savoir quoi faire ensuite.
 
 ```text
-Architecte           →  Tâche       →  Claude Code  →  Review Git
-(conception)            (spec)         (exécution)     (+ validations)
-                                                            ↓
-Mémoire projet  ←  Workflow guidé  ←  Décision humaine  ←  Review Architecte
+Project Plan  →  Architecte    →  Tâche   →  Claude Code  →  Review Git
+(intention)      (conception)     (spec)     (exécution)     (+ validations)
+     ↑                                                            ↓
+     └─── Décision humaine ← Workflow guidé ← Review Architecte ───┘
+                 ↑
+           Mémoire projet
 ```
 
 Ce que NOX **ne fait pas**, et n'a jamais prétendu faire : aucun lancement automatique de
@@ -33,12 +35,12 @@ automatiquement, aucun commit, aucun push, aucune estimation de coût.
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 15 |
-| Migrations appliquées | 12 |
+| Modèles Prisma | 18 |
+| Migrations appliquées | 14 |
 | Routes du runner | 16, dont une seule publique (`GET /health`) |
-| Routes de l'application web | 24 |
-| Tests automatisés | 2 461, dont 5 ignorés sous Windows |
-| Décisions consignées | 260 |
+| Pages de l'application web | 25 |
+| Tests automatisés | 2 738, dont 5 ignorés sous Windows |
+| Décisions consignées | 277 |
 
 ---
 
@@ -360,6 +362,42 @@ Créer, modifier, archiver, restaurer et supprimer sont des écritures SQLite : 
 fonctionne runner arrêté et sans configuration OpenAI, et un test le vérifie sur la source des
 modules.
 
+### 2.12 État structuré du projet — Project Brief et Living V1 Plan
+
+**Disponible.** Un projet porte deux objets structurés, distincts de ses documents Markdown :
+un **Project Brief** — ce qu'on construit, pour qui, contre quel problème — et un **Living V1
+Plan** — ce que la première version doit accomplir. Chacun s'édite à la main depuis
+`/projects/[id]/plan`, champ par champ, listes comprises.
+
+L'Architecte les reçoit à chaque tour, en tête du contexte, avant la documentation du
+repository. Il peut proposer de les modifier : la proposition apparaît dans la conversation,
+se relit champ par champ en `Current → Proposed`, **se corrige avant d'être appliquée**, puis
+s'applique ou s'écarte. Le tour suivant reçoit immédiatement le nouvel état.
+
+Le budget est de 16 Kio, **commun** au brief et au plan, mesuré après sanitation. Une écriture
+qui le dépasserait est refusée, jamais tronquée. Les révisions sont déterministes et servent de
+jeton de concurrence optimiste : deux onglets ne peuvent pas écrire l'un par-dessus l'autre.
+
+**Limites.**
+
+- **Aucune synchronisation avec `docs/PROJECT_BRIEF.md`.** Les deux coexistent, aucun n'est
+  généré depuis l'autre, et la recopie se fait à la main dans les deux sens.
+- **Une proposition périmée ne se rattrape pas.** Si le plan a changé depuis, l'application est
+  refusée et il faut demander une nouvelle proposition ; il n'existe aucune fusion automatique.
+- **Aucun brouillon d'édition n'est enregistré.** Une correction non appliquée vit dans le
+  formulaire, et disparaît si l'on quitte la page.
+- **Aucun historique de versions.** Ce qui est conservé est ce que chaque proposition
+  contenait et ce qui en a été appliqué, pas une chronologie du brief lui-même.
+- **Les listes se saisissent un élément par ligne.** Pas de réordonnancement à la souris.
+
+**Frontières.** Ouvrir la page ne crée aucune ligne : « jamais défini » et « défini et vide »
+restent deux états distincts. Enregistrer, appliquer et écarter sont des écritures SQLite —
+aucun appel à OpenAI, aucune exécution de Claude Code, aucune requête au runner, aucune commande
+Git, aucun fichier écrit dans le repository. Une proposition de l'Architecte ne modifie jamais
+le projet seule : seule une application explicitement humaine le fait. La proposition du
+fournisseur et la valeur réellement appliquée restent conservées séparément, et aucune des deux
+n'est réécrite ensuite.
+
 ---
 
 ## 3. Où en est l'écart avec la cible
@@ -374,20 +412,27 @@ Le verrou qui empêchait les doublons n'a pas disparu : il a changé de porteur.
 conversation qui ne crée qu'une tâche, c'est la **proposition**. Deux clics simultanés sur
 « Create task » produisent toujours exactement une tâche.
 
-### 3.2 Ce qui reste à faire
+### 3.2 Résolu par `TASK-021` : une intention produit tenue par NOX
 
-La conversation existe ; ce qu'elle devrait alimenter n'existe pas encore.
+La deuxième limitation structurante — *NOX ne sait rien du projet en dehors de ses documents
+Markdown* — n'existe plus non plus. Le Project Brief et le Living V1 Plan sont désormais une
+représentation que NOX relit, mesure, versionne et transmet, et que l'Architecte peut proposer
+de faire évoluer sans jamais la modifier lui-même.
 
-- **Aucun Project Brief structuré, aucun plan de projet vivant.** La compréhension du projet
-  vit dans ses documents Markdown et dans sa mémoire, pas dans une représentation que NOX
-  saurait relire et réordonner.
+C'est aussi la première fois qu'une proposition du modèle porte sur **l'état du projet** plutôt
+que sur une tâche. Le cycle — proposer, relire, corriger, appliquer — est celui que la
+génération multi-tâches réutilisera.
+
+### 3.3 Ce qui reste à faire
+
 - **Aucune génération multi-tâches.** Une proposition porte une tâche ; produire un backlog
-  ordonné en une opération reste à faire.
+  ordonné à partir du plan validé reste à faire.
 - **Une spécification ne se modifie pas après création.** Un plan vivant suppose de pouvoir
   réécrire ce qui n'a pas encore été lancé.
 - **Aucune dépendance entre tâches**, aucune replanification structurée.
+- **Aucun amorçage d'un projet vide.**
 
-Voir [ROADMAP.md](ROADMAP.md), `TASK-021` à `TASK-024`.
+Voir [ROADMAP.md](ROADMAP.md), `TASK-022` à `TASK-024`.
 
 ---
 
@@ -395,9 +440,11 @@ Voir [ROADMAP.md](ROADMAP.md), `TASK-021` à `TASK-024`.
 
 Aucun de ces éléments n'est commencé. Les lister évite de les croire disponibles.
 
-**Conception et planification.** Conversation principale par projet, Project Brief structuré,
-plan de projet vivant, génération multi-tâches, amorçage d'un projet vide, dépendances entre
-tâches, modification d'une spécification, replanification.
+**Conception et planification.** Génération multi-tâches, backlog ordonné, amorçage d'un projet
+vide, dépendances entre tâches, modification d'une spécification après création,
+replanification, historique de versions du Project Brief ou du Living V1 Plan, matérialisation
+automatique de l'état structuré en Markdown, extraction automatique de mémoire depuis une
+proposition de projet.
 
 **Exécution.** File d'exécution, plusieurs agents en parallèle, worktrees, plusieurs comptes
 Claude, exécution automatique de l'étape recommandée, cron, scheduler, notifications,

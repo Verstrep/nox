@@ -31,10 +31,13 @@ import { proposalToFormValues } from "@/lib/architect/display";
 import { PROJECT_ARCHITECT_GREETING } from "@/lib/architect/greeting";
 import { loadRecentArchitectTasks } from "@/lib/architect/recent-tasks";
 import { prepareArchitectTurn, type PrepareTurnResult } from "@/lib/architect/service";
+import { loadTimelineProjectUpdates } from "@/lib/architect/project-update";
 import { buildArchitectTimeline } from "@/lib/architect/timeline";
 import { formatIsoDateTime } from "@/lib/format";
 import { architectGenerationStatusLabel, architectSessionStatusLabel } from "@/lib/labels";
 import { loadActiveProjectMemories } from "@/lib/memory";
+import { planUrl } from "@/lib/plan-display";
+import { loadStructuredState, projectPlanTools } from "@/lib/project-plan";
 import { taskUrl } from "@/lib/task-display";
 
 import { ChatPanel } from "./ChatPanel";
@@ -108,13 +111,25 @@ export async function ArchitectConversation({
         // Relue a chaque rendu : la preview doit decrire la memoire actuelle,
         // pas celle qui existait a l'ouverture de la conversation.
         memories: await loadActiveProjectMemories(project.id),
+        structuredState: await loadStructuredState(db, project),
+        projectId: project.id,
+        planTools: projectPlanTools(project.repositoryPath),
         model: config.ok ? config.config.model : "",
         environment: process.env,
       });
 
   // Evenements locaux, derives de la base : un rafraichissement les retrouve
   // tels quels, sans qu'aucun etat de navigateur soit conserve.
-  const entries = buildArchitectTimeline(session.messages, await listArchitectSessionTasks(db, sessionId));
+  const entries = buildArchitectTimeline(
+    session.messages,
+    await listArchitectSessionTasks(db, sessionId),
+    await loadTimelineProjectUpdates(
+      db,
+      project,
+      sessionId,
+      await loadStructuredState(db, project),
+    ),
+  );
 
   const shared = {
     project,
@@ -175,9 +190,18 @@ function ProjectChat({
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-5 py-6 sm:px-8 sm:py-8">
       <header className="flex flex-col gap-2">
-        <Link href={backHref} className="text-xs text-zinc-500 hover:text-zinc-300">
-          &larr; {backLabel}
-        </Link>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <Link href={backHref} className="text-xs text-zinc-500 hover:text-zinc-300">
+            &larr; {backLabel}
+          </Link>
+          {/*
+            Discret, et volontairement : le plan se consulte quand on en a
+            besoin, il n'a pas a concurrencer la conversation.
+          */}
+          <Link href={planUrl(project.id)} className="text-xs text-zinc-500 hover:text-zinc-300">
+            Project plan
+          </Link>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold text-zinc-50">Project Architect</h1>
           <StatusBadge>Active</StatusBadge>

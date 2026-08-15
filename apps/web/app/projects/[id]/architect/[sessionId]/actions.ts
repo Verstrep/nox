@@ -36,6 +36,7 @@ import {
   sendArchitectTurn,
 } from "@/lib/architect/service";
 import { loadActiveProjectMemories } from "@/lib/memory";
+import { loadStructuredState, projectPlanTools } from "@/lib/project-plan";
 import { taskUrl } from "@/lib/task-display";
 import { applyTaskDocumentSync } from "@/lib/tasks";
 import type { TaskFormValues } from "@/lib/task-input";
@@ -151,6 +152,11 @@ export async function reviewTurnAction(
       // Relue a chaque tour, jamais figee a l'ouverture : une entree archivee
       // entre deux tours doit disparaitre du contexte.
       memories: await loadActiveProjectMemories(projectId),
+      // Relu a chaque tour : un brief modifie a la main entre deux messages
+      // part avec le message suivant, sans qu'aucun apercu soit exige.
+      structuredState: await loadStructuredState(db, loaded.project),
+      projectId,
+      planTools: projectPlanTools(loaded.project.repositoryPath),
       // Le modele n'entre que dans l'empreinte d'entree : une configuration
       // incomplete n'empeche ni de preparer, ni de relire ce qui partirait.
       model: config.ok ? config.config.model : "",
@@ -205,6 +211,11 @@ export async function sendTurnAction(
       repositoryPath: loaded.project.repositoryPath,
       tasks: await loadRecentArchitectTasks(db, projectId),
       memories: await loadActiveProjectMemories(projectId),
+      // Relu a chaque tour : un brief modifie a la main entre deux messages
+      // part avec le message suivant, sans qu'aucun apercu soit exige.
+      structuredState: await loadStructuredState(db, loaded.project),
+      projectId,
+      planTools: projectPlanTools(loaded.project.repositoryPath),
       model: config.config.model,
       provider: new OpenAIArchitectProvider({ apiKey: config.config.apiKey }),
       environment: process.env,
@@ -266,6 +277,11 @@ export async function sendMessageAction(
       message: submitted,
       tasks: await loadRecentArchitectTasks(db, projectId),
       memories: await loadActiveProjectMemories(projectId),
+      // Relu a chaque tour : un brief modifie a la main entre deux messages
+      // part avec le message suivant, sans qu'aucun apercu soit exige.
+      structuredState: await loadStructuredState(db, loaded.project),
+      projectId,
+      planTools: projectPlanTools(loaded.project.repositoryPath),
       model: config.config.model,
       provider: new OpenAIArchitectProvider({ apiKey: config.config.apiKey }),
       environment: process.env,

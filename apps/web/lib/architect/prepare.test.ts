@@ -21,6 +21,7 @@ const ENVIRONMENT: Record<string, string | undefined> = {
 };
 
 const BASE: PrepareArchitectInput = {
+  sessionKind: "TASK_DESIGN_LEGACY",
   projectName: "NOX",
   repositoryPath: ROOT,
   documents: [
@@ -41,6 +42,8 @@ const BASE: PrepareArchitectInput = {
   ],
   tasks: [],
   memories: [],
+  projectBrief: null,
+  projectV1Plan: null,
   transcript: [],
   newMessage: "Je veux exporter les taches en JSON.",
   model: "modele-de-test",

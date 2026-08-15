@@ -3729,3 +3729,163 @@ sans toucher à la base : dès que l'action rend la main, le vrai message a pris
 
 Dériver plutôt que stocker règle aussi le cas de l'échec sans code supplémentaire : il n'existe
 aucun état d'attente à effacer, donc aucun qui puisse rester bloqué.
+
+---
+
+## Décisions de TASK-021 — Project Brief structuré et Living V1 Plan
+
+### D-268 — Deux tables dédiées, plutôt qu'un Markdown ou un JSON
+
+**Décision.** Le Project Brief et le Living V1 Plan sont deux tables SQLite, avec des colonnes
+nommées : `summary`, `problem`, `targetUsers`, `desiredOutcome`, `goal`,
+`technicalDirection`, et des listes sérialisées. Ni un document Markdown, ni un blob JSON.
+
+**Justification.** Un champ Markdown unique aurait été plus rapide à écrire et inutilisable à
+lire : on ne répond pas « qui utilise ce produit ? » et « que doit accomplir la V1 ? » au même
+endroit. Surtout, une proposition de modification aurait porté sur du texte libre — donc sans
+revue champ par champ, sans validation de bornes, et sans moyen de dire ce qui a changé.
+
+Deux tables plutôt qu'une : le brief bouge peu, le plan bouge souvent. Les fusionner aurait fait
+d'un ajustement de périmètre une réécriture du brief, et rendu leurs révisions indissociables.
+
+### D-269 — Un budget de 16 Kio, commun au brief et au plan
+
+**Décision.** Les deux objets partagent un seul budget de 16 Kio, mesuré après sanitation et
+vérifié à l'écriture. Jamais deux budgets de 16.
+
+**Justification.** Le chiffre se démontre plutôt qu'il ne se choisit :
+
+```text
+16 (état structuré) + 64 (conventions) + 48 (mémoire) = 128 Kio
+```
+
+soit exactement le budget global du contexte de l'Architecte. Les trois catégories qui ne
+doivent jamais être tronquées y tiennent donc ensemble, et la garantie « ACTIVE = envoyé » de
+`TASK-017` survit sans qu'aucune borne existante soit relevée.
+
+Deux budgets séparés auraient laissé passer un total de 32 Kio, et cette arithmétique n'aurait
+plus tenu. Le prix est qu'un plan valide isolément peut être refusé à cause du brief ; le
+message de refus le dit explicitement.
+
+### D-270 — La révision décrit la forme sanitisée transmise
+
+**Décision.** La révision d'un brief ou d'un plan est un SHA-256 de son texte **sanitisé**,
+champs préfixés par leur longueur et listes par leur nombre d'entrées. Ni `updatedAt`, ni
+`id`, ni le texte stocké brut n'y entrent.
+
+**Justification.** Une révision sert à répondre à « le fournisseur a-t-il vu la même chose ? ».
+Elle doit donc décrire ce qui lui a été transmis, pas ce qui dort en base. Un horodatage dirait
+quand une ligne a été touchée, pas ce qu'elle contient — une réécriture à l'identique se
+signalerait comme un changement.
+
+Les préfixes de longueur sont ce qui empêche deux contenus différents de produire la même
+empreinte en déplaçant une frontière entre deux champs. L'ordre des listes est significatif, et
+le hachage le reflète : les étapes d'un plan décrivent une progression.
+
+Ce n'est **pas** une primitive de sécurité — SHA-256 nu, contrairement à l'empreinte de dossier
+de travail, qui est un HMAC parce qu'elle décide d'une exécution.
+
+### D-271 — Absent et défini-mais-vide sont deux états distincts
+
+**Décision.** Aucune ligne signifie « jamais défini ». Une ligne aux champs vides signifie
+« défini, et ne dit rien ». La distinction traverse le schéma, le prompt (`non defini` contre
+un bloc vide), l'empreinte de contexte, le manifest et l'interface.
+
+**Justification.** Les confondre aurait deux conséquences concrètes. Le modèle ne saurait plus
+distinguer « on n'a pas encore parlé du produit » de « on en a parlé, et il n'y a rien à en
+dire » — deux situations qui appellent des réponses opposées. Et l'interface afficherait
+« Not defined » sur un objet existant, dont le prochain enregistrement se croirait une création
+et serait refusé comme périmé, sans que personne comprenne pourquoi.
+
+C'est aussi pour cela qu'ouvrir la page du plan ne crée aucune ligne.
+
+### D-272 — L'état structuré prime sur la documentation du repository
+
+**Décision.** Le brief et le plan sont rendus **avant** la documentation du dépôt dans le
+prompt, et consommés en premier dans le budget. Le prompt demande explicitement de **signaler**
+une contradiction entre les deux plutôt que de les fusionner.
+
+**Justification.** Deux raisons qui se renforcent. Le sens : l'état structuré est validé par
+l'utilisateur et courant par construction, quand un `docs/ARCHITECTURE.md` écrit il y a trois
+mois peut ne pas avoir été relu. L'arithmétique : consommer le budget en premier est ce qui rend
+sa non-troncature démontrable plutôt que déclarative.
+
+Fusionner en silence aurait été le pire des comportements : le modèle aurait produit une
+synthèse plausible de deux états contradictoires, sans que personne apprenne qu'ils l'étaient.
+
+### D-273 — Une proposition porte un état cible complet, avec une action déclarée
+
+**Décision.** Une section proposée porte `action: "UNCHANGED" | "SET"` et une `value`. Un
+`SET` décrit la **valeur complète** de la section, jamais un correctif partiel. Il n'existe pas
+d'action `DELETE`.
+
+**Justification.** `null` seul aurait eu deux sens possibles — « inchangé » et « vide » — et un
+modèle qui hésite entre les deux produit un effacement que personne n'a demandé. Une action
+explicite retire la question, au prix d'un champ.
+
+Un correctif partiel — « ajoute ceci à la liste » — aurait obligé le serveur à interpréter une
+intention, et deux interprétations raisonnables auraient suffi à rendre une application
+impossible à vérifier. Un état cible complet se valide, se relit, s'édite et s'applique sans
+rappeler le fournisseur.
+
+### D-274 — Les révisions de base sont celles vues par le fournisseur
+
+**Décision.** Les révisions enregistrées avec une proposition sont capturées à la **préparation
+du tour**, et transportées en mémoire serveur jusqu'à la persistance du résultat. Elles ne sont
+jamais relues après l'appel.
+
+**Justification.** C'est la seule décision de NOX où « tout relire côté serveur » est la mauvaise
+réponse, et elle mérite d'être écrite pour cette raison.
+
+Entre l'envoi et la réponse, l'utilisateur peut avoir modifié son plan à la main. Relire au
+moment d'enregistrer étiquetterait la proposition comme bâtie sur un état que le modèle n'a
+jamais vu — et le contrôle de péremption ne détecterait plus rien, puisque la base et l'état
+courant coïncideraient toujours.
+
+La valeur ne vient pas de l'extérieur pour autant : elle est produite côté serveur au moment de
+construire le contexte, et ne traverse ni le navigateur, ni un formulaire, ni une requête.
+
+Toute divergence rend la proposition périmée, brief **et** plan, même si la proposition ne touche
+qu'une section : le modèle a vu les deux en la formulant.
+
+### D-275 — La proposition du fournisseur et la valeur appliquée restent distinctes
+
+**Décision.** `proposedJson` conserve la réponse du modèle et n'est jamais réécrit.
+`appliedJson`, nullable, porte l'état cible que l'humain a réellement validé. Les deux sont
+figés après application, et une modification ultérieure du projet n'en change aucun.
+
+**Justification.** La revue existe pour corriger. Si le brief appliqué écrasait la proposition,
+l'historique dirait que le projet a reçu exactement ce que le modèle avait suggéré — ce qui
+serait faux dès la première correction, c'est-à-dire presque toujours.
+
+Deux artefacts répondent à deux questions différentes : « qu'a proposé le modèle ? » et
+« qu'avons-nous retenu ? ». Aucune des deux ne se déduit de l'autre.
+
+### D-276 — Une proposition périmée est refusée localement, jamais fusionnée
+
+**Décision.** Une proposition dont les révisions de base ne correspondent plus est refusée. Elle
+reste `PENDING` et lisible ; l'utilisateur peut l'écarter ou demander une nouvelle proposition.
+Aucun bouton « fusionner », « résoudre automatiquement » ou « rafraîchir avec l'IA » n'existe.
+
+**Justification.** Fusionner deux états supposerait de deviner ce que le modèle aurait proposé
+s'il avait vu le bon plan — ce qui demanderait un appel, donc un coût, déclenché par un conflit
+plutôt que par un clic. C'est exactement la boucle automatique que NOX refuse depuis
+`TASK-013`.
+
+La refuser sans l'écarter est le seul comportement honnête : NOX ne sait pas si la proposition
+est devenue fausse ou seulement décalée, et cette question appartient à l'utilisateur.
+
+### D-277 — La mise à jour du projet est indépendante de la proposition de tâche
+
+**Décision.** `state` continue de décrire la seule proposition de tâche. `projectUpdate` lui
+est orthogonal : les quatre combinaisons sont valides, et un `CONTINUE` qui propose un brief
+sans proposer de tâche est le cas normal au début d'un projet.
+
+**Justification.** Lier les deux aurait forcé le modèle à inventer une tâche pour pouvoir
+proposer un brief, ou à taire un ajustement de périmètre parce qu'aucune tâche n'était mûre.
+Deux artefacts, deux décisions, deux boutons — et deux actions humaines qui ne se commandent pas
+l'une l'autre.
+
+Le prix est un champ de plus dans le contrat, et une version de schéma : `architect/4` et
+`schemaVersion 3` pour les conversations projet, les sessions de conception de tâche restant
+sur `architect/3` et `schemaVersion 2`, figées.

@@ -1,7 +1,13 @@
 import { ARCHITECT_LIMITS, isProjectMemoryCategory } from "@nox/shared";
 
 import { StatusBadge } from "@/components/StatusBadge";
-import { formatChars, manifestRows, manifestTaskCount, memoryRows } from "@/lib/architect/display";
+import {
+  formatChars,
+  manifestRows,
+  manifestTaskCount,
+  memoryRows,
+  structuredRows,
+} from "@/lib/architect/display";
 import type { PreparedTurn } from "@/lib/architect/service";
 import { describeStoredTurns, describeTranscriptWindow } from "@/lib/architect/window-display";
 import { architectContextChangeLabel, architectSourceStatusLabel, projectMemoryCategoryLabel } from "@/lib/labels";
@@ -48,6 +54,26 @@ export function ContextPanel({
           </p>
         </div>
       )}
+
+      {/*
+        L'etat structure d'abord : c'est l'intention produit **actuelle**, celle
+        que l'utilisateur a validee. Les documents du repository, plus bas,
+        peuvent avoir pris du retard — ce sont deux sources distinctes, et elles
+        ne se confondent pas.
+      */}
+      <h3 className="text-xs font-medium text-zinc-400">Etat structure du projet</h3>
+      <ul className="mb-5 mt-2 flex flex-col divide-y divide-zinc-800/80 text-xs">
+        {structuredRows(manifest).map((row) => (
+          <li key={row.label} className="flex flex-wrap items-center justify-between gap-3 py-2">
+            <span className="text-zinc-300">{row.label}</span>
+            <span className="flex items-center gap-3 font-mono text-zinc-600">
+              {row.revision === null ? null : <span>{row.revision}</span>}
+              {row.defined ? <span>{formatChars(row.chars)}</span> : null}
+              <StatusBadge>{row.defined ? "Included" : "Not defined"}</StatusBadge>
+            </span>
+          </li>
+        ))}
+      </ul>
 
       <h3 className="text-xs font-medium text-zinc-400">Project context</h3>
       <p className="mt-2 text-sm leading-relaxed text-zinc-300">

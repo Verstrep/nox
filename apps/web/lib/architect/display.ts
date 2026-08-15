@@ -125,6 +125,38 @@ export function sourceStatus(source: ArchitectContextSource): ArchitectSourceSta
  * Les documents absents apparaissent aussi, marques `MISSING` : leur absence est
  * une information — elle explique pourquoi l'architecte en sait moins.
  */
+/** Ce que l'inspection dit d'un objet structure du projet. */
+export type ArchitectStructuredRow = {
+  label: string;
+  /** Faux lorsque rien n'a jamais ete defini. */
+  defined: boolean;
+  revision: string | null;
+  chars: number;
+};
+
+/**
+ * Etat structure decrit par le manifest.
+ *
+ * Une source absente vaut « non defini » : le manifest ne porte de ligne que
+ * pour ce qui a ete envoye. La distinction avec « defini mais vide » se lit dans
+ * le nombre de caracteres, pas dans la presence de la ligne.
+ */
+export function structuredRows(manifest: ArchitectContextManifest): ArchitectStructuredRow[] {
+  const find = (kind: string) => manifest.sources.find((source) => source.kind === kind) ?? null;
+
+  return [
+    { label: "Project Brief", source: find("PROJECT_BRIEF") },
+    { label: "Living V1 Plan", source: find("PROJECT_V1_PLAN") },
+  ].map(({ label, source }) => ({
+    label,
+    defined: source !== null,
+    revision: source?.revision === undefined || source.revision === null
+      ? null
+      : source.revision.slice(0, 12),
+    chars: source?.includedChars ?? 0,
+  }));
+}
+
 export function manifestRows(manifest: ArchitectContextManifest): ArchitectSourceRow[] {
   const rows: ArchitectSourceRow[] = manifest.sources.map((source) => ({
     kind: source.kind,

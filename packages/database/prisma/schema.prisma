@@ -77,8 +77,133 @@ model Project {
   tasks             Task[]
   architectSessions ArchitectSession[]
   memories          ProjectMemoryEntry[]
+  brief             ProjectBrief?
+  v1Plan            ProjectV1Plan?
+  projectUpdates    ArchitectProjectUpdate[]
 
   @@unique([mainArchitectSessionId])
+}
+
+/// Brief produit du projet : ce qu'on construit, pour qui, contre quel probleme.
+///
+/// ## Une table, pas des colonnes sur `Project`
+///
+/// Le brief a son propre cycle de vie, ses propres bornes et sa propre revision.
+/// Le coudre dans `Project` aurait ajoute six colonnes a une table lue partout,
+/// dont la plupart des lecteurs n'ont que faire.
+///
+/// ## Absent veut dire « pas encore defini »
+///
+/// Aucune ligne tant que personne n'a rien ecrit — c'est l'etat de depart de
+/// tout projet, et il est valide. Une fois creee, la ligne reste : vider ses
+/// champs est une edition, pas une suppression. Faire disparaitre la ligne
+/// ferait osciller le contexte entre « absent » et « present » a chaque coup de
+/// gomme, et le diff de contexte annoncerait des ajouts et des retraits la ou il
+/// n'y a qu'une modification.
+model ProjectBrief {
+  id        String @id @default(cuid())
+  projectId String @unique
+
+  summary        String
+  problem        String
+  targetUsers    String
+  desiredOutcome String
+
+  /// Listes ordonnees, serialisees. L'ordre est significatif : il entre dans la
+  /// revision, parce que deux objectifs intervertis ne se lisent pas pareil.
+  goalsJson    String
+  nonGoalsJson String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// `Cascade` : un brief ne decrit rien sans son projet.
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// Plan de V1 du projet : ce que la premiere version utile doit accomplir.
+///
+/// Les etapes decrivent des **capacites atteintes**, jamais des travaux a faire.
+/// Ni code de tache, ni critere d'acceptation, ni commande de validation, ni
+/// dependance : ce plan reste au-dessus du backlog, et TASK-022 fera la
+/// traduction.
+model ProjectV1Plan {
+  id        String @id @default(cuid())
+  projectId String @unique
+
+  goal               String
+  technicalDirection String
+
+  /// Listes ordonnees, serialisees.
+  inScopeJson    String
+  outOfScopeJson String
+  milestonesJson String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// Mise a jour du projet proposee par l'Architecte lors d'un tour.
+///
+/// ## Une proposition, jamais une ecriture
+///
+/// Le fournisseur peut proposer un nouvel etat du brief et du plan. Il ne
+/// l'applique pas : seule une action humaine explicite le fait, et elle passe
+/// par la meme validation que l'edition manuelle. Le Structured Output ne donne
+/// aucune autorite — bornes, sanitation et budget sont revalides a l'application.
+///
+/// ## Le payload du fournisseur est immuable
+///
+/// `proposedJson` conserve ce que le modele a reellement rendu, tel quel.
+/// L'utilisateur peut modifier la proposition avant de l'appliquer ; sa version
+/// vit dans le formulaire, puis directement dans le brief et le plan. Ecraser le
+/// payload d'origine ferait perdre la reponse historique du modele.
+model ArchitectProjectUpdate {
+  id           String @id @default(cuid())
+  generationId String @unique
+  projectId    String
+
+  /// `PENDING`, `APPLIED` ou `DISMISSED`.
+  status String
+
+  /// Pourquoi le modele propose ce changement. Contenu, jamais instruction.
+  reason String
+
+  /// `ArchitectProjectUpdateProposal` serialise, tel que le fournisseur l'a rendu.
+  ///
+  /// **Immuable.** Aucune ecriture ne le reecrit, y compris quand l'utilisateur
+  /// modifie la proposition avant de l'appliquer : ce champ repond a « qu'a
+  /// repondu le modele ? », et cette question a une seule reponse.
+  proposedJson String
+
+  /// `ProjectUpdateTarget` serialise : ce que l'utilisateur a reellement applique.
+  ///
+  /// `null` tant que la proposition n'est pas `APPLIED`. Sans cette colonne, une
+  /// proposition modifiee avant application ne laisserait aucune trace de ce qui
+  /// a ete retenu — l'historique dirait ce que le modele avait suggere, jamais ce
+  /// que le projet a recu. Les deux artefacts sont ensuite figes : modifier le
+  /// plan a la main plus tard n'en change aucun.
+  appliedJson String?
+
+  /// Revisions du brief et du plan au moment de la proposition.
+  ///
+  /// `null` signifie « pas encore defini a ce moment-la ». Elles sont comparees
+  /// a l'application : une proposition batie sur un plan que l'utilisateur a
+  /// modifie depuis est refusee, jamais fusionnee en silence.
+  baseBriefRevision String?
+  basePlanRevision  String?
+
+  appliedAt   DateTime?
+  dismissedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  /// `Cascade` comme les messages : une proposition ne raconte rien sans son tour.
+  generation ArchitectGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  project    Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
 }
 
 /// Une entree de memoire projet : ce que NOX retient volontairement.
@@ -949,9 +1074,10 @@ model ArchitectGeneration {
   createdAt DateTime @default(now())
 
   /// `Cascade` comme `RunEvent` : une generation ne raconte rien sans sa session.
-  session     ArchitectSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  appliedTask Task?              @relation("TaskFromGeneration", fields: [appliedTaskId], references: [id], onDelete: Restrict)
-  messages    ArchitectMessage[]
+  session       ArchitectSession        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  appliedTask   Task?                   @relation("TaskFromGeneration", fields: [appliedTaskId], references: [id], onDelete: Restrict)
+  messages      ArchitectMessage[]
+  projectUpdate ArchitectProjectUpdate?
 
   @@unique([sessionId, sequence])
   @@unique([appliedTaskId])

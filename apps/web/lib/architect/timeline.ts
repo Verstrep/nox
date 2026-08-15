@@ -14,6 +14,11 @@
  * faire dire une phrase qu'il n'a jamais ecrite, et la lui relire au tour
  * suivant. La tache se signalera d'elle-meme, par la liste des taches recentes.
  *
+ * Une proposition de mise a jour du projet suit exactement la meme regle. Elle
+ * est derivee d'`ArchitectProjectUpdate`, et son statut vient de la base : un
+ * rafraichissement rend donc la meme carte, sans qu'aucun etat de navigateur
+ * soit conserve. Aucun `ArchitectMessage` n'est ecrit pour elle.
+ *
  * ## Ou se place un evenement
  *
  * Juste apres le dernier message de la generation qui l'a produit. Une
@@ -24,7 +29,7 @@
  * Le module est pur : ni base, ni reseau, ni React.
  */
 
-import type { ArchitectMessageRole } from "@nox/shared";
+import type { ArchitectMessageRole, ArchitectProjectUpdateStatus } from "@nox/shared";
 
 export type TimelineMessage = {
   id: string;
@@ -42,9 +47,20 @@ export type TimelineTask = {
   title: string;
 };
 
+/** Une proposition de mise a jour du projet, telle que le fil l'affiche. */
+export type TimelineProjectUpdate = {
+  generationId: string;
+  updateId: string;
+  status: ArchitectProjectUpdateStatus;
+  /** Nombre de champs que la proposition modifie, section par section. */
+  briefChanges: number;
+  planChanges: number;
+};
+
 export type ArchitectTimelineEntry =
   | ({ kind: "message" } & TimelineMessage)
-  | ({ kind: "task"; id: string } & TimelineTask);
+  | ({ kind: "task"; id: string } & TimelineTask)
+  | ({ kind: "update"; id: string } & TimelineProjectUpdate);
 
 /**
  * Entrelace les messages et les taches creees.
@@ -60,6 +76,7 @@ export type ArchitectTimelineEntry =
 export function buildArchitectTimeline(
   messages: readonly TimelineMessage[],
   tasks: readonly TimelineTask[],
+  updates: readonly TimelineProjectUpdate[] = [],
 ): ArchitectTimelineEntry[] {
   const byGeneration = new Map<string, TimelineTask[]>();
   for (const task of tasks) {
@@ -68,6 +85,16 @@ export function buildArchitectTimeline(
       byGeneration.set(task.generationId, [task]);
     } else {
       existing.push(task);
+    }
+  }
+
+  const updatesByGeneration = new Map<string, TimelineProjectUpdate[]>();
+  for (const update of updates) {
+    const existing = updatesByGeneration.get(update.generationId);
+    if (existing === undefined) {
+      updatesByGeneration.set(update.generationId, [update]);
+    } else {
+      existing.push(update);
     }
   }
 
@@ -82,6 +109,7 @@ export function buildArchitectTimeline(
 
   const entries: ArchitectTimelineEntry[] = [];
   const placed = new Set<string>();
+  const placedUpdates = new Set<string>();
 
   messages.forEach((message, index) => {
     entries.push({ kind: "message", ...message });
@@ -90,11 +118,25 @@ export function buildArchitectTimeline(
     if (generationId === null || lastMessageOf.get(generationId) !== index) {
       return;
     }
+
+    // La proposition de mise a jour precede la tache creee : la premiere est ce
+    // que l'architecte a propose a ce tour, la seconde ce que l'utilisateur en a
+    // fait ensuite. Lire la consequence avant la proposition serait deroutant.
+    for (const update of updatesByGeneration.get(generationId) ?? []) {
+      entries.push({ kind: "update", id: `update:${update.updateId}`, ...update });
+      placedUpdates.add(update.updateId);
+    }
     for (const task of byGeneration.get(generationId) ?? []) {
       entries.push({ kind: "task", id: `task:${task.taskId}`, ...task });
       placed.add(task.taskId);
     }
   });
+
+  for (const update of updates) {
+    if (!placedUpdates.has(update.updateId)) {
+      entries.push({ kind: "update", id: `update:${update.updateId}`, ...update });
+    }
+  }
 
   for (const task of tasks) {
     if (!placed.has(task.taskId)) {

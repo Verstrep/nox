@@ -16,6 +16,7 @@ import { describe, it } from "node:test";
 import {
   ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_PROMPT_VERSION,
+  ARCHITECT_SESSION_KIND,
   CONVERSATION_OPEN,
   MEMORY_CLOSE,
   MEMORY_OPEN,
@@ -29,8 +30,11 @@ import {
 } from "../dist/index.js";
 
 const BASE: ArchitectPromptInput = {
+  sessionKind: ARCHITECT_SESSION_KIND.TASK_DESIGN_LEGACY,
   projectName: "NOX",
   projectMemory: [],
+  projectBrief: null,
+  projectV1Plan: null,
   instructionDocuments: [
     { path: "CLAUDE.md", revision: "a".repeat(64), truncated: false, content: "# Regles\n\nPas de push." },
   ],

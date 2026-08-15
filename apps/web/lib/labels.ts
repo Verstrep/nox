@@ -313,6 +313,12 @@ const ARCHITECT_CONTEXT_CHANGE_LABELS: Record<ArchitectContextChangeKind, string
   // conserve que ce qui a ete envoye, et nommer la cause reviendrait a
   // l'inventer.
   MEMORY_REMOVED: "Removed from Architect context",
+  BRIEF_ADDED: "Project Brief defined",
+  BRIEF_MODIFIED: "Project Brief changed",
+  BRIEF_REMOVED: "Project Brief removed",
+  PLAN_ADDED: "V1 Plan defined",
+  PLAN_MODIFIED: "V1 Plan changed",
+  PLAN_REMOVED: "V1 Plan removed",
 };
 
 /** Auteur d'un message, tel que le fil l'affiche. */

@@ -31,6 +31,7 @@ import {
   isArchitectTurnState,
   type ArchitectContextManifest,
   type ArchitectErrorCode,
+  type ArchitectProjectUpdateProposal,
   type ArchitectGenerationStatus,
   type ArchitectMessageRole,
   type ArchitectSessionKind,
@@ -40,6 +41,10 @@ import {
   type ArchitectUsage,
 } from "@nox/shared";
 
+import {
+  writeArchitectProjectUpdate,
+  type ProjectUpdateBase,
+} from "./architect-project-update.js";
 import type { DatabaseClient } from "./client.js";
 
 /** Levee lorsqu'une ligne stockee ne correspond plus au contrat metier. */
@@ -804,6 +809,22 @@ export type FinishGenerationInput = {
    * qui a reellement abouti, jamais une tentative.
    */
   messages?: readonly { role: ArchitectMessageRole; content: string }[];
+  /**
+   * Mise a jour du projet proposee par ce tour, a enregistrer avec lui.
+   *
+   * Ecrite dans la **meme** transaction que la conclusion de la generation et
+   * que les messages. C'est la seule facon d'eviter l'etat impossible ou une
+   * reponse annonce une proposition qui n'existe nulle part.
+   *
+   * `baseState` decrit l'etat structure que le fournisseur avait sous les yeux.
+   * Il vient de la preparation du tour, jamais d'une relecture faite ici : voir
+   * `architect-project-update.ts`.
+   */
+  projectUpdate?: {
+    projectId: string;
+    proposed: ArchitectProjectUpdateProposal;
+    baseState: ProjectUpdateBase;
+  } | null;
 };
 
 /** Statut de session correspondant a l'issue d'une generation. */
@@ -881,6 +902,15 @@ export async function finishArchitectGeneration(
         });
         sequence += 1;
       }
+    }
+
+    if (input.projectUpdate !== undefined && input.projectUpdate !== null) {
+      await writeArchitectProjectUpdate(tx, {
+        generationId: row.id,
+        projectId: input.projectUpdate.projectId,
+        proposed: input.projectUpdate.proposed,
+        baseState: input.projectUpdate.baseState,
+      });
     }
 
     // La session suit l'issue de sa derniere generation — sauf si elle a ete

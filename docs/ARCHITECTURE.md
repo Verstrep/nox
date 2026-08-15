@@ -667,6 +667,65 @@ Entrées ACTIVE  →  sanitation  →  révisions  →  bundle de contexte  → 
 - **La review Architecte ne reçoit pas la mémoire.** Élargir cette surface demande une décision
   séparée.
 
+### 6.11 État structuré du projet et mises à jour proposées
+
+Deux flux distincts, qui écrivent au même endroit.
+
+**L'édition manuelle**, qui n'implique personne d'autre :
+
+```text
+formulaire  →  validation  →  sanitation  →  budget commun  →  révision attendue  →  SQLite
+```
+
+**La proposition de l'Architecte**, qui n'écrit rien tant qu'un humain n'a pas tranché :
+
+```text
+Project Architect
+  → Structured Output v3
+  → projectUpdate proposé
+  → revalidation NOX (bornes, sanitation, budget)
+  → ArchitectProjectUpdate PENDING     ← écrit dans la transaction du tour
+       ↓
+  revue humaine : Current → Proposed, correction possible
+       ↓
+  Apply  ou  Dismiss
+       ↓
+  écriture atomique SQLite de l'état structuré
+       ↓
+  le tour Architecte suivant reçoit l'état courant
+```
+
+- **Le brief et le plan partagent un seul budget de 16 Kio**, mesuré après sanitation. Le
+  chiffre se démontre : `16 + 64 (conventions) + 48 (mémoire) = 128 Kio`, soit exactement le
+  budget global du contexte. Les trois catégories qui ne doivent jamais être tronquées y
+  tiennent donc ensemble.
+- **L'état structuré est consommé en premier**, avant les conventions, la mémoire, les tâches
+  et les documents. C'est ce qui rend sa non-troncature arithmétique plutôt que déclarative.
+- **Il est rendu avant la documentation du repository**, qui peut avoir pris du retard. L'ordre
+  porte une hiérarchie : pour l'intention produit, l'état structuré fait foi, et le prompt
+  demande de **signaler** une contradiction plutôt que de fusionner les deux.
+- **La proposition du fournisseur est immuable.** `proposedJson` n'est jamais réécrit, y compris
+  quand l'utilisateur corrige la valeur avant de l'appliquer : la version retenue est écrite
+  dans `appliedJson`, séparément. Les deux répondent à deux questions différentes, et les
+  confondre ferait perdre ce que le modèle avait réellement répondu.
+- **Les révisions de base sont celles vues par le fournisseur**, capturées à la préparation du
+  tour et transportées en mémoire serveur — jamais relues après l'appel. Relire à l'arrivée
+  étiquetterait la proposition comme bâtie sur un état que le modèle n'a jamais vu, et le
+  contrôle de péremption ne détecterait plus rien. C'est le seul endroit de NOX où « tout
+  relire côté serveur » serait la mauvaise réponse.
+- **Toute divergence rend la proposition périmée**, brief ou plan, même si la proposition ne
+  touche qu'une section : le modèle a vu les deux en la formulant.
+- **Une proposition périmée est refusée localement.** Il n'existe aucun chemin de code allant
+  d'un conflit vers un appel qui fusionnerait les deux états.
+- **Le tour et sa proposition sont écrits dans la même transaction.** Une réponse affichée qui
+  annoncerait une modification sans proposition enregistrée n'existe pas.
+- **Aucune écriture dans le repository.** L'état structuré de NOX n'est pas
+  `docs/PROJECT_BRIEF.md` : les deux coexistent, aucun n'est généré depuis l'autre, et aucune
+  synchronisation n'existe.
+- **Une carte de proposition n'est jamais un message.** Elle est dérivée
+  d'`ArchitectProjectUpdate`, n'entre ni dans le transcript, ni dans le prompt, ni dans le
+  décompte de jetons.
+
 ## 7. Invariants transverses
 
 Ces règles ne dépendent d'aucun flux. Elles valent partout, et une tâche qui les contredirait
