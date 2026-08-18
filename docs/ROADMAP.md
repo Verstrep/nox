@@ -39,6 +39,7 @@ vide à une exécution relue.
 | 18 | Consolidation documentaire | Un rôle par document, vision réalignée, audit technique |
 | 20 | Conversation projet | Une conversation durable par projet, plusieurs tâches dans le temps |
 | 21 | Plan de projet structuré | Project Brief et Living V1 Plan, proposés par l'Architecte, appliqués par l'humain |
+| 22 | Backlog de V1 | Planification multi-tâches, revue et réordonnancement, création par lot |
 
 **Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
 automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
@@ -80,7 +81,22 @@ corrige, puis s'applique ou s'écarte — et seule une application humaine chang
 Une proposition bâtie sur un état devenu obsolète est refusée, jamais fusionnée.
 
 C'est le premier cycle « le modèle propose, l'humain relit et corrige, NOX applique » de
-l'outil. `TASK-022` le réutilisera pour le backlog.
+l'outil. `TASK-022` l'a réutilisé pour le backlog.
+
+### `TASK-022` — Planification multi-tâches et génération de backlog — terminée
+
+Le Living V1 Plan validé se transforme désormais en un backlog ordonné de plusieurs tâches.
+Un workflow de planification dédié — `backlog/1`, distinct du contrat conversationnel —
+reçoit le brief, le plan, la mémoire, l'inventaire des tâches existantes et la documentation
+autorisée, mais **aucune conversation** : la connaissance durable du projet suffit à
+planifier.
+
+La proposition se relit tâche par tâche, s'édite, se réordonne, s'ampute, puis s'applique en
+un lot de tâches `DRAFT`. Toute modification du contexte de planification entre la
+génération et l'application refuse le backlog — jamais de fusion automatique.
+
+Ce que cette étape n'a **pas** fait, délibérément : ni dépendances explicites, ni file
+d'exécution, ni modification des tâches existantes.
 
 ---
 
@@ -115,13 +131,7 @@ Human validation only when necessary
 Validated delivery
 ```
 
-### `TASK-022` — Planification multi-tâches et génération de backlog — **suivante**
-
-Transformer le Living V1 Plan validé en un backlog structuré de plusieurs tâches, avec
-découpage, ordre et validation humaine — sans développer encore la file d'exécution. Chaque
-tâche reste créée en brouillon et relue avant d'être mise en file.
-
-### `TASK-023` — Amorçage d'un projet — `TASK-000`
+### `TASK-023` — Amorçage d'un projet — `TASK-000` — **suivante**
 
 Le premier pas d'un projet vide : structure, documents de référence, premier commit préparé.
 

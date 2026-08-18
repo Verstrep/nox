@@ -218,7 +218,7 @@ export async function createTask(
   db: DatabaseClient,
   input: CreateTaskInput,
 ): Promise<DevelopmentTaskDetail | null> {
-  const row = await db.$transaction(async (tx) => {
+  return db.$transaction(async (tx) => {
     const project = await tx.project.findUnique({
       where: { id: input.projectId },
       select: { id: true },
@@ -227,43 +227,156 @@ export async function createTask(
       return null;
     }
 
-    const reserved = await tx.project.update({
-      where: { id: input.projectId },
-      data: { nextTaskSequence: { increment: 1 } },
-      select: { nextTaskSequence: true },
-    });
-    const sequence = reserved.nextTaskSequence - 1;
-    const code = formatTaskCode(sequence);
+    const sequences = await reserveTaskSequences(tx, input.projectId, 1);
+    const sequence = sequences[0];
+    if (sequence === undefined) {
+      return null;
+    }
 
-    return tx.task.create({
-      data: {
-        projectId: input.projectId,
-        sequence,
-        title: input.title,
-        objective: input.objective,
-        context: input.context,
-        outOfScope: input.outOfScope,
-        status: TASK_STATUS.DRAFT,
-        priority: input.priority,
-        documentPath: taskDocumentPath(code),
-        // Le document n'existe pas encore : la tache est complete en base, son
-        // artefact versionne reste a produire.
-        documentSyncStatus: TASK_DOCUMENT_SYNC_STATUS.PENDING,
-        acceptanceCriteria: {
-          create: input.acceptanceCriteria.map((text, position) => ({ position, text })),
-        },
-        documentReferences: {
-          create: input.documentReferences.map((path, position) => ({ position, path })),
-        },
-        validationCommands: {
-          create: input.validationCommands.map((command, position) => ({ position, command })),
-        },
-      },
-      include: DETAIL_INCLUDE,
-    });
+    return writeTaskRow(tx, { ...input, sequence });
+  });
+}
+
+/**
+ * Surface minimale utilisee a l'interieur d'une transaction.
+ *
+ * Le client transactionnel de Prisma n'est pas un `DatabaseClient` complet : il
+ * ne porte ni `$connect`, ni `$transaction`. Ce type dit exactement ce dont
+ * l'ecriture d'une tache a besoin, et rien de plus.
+ */
+export type TaskWriteClient = Pick<DatabaseClient, "task" | "project">;
+
+/**
+ * Reserve `count` numeros de tache consecutifs, en une seule operation atomique.
+ *
+ * ## Pourquoi un seul `increment`, et pas `count` appels
+ *
+ * Parce que `nextTaskSequence += 8` est atomique la ou huit incrementations
+ * successives ne le sont pas. Deux applications de backlog simultanees
+ * obtiennent donc deux plages disjointes — `11..14` et `15..18` — sans qu'aucun
+ * numero puisse etre attribue deux fois, et sans verrou explicite.
+ *
+ * Les numeros sont rendus dans l'ordre croissant : c'est celui dans lequel
+ * l'appelant doit ecrire ses taches pour que la position humaine et le code
+ * concordent.
+ */
+export async function reserveTaskSequences(
+  tx: TaskWriteClient,
+  projectId: string,
+  count: number,
+): Promise<number[]> {
+  if (!Number.isInteger(count) || count < 1) {
+    throw new RangeError(`Nombre de numeros invalide : ${String(count)}`);
+  }
+
+  const reserved = await tx.project.update({
+    where: { id: projectId },
+    data: { nextTaskSequence: { increment: count } },
+    select: { nextTaskSequence: true },
   });
 
-  return row === null ? null : toDetail(row);
+  const first = reserved.nextTaskSequence - count;
+  return Array.from({ length: count }, (_unused, offset) => first + offset);
+}
+
+/**
+ * Objectif de chaque tache d'un projet, indexe par identifiant.
+ *
+ * Une requete plutot qu'une relecture complete par tache : l'inventaire de
+ * planification en decrit jusqu'a quarante, et quarante lectures de detail
+ * chargeraient trois listes enfant dont aucune n'est transmise.
+ */
+export async function listTaskObjectives(
+  db: DatabaseClient,
+  projectId: string,
+): Promise<Map<string, string>> {
+  const rows = await db.task.findMany({
+    where: { projectId },
+    select: { id: true, objective: true },
+  });
+  return new Map(rows.map((row) => [row.id, row.objective]));
+}
+
+/**
+ * Prochain numero qu'une creation attribuerait, sans le consommer.
+ *
+ * Lecture seule, et **indicative** : le compteur peut avancer entre cette
+ * lecture et la creation. Elle ne sert donc qu'a prevoir les chemins de
+ * documents dans un preflight, jamais a decider d'un numero — l'attribution
+ * reste `reserveTaskSequences`, qui est atomique.
+ */
+export async function peekNextTaskSequence(
+  db: DatabaseClient,
+  projectId: string,
+): Promise<number | null> {
+  const project = await db.project.findUnique({
+    where: { id: projectId },
+    select: { nextTaskSequence: true },
+  });
+  return project?.nextTaskSequence ?? null;
+}
+
+/** Une tache a ecrire : sa specification, son numero, et sa provenance. */
+export type TaskRowInput = CreateTaskInput & {
+  /** Numero deja reserve par `reserveTaskSequences`. */
+  sequence: number;
+  /** Proposition de backlog dont cette tache est issue, le cas echeant. */
+  backlogProposalId?: string | null;
+  /** Position dans l'ordre valide par l'humain, a partir de 0. */
+  backlogItemPosition?: number | null;
+};
+
+/**
+ * Ecrit une tache et ses trois listes, sans aucun controle.
+ *
+ * Primitive volontairement nue : la validation de la specification, la
+ * reservation du numero et l'existence du projet sont la responsabilite de
+ * l'appelant, qui doit les avoir faites **dans la meme transaction**.
+ *
+ * Elle est exportee pour que la creation unitaire et l'application d'un backlog
+ * partagent exactement la meme ecriture. Une seconde implementation aurait
+ * fini par diverger — sur le statut initial, sur le chemin du document, ou sur
+ * l'ordre des listes — et la tache issue d'un backlog n'aurait plus ete une
+ * tache comme les autres.
+ */
+export async function writeTaskRow(
+  tx: TaskWriteClient,
+  input: TaskRowInput,
+): Promise<DevelopmentTaskDetail> {
+  const code = formatTaskCode(input.sequence);
+
+  const row = await tx.task.create({
+    data: {
+      projectId: input.projectId,
+      sequence: input.sequence,
+      title: input.title,
+      objective: input.objective,
+      context: input.context,
+      outOfScope: input.outOfScope,
+      // Toujours `DRAFT`, sans exception ni parametre : c'est un humain qui
+      // decide qu'une tache peut etre lancee, jamais une creation.
+      status: TASK_STATUS.DRAFT,
+      priority: input.priority,
+      documentPath: taskDocumentPath(code),
+      // Le document n'existe pas encore : la tache est complete en base, son
+      // artefact versionne reste a produire.
+      documentSyncStatus: TASK_DOCUMENT_SYNC_STATUS.PENDING,
+      backlogProposalId: input.backlogProposalId ?? null,
+      backlogItemPosition: input.backlogItemPosition ?? null,
+      acceptanceCriteria: {
+        create: input.acceptanceCriteria.map((text, position) => ({ position, text })),
+      },
+      documentReferences: {
+        create: input.documentReferences.map((path, position) => ({ position, path })),
+      },
+      validationCommands: {
+        create: input.validationCommands.map((command, position) => ({ position, command })),
+      },
+    },
+    include: DETAIL_INCLUDE,
+  });
+
+  return toDetail(row);
 }
 
 export type UpdateTaskStatusResult =

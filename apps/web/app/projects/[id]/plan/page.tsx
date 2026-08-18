@@ -7,6 +7,14 @@ import type { ReactNode } from "react";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { architectUrl } from "@/lib/architect/display";
+import { loadProjectBacklogView } from "@/lib/backlog";
+import {
+  backlogCreatedCountLabel,
+  backlogStateLabel,
+  backlogTaskCountLabel,
+  backlogUrl,
+  type BacklogSurfaceState,
+} from "@/lib/backlog/display";
 import { formatIsoDateTime } from "@/lib/format";
 import {
   briefSectionState,
@@ -182,6 +190,25 @@ export default async function ProjectPlanPage({ params }: { params: Promise<{ id
   const briefState = briefSectionState(state.brief.present, brief);
   const planState = planSectionState(state.plan.present, plan);
 
+  const backlog = await loadProjectBacklogView(project.id);
+  const backlogState: BacklogSurfaceState =
+    backlog.running !== null
+      ? "generating"
+      : backlog.pending !== null
+        ? "proposal_ready"
+        : backlog.lastApplied !== null
+          ? "applied"
+          : "not_generated";
+
+  const backlogSummary =
+    backlogState === "generating"
+      ? "Une planification est en cours. Rechargez la page dans un instant."
+      : backlogState === "proposal_ready"
+        ? `Un backlog de ${backlogTaskCountLabel(backlog.pending?.taskCount ?? 0)} attend votre decision.`
+        : backlogState === "applied"
+          ? `${backlogCreatedCountLabel(backlog.lastAppliedTasks.length)} depuis le dernier backlog applique.`
+          : "Definissez d'abord le Living V1 Plan : sans cible validee, un backlog n'aurait rien a atteindre.";
+
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-5 border-b border-zinc-800 pb-6">
@@ -243,6 +270,47 @@ export default async function ProjectPlanPage({ params }: { params: Promise<{ id
               <PlanBody plan={plan} projectId={project.id} />
               <Meta updatedAt={plan.updatedAt} chars={state.plan.chars} />
             </>
+          )}
+        </SectionCard>
+
+        {/*
+          Une section compacte, et rien de plus : le plan dit la cible, le
+          backlog dit les increments qui y menent. Les deux objets restent
+          distincts — cette carte relie, elle ne resume pas.
+
+          Elle vient de SQLite comme le reste de la page : aucun appel au
+          fournisseur, aucune lecture du repository.
+        */}
+        <SectionCard
+          title="V1 Backlog"
+          description="Le travail d'implementation restant pour atteindre ce plan."
+          action={<StatusBadge tone="muted">{backlogStateLabel(backlogState)}</StatusBadge>}
+        >
+          {backlogState === "not_generated" && planState !== "absent" ? (
+            <div className="flex flex-col gap-4">
+              <p className="max-w-prose text-sm leading-relaxed text-zinc-500">
+                Aucun backlog n&apos;a encore ete genere pour ce plan. La generation est une action
+                explicite, qui engage un appel au fournisseur.
+              </p>
+              <Link
+                href={backlogUrl(project.id)}
+                className="self-start rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-200 transition-colors hover:border-zinc-500 hover:text-zinc-50"
+              >
+                Generate V1 backlog
+              </Link>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <p className="max-w-prose text-sm leading-relaxed text-zinc-500">
+                {backlogSummary}
+              </p>
+              <Link
+                href={backlogUrl(project.id)}
+                className="self-start rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-200 transition-colors hover:border-zinc-500 hover:text-zinc-50"
+              >
+                Open backlog
+              </Link>
+            </div>
           )}
         </SectionCard>
       </main>

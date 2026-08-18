@@ -3889,3 +3889,265 @@ l'une l'autre.
 Le prix est un champ de plus dans le contrat, et une version de schéma : `architect/4` et
 `schemaVersion 3` pour les conversations projet, les sessions de conception de tâche restant
 sur `architect/3` et `schemaVersion 2`, figées.
+
+---
+
+## Décisions de TASK-022 — Planification multi-tâches et backlog de V1
+
+### D-278 — Un workflow de planification dédié, plutôt qu'un champ de plus dans le chat
+
+**Décision.** La planification d'un backlog est un workflow séparé — `backlog/1`, son propre
+prompt, son propre Structured Output, sa propre table de générations. Le contrat
+conversationnel `architect/4` n'a pas été touché.
+
+**Justification.** Les deux répondent à des questions de natures différentes. Une conversation
+répond à un **message** ; une planification répond à un **état**. Ajouter un champ `backlog` au
+tour conversationnel aurait fait grossir un contrat que la quasi-totalité des tours laisse
+vide, et — plus grave — aurait rendu un backlog dépendant du dernier message écrit,
+c'est-à-dire du hasard.
+
+Le prix est un second prompt à maintenir, et une seconde version à faire évoluer. Le gain est
+qu'aucun des deux ne peut casser l'autre : les sessions de conversation existantes ont continué
+de fonctionner sans qu'une ligne de leur contrat change.
+
+### D-279 — Le planificateur ne reçoit aucun transcript
+
+**Décision.** Le contexte de planification porte le Project Brief, le Living V1 Plan, la
+mémoire active, l'inventaire des tâches et la documentation autorisée. Il ne porte **aucune
+conversation**, et son type d'entrée n'en prévoit pas.
+
+**Justification.** C'est la démonstration de `TASK-021`, et elle méritait d'être faite plutôt
+qu'affirmée. Si la connaissance durable du projet ne suffisait pas à produire un backlog, l'état
+structuré n'aurait servi à rien — il faudrait toujours lire le chat pour savoir ce que le projet
+cherche à construire.
+
+Ce n'est pas un filtre, c'est une absence : aucun chemin de code ne peut amener un message de
+conversation dans ce prompt.
+
+### D-280 — Le travail restant, pas tout le travail
+
+**Décision.** Une proposition décrit les incréments encore nécessaires pour atteindre la V1,
+**compte tenu des tâches existantes**. L'inventaire complet des tâches — code, titre, statut,
+priorité, objectif — est transmis et présenté comme un fait.
+
+**Justification.** Sans cela, le workflow n'aurait fonctionné que sur un projet vierge, ce qui
+n'est presque jamais le cas. Un projet réel a déjà des tâches terminées, en cours et en
+brouillon, et reproposer ce qui existe déjà aurait produit des doublons que la revue humaine
+aurait dû trier une par une.
+
+Le statut entre dans la révision de chaque tâche, et c'est délibéré : une tâche passée de
+`DRAFT` à `COMPLETED` change ce qu'il reste à planifier, même si sa spécification n'a pas
+bougé d'une lettre.
+
+### D-281 — Un ordre, pas un graphe de dépendances
+
+**Décision.** L'ordre du tableau **est** l'ordre recommandé. Il n'existe ni `dependsOn`, ni
+`blockedBy`, ni champ `order`, et le prompt interdit explicitement d'en inventer un dans
+le texte.
+
+**Justification.** Un graphe de dépendances demande une sémantique — que signifie « bloqué » ?
+qui peut lever un blocage ? que fait-on d'un cycle ? — que TASK-022 n'a aucun moyen de
+trancher, et qu'aucun écran n'exploiterait aujourd'hui. Le produire quand même aurait donné des
+liens que personne ne lit et que rien ne vérifie.
+
+Un index plutôt qu'un champ `order`, pour la même raison qu'ailleurs dans NOX : deux
+représentations d'une même vérité finissent par se contredire, et le jour où elles se
+contrediraient, personne ne saurait laquelle fait foi.
+
+### D-282 — Une empreinte de contexte de planification, plutôt que trois révisions
+
+**Décision.** La péremption se décide sur **une** empreinte, qui couvre le brief, le plan, la
+mémoire active, l'inventaire des tâches et les documents inclus. Les révisions principales sont
+conservées à côté, pour l'inspection, mais ne décident de rien.
+
+**Justification.** Cinq comparaisons séparées auraient eu cinq occasions d'en oublier une — et
+celle qu'on oublie est toujours celle qui compte. Une empreinte unique rend la question
+binaire : le projet est-il encore celui à partir duquel ce backlog a été conçu ?
+
+Elle ne couvre que ce qui est **inclus**. Un fichier du repository hors de la liste fermée ne
+rend rien périmé : le déclarer périmant serait de la sévérité gratuite, et un avertissement qui
+se déclenche pour rien finit par ne plus rien signaler.
+
+Comme celle de l'Architecte, ce n'est **pas** une primitive de sécurité : SHA-256 nu,
+contrairement à l'empreinte de dossier de travail, qui est un HMAC parce qu'elle décide d'une
+exécution.
+
+### D-283 — Au plus une proposition en attente par projet
+
+**Décision.** `Project.pendingBacklogProposalId` porte la proposition en attente. Tant
+qu'elle existe, une nouvelle génération est refusée — sans appel, sans coût.
+
+**Justification.** Deux backlogs applicables en même temps décriraient deux plans concurrents,
+dont l'un rendrait l'autre périmé dès qu'on l'appliquerait. L'utilisateur n'aurait aucun moyen
+de savoir lequel choisir, et NOX aucun moyen de le lui dire.
+
+Un pointeur plutôt qu'une recherche par statut, pour la même raison que
+`mainArchitectSessionId` : la garantie doit être **structurelle**. Une ligne de `Project`
+ne porte qu'une valeur, donc deux générations concurrentes ne peuvent pas produire deux
+propositions en attente, quelle que soit la façon dont elles s'entrelacent.
+
+Écarter la proposition en attente reste un geste explicite, gratuit, et qui laisse une trace.
+
+### D-284 — Un backlog est une unité, à la génération comme à l'application
+
+**Décision.** Un seul élément invalide condamne **toute** la proposition. À la génération, rien
+n'est persisté comme applicable ; à l'application, aucune tâche n'est créée.
+
+**Justification.** Conserver huit tâches sur neuf livrerait un backlog dont personne ne pourrait
+dire ce qui manque. Le découpage ne vaut que pris ensemble : retirer l'élément qui posait les
+fondations laisse une séquence dont les suivants supposent un socle absent.
+
+C'est aussi ce qui rend la revue honnête. Un utilisateur qui voit huit cartes croit voir le plan
+complet ; lui montrer un plan amputé sans le dire serait pire que de refuser.
+
+### D-285 — L'atomicité s'arrête à SQLite, et NOX le dit
+
+**Décision.** Les N tâches sont créées dans une seule transaction. Leurs documents Markdown sont
+écrits **après**, un par un, avec la primitive exclusive de `TASK-007`. Un préflight refuse
+d'appliquer si le repository ne répond pas, ou si une destination est déjà occupée.
+
+**Justification.** SQLite et le système de fichiers ne partagent aucune transaction. On peut
+l'ignorer, le contourner par une compensation qui échouerait elle aussi, ou le dire. NOX le dit.
+
+Ce qui est réellement garanti : le backlog **logique** est atomique — l'état « trois tâches
+créées, la quatrième en erreur, proposition marquée appliquée » n'existe pas — et aucun fichier
+n'est jamais écrasé.
+
+Le préflight n'est pas une garantie mais une **parade** : il rend inoffensif le cas de loin le
+plus fréquent, un runner arrêté. Rien n'est écrit, rien n'est annoncé appliqué, et l'utilisateur
+relance quand son runner tourne. Reste le cas d'une panne pendant l'écriture des documents,
+qui laisse des documents à reprendre — un état que NOX modélise depuis `TASK-007`, affiche,
+et reprend d'un clic.
+
+### D-286 — La provenance vit dans deux colonnes de `Task`
+
+**Décision.** `Task.backlogProposalId` et `Task.backlogItemPosition`, nullables. Pas de
+table de liaison, pas de texte d'interface.
+
+**Justification.** Une tâche vient d'au plus un backlog, et n'y occupe qu'une position. Une
+table de liaison aurait modélisé une relation plusieurs-à-plusieurs qui n'existe pas, et rendu
+possible un état — deux origines pour une même tâche — que rien ne devrait pouvoir produire.
+
+Ces deux colonnes répondent aux deux questions qu'on se pose des mois plus tard : « quelle
+planification a créé `TASK-014` ? » et « qu'a produit `BACKLOG-002` ? ». La position
+porte l'ordre **validé par l'humain**, pas celui du fournisseur : c'est lui qui a été retenu,
+c'est donc lui qui est affiché.
+
+### D-287 — Les bornes d'un élément de backlog sont plus strictes que celles d'une proposition
+
+**Décision.** Un élément de backlog est plus contraint qu'une proposition conversationnelle :
+objectif de 1 200 caractères contre 5 000, contexte de 2 000 contre 10 000, huit critères
+contre douze. Le plafond de sortie est déclaré explicitement, à 32 000 jetons.
+
+**Justification.** Une conversation propose **une** tâche et peut se permettre d'être longue ;
+un backlog en propose jusqu'à vingt d'un coup. Les mêmes bornes auraient rendu la réponse
+maximale ingérable, à l'écran comme dans le budget de sortie.
+
+Le resserrement porte aussi une intention : un élément de backlog est le plus petit incrément
+cohérent. S'il lui faut trois pages d'objectif, ce n'est pas un incrément, c'est un projet. La
+borne dit la même chose que le prompt, et elle le dit de façon exécutable.
+
+Le plafond de sortie couvre très largement un backlog réel — vingt éléments d'environ 1,5 Kio,
+ce que le prompt demande — avec un facteur trois de marge. Il ne couvre pas le cas théorique où
+les vingt éléments atteindraient simultanément toutes leurs bornes ; cette réponse serait
+coupée, produirait du JSON invalide, et ferait échouer proprement la génération. NOX préfère un
+échec lisible à un budget de 80 000 jetons qu'il ne saurait ni justifier, ni garantir sur tous
+les modèles.
+
+### D-288 — Le backlog optimise le nombre d'executions, pas la granularite
+
+**Décision.** Le prompt de planification demande le **plus petit nombre utile de tâches
+bornées**, et non la décomposition maximale. Il déclare explicitement le coût d'une frontière
+de tâche, rattache tests, documentation, QA finale et accessibilité aux tâches qu'ils servent,
+interdit les fonctionnalités inventées, laisse l'amorçage du repository hors du backlog et
+refuse de figer un choix technique que le plan laisse ouvert. Les bornes serveur `1..20` ne
+changent pas, et le Structured Output non plus.
+
+**Justification.** La première validation réelle a produit treize tâches là où cinq auraient
+suffi : un scaffold, un modèle de domaine, une persistance, trois écrans, une impression, une
+tâche « responsive et accessibilité », une tâche de tests, une de QA, un README et un parcours
+d'accueil que ni le brief ni le plan ne demandaient.
+
+Le résultat était fonctionnellement cohérent, et c'est précisément ce qui rendait le problème
+invisible à la relecture. Il ne se voit qu'au moment d'exécuter : chaque tâche est une
+exécution d'agent, un chargement de contexte, une relecture et un cycle de correction possible.
+Un backlog sur-découpé ne coûte rien à produire et beaucoup à réaliser.
+
+Le prompt donne donc un ordre de grandeur — environ quatre à huit tâches pour une petite V1 —
+en disant dans la même phrase que ce n'est pas un quota. Un nombre impose serait pire que le
+défaut qu'il corrige : c'est le projet réel qui décide, pas une constante.
+
+Le garde-fou inverse reste écrit noir sur blanc : « construire l'application » n'est pas une
+tâche, et chaque élément doit rester compréhensible seul, réalisable en une exécution bornée et
+relisible d'un diff. Remplacer treize micro-tâches par deux méga-tâches aurait déplacé le
+problème, pas résolu.
+
+L'exception la plus structurante est l'amorçage : NOX le traitera séparément, et une tâche de
+scaffold ordinaire ferait doublon avec lui. Le prompt le dit sans nommer le code de cette tâche
+— l'attribution des codes appartient à NOX, et souffler celui-là au fournisseur reviendrait à
+l'inviter à en produire d'autres.
+
+### D-289 — L'identité d'une carte de revue ne dérive d'aucune valeur éditable
+
+**Décision.** Chaque élément de backlog porte un identifiant local, attribué une fois au
+montage de la revue et inchangé ensuite. Il sert de clé React et de désignation de l'élément
+déplié. Il ne part dans aucun formulaire, n'atteint jamais le serveur, et n'existe pas en base.
+
+**Justification.** La première version dérivait la clé du titre. Taper une lettre changeait donc
+la clé, React démontait la carte et la remontait à l'identique — et le champ perdait le focus à
+chaque frappe. Le symptôme était le focus ; la cause était qu'une identité avait été construite
+sur une valeur variable.
+
+Les deux corrections faciles auraient été des masques. Un `autoFocus` permanent ou un
+`focus()` dans un effet auraient rendu le focus, en laissant la carte se démonter à chaque
+frappe — donc en cassant plus tard la sélection, le collage et la position du curseur.
+
+L'index seul ne pouvait pas servir non plus : la revue déplace des éléments, et une clé de
+position mélangerait alors les formulaires. Position et identité répondent à deux questions
+différentes — « où est-ce » et « qu'est-ce » — et NOX a besoin des deux. Les champs restent donc
+nommés d'après la position, ce qui fait que le serveur lit l'ordre de l'écran ; la clé, elle,
+suit l'élément.
+
+Aucune colonne n'a été ajoutée pour autant. Une proposition n'a pas besoin d'identifier ses
+éléments côté serveur, puisque leur position **est** leur identité : faire payer au schéma le
+prix d'un détail de rendu aurait été un mauvais échange, et une migration de plus.
+
+La propriété est testée pour elle-même — six frappes consécutives ne changent aucune identité,
+un déplacement garde chaque valeur avec sa tâche — et un test lit la **source** du composant
+pour vérifier qu'il s'en sert réellement. Une propriété pure ne protège de rien si le composant
+cesse de l'utiliser.
+
+### D-290 — Le planificateur n'a aucune autorité produit
+
+**Décision.** Chaque capacité visible par l'utilisateur, dans chaque tâche proposée, doit se
+rattacher à une exigence du Project Brief, du Living V1 Plan, de la mémoire du projet ou d'une
+tâche déjà enregistrée. Le prompt casse nommément les implications tacites les plus fréquentes,
+distingue la **nécessité d'implémentation** de la **capacité produit**, et impose un contrôle de
+sortie dont le déroulement n'est jamais rendu.
+
+**Justification.** La deuxième validation réelle a corrigé la granularité — quatre tâches au
+lieu de treize — et laissé apparaître le défaut suivant. Le backlog proposait de sauvegarder,
+charger, **exporter et importer** l'état ; un **export JSON** de la liste ; des contrôles pour
+**marquer les éléments comme achetés** ; un **jeu de données de démonstration**. Ni le brief ni
+le plan ne demandaient rien de tout cela.
+
+Aucune de ces capacités n'était absurde pour un produit de ce type, et c'est précisément ce qui
+les rendait invisibles. Le glissement ne vient pas d'idées farfelues : il vient d'implications
+tacites. « La V1 exige la persistance » devient « donc l'export en fait partie » ; « la V1
+affiche une liste » devient « donc on peut cocher ses éléments ». La V1 grossit sans que
+personne l'ait décidé, et l'utilisateur relit un plan pour une V1 qu'il n'a pas validée.
+
+L'interdiction générale existait déjà et n'a pas suffi. Une règle abstraite ne bloque pas un
+raisonnement qui ne se perçoit pas comme un ajout : le modèle ne croyait pas inventer, il
+croyait déduire. La correction casse donc les implications une par une, en toutes lettres.
+
+Le risque symétrique était de rendre le planificateur inutilement timide. La frontière est donc
+posée explicitement : tests, abstractions, migrations, gestion d'erreur, validation des saisies
+et mécanismes techniques indispensables restent attendus. « La V1 exige la persistance »
+autorise à construire une couche de stockage ; elle n'autorise pas un bouton d'import.
+
+Le contrôle final est une instruction de sortie, pas un raisonnement à exposer : le modèle
+reprend chaque capacité visible, cherche l'exigence qui la rend nécessaire, et retire ce qui n'en
+a pas. Il lui est explicitement demandé de ne rendre ni le déroulement, ni la liste de ce qu'il a
+retiré — NOX ne demande, ne reçoit et ne stocke aucun raisonnement interne, et une exception ici
+aurait contredit une garantie tenue partout ailleurs.

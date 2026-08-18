@@ -161,6 +161,10 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
     return this.#call(input);
   }
 
+  generateBacklog(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+
   /**
    * Le seul endroit ou NOX parle au fournisseur.
    *
@@ -181,6 +185,12 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
           // NOX conserve son propre historique : rien a stocker chez le
           // fournisseur, et rien a reprendre d'un appel precedent.
           store: false,
+          // Declare uniquement quand la surface en demande un. L'omettre laisse
+          // le defaut du modele, ce qui convient a une reponse conversationnelle
+          // et ne conviendrait pas a vingt specifications de tache.
+          ...(input.maxOutputTokens === undefined
+            ? {}
+            : { max_output_tokens: input.maxOutputTokens }),
           text: {
             format: {
               type: "json_schema",

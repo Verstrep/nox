@@ -86,47 +86,52 @@ sont le socle.
 
 ---
 
+### 1.11 Backlog de V1 généré et appliqué par lot
+
+Un Living V1 Plan validé produit, sur demande explicite, le backlog ordonné des tâches
+restantes. La proposition se relit tâche par tâche, s'édite, se réordonne, s'ampute, puis crée
+en un lot des tâches `DRAFT` aux codes séquentiels — ou n'en crée aucune.
+
+Une génération coûte au plus un appel, et n'est jamais déclenchée autrement que par un clic.
+Un backlog bâti sur un état devenu obsolète est refusé, jamais fusionné.
+
+---
+
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Génération multi-tâches et backlog ordonné
-
-Le Living V1 Plan décrit **des capacités visées**, jamais des tâches. Le transformer en un
-backlog de tâches ordonnées — plutôt qu'une tâche isolée à la fois — reste à faire. Chaque
-tâche resterait créée en brouillon, relue et validée par l'utilisateur.
-
-### 2.2 Amorçage d'un projet — `TASK-000`
+### 2.1 Amorçage d'un projet — `TASK-000`
 
 Le premier pas d'un projet vide : initialiser le repository, poser la structure, produire les
 documents de référence. Aujourd'hui, ce travail se fait entièrement hors de NOX.
 
-### 2.3 Dépendances entre tâches
+### 2.2 Dépendances entre tâches
 
 Dire qu'une tâche en attend une autre, et que l'ordre n'est pas qu'une préférence d'affichage.
 
-### 2.4 Modification des tâches futures
+### 2.3 Modification des tâches futures
 
 Une spécification ne se modifie pas après création. Tant que le plan est vivant, cette
 contrainte devient bloquante : replanifier suppose de pouvoir réécrire ce qui n'a pas encore
 été lancé.
 
-### 2.5 Tableau de bord d'un projet
+### 2.4 Tableau de bord d'un projet
 
 Une vue qui répond « où en est ce projet » sans ouvrir chaque tâche.
 
-### 2.6 File d'exécution
+### 2.5 File d'exécution
 
 Enchaîner plusieurs tâches prêtes, sans qu'un enchaînement devienne une autonomie : chaque
 départ reste décidé, et une exécution reste seule active.
 
-### 2.7 Validation intelligente
+### 2.6 Validation intelligente
 
 Distinguer ce qu'une commande peut prouver, ce qu'une relecture par l'Architecte peut établir,
 et ce qui exige réellement un test humain — pour ne solliciter l'humain que dans le troisième
 cas.
 
-### 2.8 Livraison Git contrôlée
+### 2.7 Livraison Git contrôlée
 
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.

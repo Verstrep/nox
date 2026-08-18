@@ -74,14 +74,195 @@ model Project {
   /// ni reinitialisable.
   mainArchitectSessionId String?
 
-  tasks             Task[]
-  architectSessions ArchitectSession[]
-  memories          ProjectMemoryEntry[]
-  brief             ProjectBrief?
-  v1Plan            ProjectV1Plan?
-  projectUpdates    ArchitectProjectUpdate[]
+  /// Prochain numero de generation de backlog a attribuer dans ce projet.
+  ///
+  /// Meme regle que `nextTaskSequence` : il ne recule jamais, echecs compris.
+  /// Un `BACKLOG-002` reattribue designerait deux planifications differentes
+  /// dans deux historiques, et la provenance d'une tache deviendrait ambigue.
+  nextBacklogSequence Int @default(1)
+
+  /// Generation de backlog en cours, lorsqu'il y en a une.
+  ///
+  /// C'est le verrou de « un Generate = au plus un appel ». Il est pris par une
+  /// mise a jour conditionnelle — `where: { activeBacklogGenerationId: null }` —,
+  /// jamais par une lecture suivie d'une ecriture : deux clics simultanes ne
+  /// peuvent donc pas tous deux partir. Rendu des que la generation se conclut,
+  /// qu'elle ait reussi ou echoue.
+  ///
+  /// Une colonne plutot qu'une relation Prisma, pour la meme raison que
+  /// `mainArchitectSessionId` : la relation creerait un cycle
+  /// `Project → ArchitectBacklogGeneration → Project`.
+  activeBacklogGenerationId String?
+
+  /// Proposition de backlog en attente de decision, lorsqu'il y en a une.
+  ///
+  /// ## Pourquoi un pointeur plutot qu'une recherche par statut
+  ///
+  /// Parce que la garantie « au plus une proposition PENDING par projet » doit
+  /// etre structurelle. Une ligne de `Project` ne porte qu'une valeur : deux
+  /// generations concurrentes ne peuvent pas produire deux propositions en
+  /// attente, quelle que soit la facon dont elles s'entrelacent.
+  ///
+  /// Deux backlogs a appliquer en meme temps decriraient deux plans concurrents
+  /// dont l'un rendrait l'autre perime — et l'utilisateur n'aurait aucun moyen
+  /// de savoir lequel.
+  ///
+  /// Remis a `null` par `Apply` comme par `Dismiss` : une nouvelle planification
+  /// redevient alors possible.
+  pendingBacklogProposalId String?
+
+  tasks              Task[]
+  architectSessions  ArchitectSession[]
+  memories           ProjectMemoryEntry[]
+  brief              ProjectBrief?
+  v1Plan             ProjectV1Plan?
+  projectUpdates     ArchitectProjectUpdate[]
+  backlogGenerations ArchitectBacklogGeneration[]
+  backlogProposals   ArchitectBacklogProposal[]
 
   @@unique([mainArchitectSessionId])
+  @@unique([activeBacklogGenerationId])
+  @@unique([pendingBacklogProposalId])
+}
+
+/// Un appel de planification de backlog, et ce qu'il a rendu.
+///
+/// ## Pourquoi une table distincte d'`ArchitectGeneration`
+///
+/// Les deux appellent le meme fournisseur avec la meme configuration, et c'est
+/// tout ce qu'ils ont en commun. Une generation conversationnelle appartient a
+/// une session et repond a un message ; une planification appartient a un
+/// **projet** et repond a un etat. Les coudre dans une seule table aurait
+/// impose une colonne `sessionId` nullable dont la moitie des lignes n'auraient
+/// rien fait, et un `kind` a verifier partout.
+///
+/// ## Ce qui n'est pas stocke
+///
+/// Ni le prompt complet, ni les documents envoyes. `inputHash` identifie
+/// l'entree logique sans la conserver ; `contextManifestJson` dit avec quoi le
+/// backlog a ete produit. Aucune cle, aucun secret, aucun chemin absolu.
+model ArchitectBacklogGeneration {
+  id        String @id @default(cuid())
+  projectId String
+
+  /// Numero attribue a la creation, unique dans le projet et jamais modifie.
+  /// Le code affiche `BACKLOG-001` s'en derive et n'est pas stocke.
+  sequence Int
+
+  /// Valeur de `ArchitectBacklogGenerationStatus`.
+  status String
+
+  /// Modele effectivement utilise, tel que le serveur l'a lu dans sa configuration.
+  model String
+
+  /// Version du prompt de planification, pour qu'un changement soit detectable.
+  promptVersion String
+
+  /// Empreinte deterministe de l'entree logique. Diagnostic, jamais securite.
+  inputHash String
+
+  /// `BacklogContextManifest` serialise.
+  contextManifestJson String
+
+  /// Empreinte du contexte de planification **vu par le fournisseur**.
+  ///
+  /// Capturee avant l'appel, jamais relue apres : c'est elle qui decide, a
+  /// l'application, si la proposition est encore fondee. Elle couvre le brief,
+  /// le plan, la memoire active, l'inventaire des taches et les documents
+  /// reellement inclus.
+  ///
+  /// Ce n'est pas une primitive de securite : SHA-256 nu, comme l'empreinte de
+  /// contexte de l'Architecte, et contrairement a l'empreinte de dossier de
+  /// travail, qui est un HMAC parce qu'elle decide d'une execution.
+  planningFingerprint String
+
+  /// Revisions principales, conservees pour l'inspection du manifest.
+  ///
+  /// L'empreinte ci-dessus suffit a decider de la peremption ; ces colonnes
+  /// disent **ce qui** a change quand elle differe. `null` sur le brief ou le
+  /// plan signifie « pas encore defini a ce moment-la ».
+  baseBriefRevision         String?
+  basePlanRevision          String?
+  baseTaskInventoryRevision String
+  baseMemoryRevision        String
+
+  /// Identifiant de reponse rapporte par le fournisseur, lorsqu'il en fournit un.
+  providerResponseId String?
+
+  /// Consommation **rapportee**. Jamais estimee, jamais convertie en cout.
+  inputTokens       Int?
+  outputTokens      Int?
+  totalTokens       Int?
+  cachedInputTokens Int?
+
+  /// Valeur de `ArchitectErrorCode`, lorsque la generation a echoue.
+  errorCode String?
+
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  project  Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  proposal ArchitectBacklogProposal?
+
+  @@unique([projectId, sequence])
+  @@index([projectId, createdAt])
+}
+
+/// Un backlog de V1 propose par la planification.
+///
+/// ## Le payload du fournisseur est immuable
+///
+/// `providerJson` conserve la reponse telle qu'elle a ete rendue. Aucune
+/// ecriture ne le reecrit, y compris quand l'utilisateur modifie, reordonne ou
+/// retire des elements avant d'appliquer : ce champ repond a « qu'a propose le
+/// modele ? », et cette question a une seule reponse.
+///
+/// `appliedJson` porte le backlog **reellement retenu par l'humain**, dans son
+/// ordre valide. Sans lui, l'historique dirait que le projet a recu exactement
+/// ce que le modele avait suggere — ce qui serait faux des la premiere
+/// correction.
+///
+/// ## Pas de statut `STALE`
+///
+/// La peremption se derive : on reconstruit l'empreinte de planification
+/// actuelle et on la compare a celle de la generation. La persister obligerait
+/// a la recalculer a chaque changement du projet, et laisserait des
+/// propositions marquees perimees alors que l'etat est revenu a ce qu'il etait.
+model ArchitectBacklogProposal {
+  id           String @id @default(cuid())
+  generationId String @unique
+  projectId    String
+
+  /// `PENDING`, `APPLIED` ou `DISMISSED`.
+  status String
+
+  /// Resume de couverture ecrit pour l'utilisateur. Contenu, jamais instruction.
+  message String
+
+  /// Nombre d'elements proposes, pour afficher une liste sans la deserialiser.
+  taskCount Int
+
+  /// `ArchitectBacklogProposal` serialise, tel que le fournisseur l'a rendu.
+  providerJson String
+
+  /// Backlog applique par l'humain, serialise. `null` tant que ce n'est pas fait.
+  appliedJson String?
+
+  appliedAt   DateTime?
+  dismissedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  /// `Cascade` : une proposition ne raconte rien sans la planification qui l'a produite.
+  generation ArchitectBacklogGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  project    Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// Taches creees par l'application de ce backlog.
+  ///
+  /// C'est la seule reponse a « quelle proposition a cree TASK-014 ? », et elle
+  /// vit dans le schema plutot que dans un texte d'interface.
+  tasks Task[]
+
+  @@index([projectId, createdAt])
 }
 
 /// Brief produit du projet : ce qu'on construit, pour qui, contre quel probleme.
@@ -318,8 +499,32 @@ model Task {
   /// le cas normal, celui d'une tache ecrite a la main.
   architectGeneration ArchitectGeneration? @relation("TaskFromGeneration")
 
+  /// Proposition de backlog qui a cree cette tache, le cas echeant.
+  ///
+  /// ## Pourquoi deux colonnes plutot qu'une table de liaison
+  ///
+  /// Une tache vient d'au plus un backlog, et occupe une seule position dans
+  /// lui. Une table de liaison aurait modelise une relation plusieurs-a-plusieurs
+  /// qui n'existe pas, et aurait rendu possible un etat — deux origines pour une
+  /// tache — que rien ne devrait pouvoir produire.
+  ///
+  /// `Restrict` comme les autres liens de provenance : une tache creee depuis un
+  /// backlog n'est pas supprimable tant que ce backlog la designe. Retracer d'ou
+  /// vient une tache vaut mieux qu'une suppression silencieuse.
+  backlogProposalId String?
+
+  /// Position de cette tache dans l'ordre **valide par l'humain**, a partir de 0.
+  ///
+  /// L'ordre affiche apres application est celui-la, jamais celui du fournisseur :
+  /// si l'utilisateur a deplace une tache avant d'appliquer, c'est son ordre qui
+  /// fait foi. `null` pour toute tache qui ne vient pas d'un backlog.
+  backlogItemPosition Int?
+
+  backlogProposal ArchitectBacklogProposal? @relation(fields: [backlogProposalId], references: [id], onDelete: Restrict)
+
   @@unique([projectId, sequence])
   @@index([projectId, status])
+  @@index([backlogProposalId, backlogItemPosition])
 }
 
 /// Une execution : un passage de Claude Code sur une tache.

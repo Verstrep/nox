@@ -460,6 +460,52 @@ export type {
 } from "./project-plan.js";
 
 export {
+  ARCHITECT_BACKLOG_GENERATION_STATUS,
+  ARCHITECT_BACKLOG_GENERATION_STATUSES,
+  ARCHITECT_BACKLOG_LIMITS,
+  ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS,
+  ARCHITECT_BACKLOG_PROPOSAL_STATUS,
+  ARCHITECT_BACKLOG_PROPOSAL_STATUSES,
+  ARCHITECT_BACKLOG_SCHEMA_NAME,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION,
+  BACKLOG_CODE_PREFIX,
+  buildArchitectBacklogSchema,
+  formatBacklogCode,
+  isArchitectBacklogGenerationStatus,
+  isArchitectBacklogProposalStatus,
+  isBacklogContextManifest,
+  readArchitectBacklogProposal,
+} from "./backlog.js";
+
+export type {
+  ArchitectBacklogGenerationStatus,
+  ArchitectBacklogProposal,
+  ArchitectBacklogProposalStatus,
+  ArchitectBacklogRefusal,
+  ArchitectBacklogResult,
+  ArchitectBacklogTaskProposal,
+  BacklogContextManifest,
+  BacklogContextSource,
+  BacklogInventoryTask,
+} from "./backlog.js";
+
+export {
+  BACKLOG_PROMPT_VERSION,
+  EXISTING_TASK_CLOSE,
+  EXISTING_TASK_OPEN,
+  renderBacklogPrompt,
+} from "./backlog-prompt.js";
+
+export type { BacklogPrompt, BacklogPromptInput } from "./backlog-prompt.js";
+
+export {
+  renderPromptBrief,
+  renderPromptDocument,
+  renderPromptMemory,
+  renderPromptV1Plan,
+} from "./architect-prompt.js";
+
+export {
   PROJECT_UPDATE_FIELD_KIND,
   buildArchitectProjectUpdateReview,
 } from "./project-update-review.js";

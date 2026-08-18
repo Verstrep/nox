@@ -47,6 +47,16 @@ export type ArchitectProviderInput = {
   schema: Record<string, unknown>;
   /** Delai maximal accorde a l'appel. */
   timeoutMs: number;
+  /**
+   * Plafond de jetons de sortie, lorsque la surface en declare un.
+   *
+   * Absent pour les deux surfaces conversationnelles : leur reponse est un
+   * message et au plus une proposition, et le defaut du modele suffit. Une
+   * planification, elle, peut rendre vingt specifications d'un coup, et un
+   * plafond explicite vaut mieux qu'une reponse coupee au hasard du modele
+   * configure.
+   */
+  maxOutputTokens?: number;
 };
 
 export type ArchitectProviderSuccess = {
@@ -66,6 +76,8 @@ export interface ArchitectProvider {
   generateTaskTurn(input: ArchitectProviderInput): Promise<ArchitectProviderResult>;
   /** Une analyse de review, dont sort une recommandation. */
   analyzeRunReview(input: ArchitectProviderInput): Promise<ArchitectProviderResult>;
+  /** Une planification, dont sort un backlog ordonne. */
+  generateBacklog(input: ArchitectProviderInput): Promise<ArchitectProviderResult>;
 }
 
 /**
@@ -83,6 +95,7 @@ export class FakeArchitectProvider implements ArchitectProvider {
   readonly calls: ArchitectProviderInput[] = [];
   readonly turnCalls: ArchitectProviderInput[] = [];
   readonly reviewCalls: ArchitectProviderInput[] = [];
+  readonly backlogCalls: ArchitectProviderInput[] = [];
   #responses: ArchitectProviderResult[];
 
   constructor(responses: readonly ArchitectProviderResult[]) {
@@ -105,6 +118,11 @@ export class FakeArchitectProvider implements ArchitectProvider {
 
   analyzeRunReview(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
     this.reviewCalls.push(input);
+    return this.#next(input);
+  }
+
+  generateBacklog(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    this.backlogCalls.push(input);
     return this.#next(input);
   }
 }

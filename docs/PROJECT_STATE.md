@@ -18,29 +18,35 @@ La chaîne complète existe et fonctionne : concevoir une tâche, la lancer, la 
 relire ce qui a changé, demander une correction, la faire relire, savoir quoi faire ensuite.
 
 ```text
-Project Plan  →  Architecte    →  Tâche   →  Claude Code  →  Review Git
-(intention)      (conception)     (spec)     (exécution)     (+ validations)
-     ↑                                                            ↓
-     └─── Décision humaine ← Workflow guidé ← Review Architecte ───┘
+Project Plan  →  V1 Backlog  →  Tâche   →  Claude Code  →  Review Git
+(intention)      (découpage)     (spec)     (exécution)     (+ validations)
+     ↑                ↑                                          ↓
+     │           Architecte                                      │
+     └─── Décision humaine ← Workflow guidé ← Review Architecte ──┘
                  ↑
            Mémoire projet
 ```
+
+L'Architecte occupe deux rôles distincts : il **converse** — une tâche à la fois, en réponse
+à un message — et il **planifie** — un backlog entier, en réponse à l'état du projet. Deux
+workflows, deux prompts, deux contrats de sortie ; aucun des deux ne peut déclencher l'autre.
 
 Ce que NOX **ne fait pas**, et n'a jamais prétendu faire : aucun lancement automatique de
 Claude Code, aucun passage automatique en `READY`, aucune boucle autonome entre les deux
 modèles, aucun réessai caché, aucun résumé silencieux, aucune review déclenchée en
 arrière-plan, aucune exécution automatique de l'étape recommandée, aucune mémoire créée
-automatiquement, aucun commit, aucun push, aucune estimation de coût.
+automatiquement, aucun commit, aucun push, aucune estimation de coût, aucun backlog généré
+sans clic.
 
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 18 |
-| Migrations appliquées | 14 |
+| Modèles Prisma | 20 |
+| Migrations appliquées | 15 |
 | Routes du runner | 16, dont une seule publique (`GET /health`) |
-| Pages de l'application web | 25 |
-| Tests automatisés | 2 738, dont 5 ignorés sous Windows |
-| Décisions consignées | 277 |
+| Pages de l'application web | 28 |
+| Tests automatisés | 3 026, dont 5 ignorés sous Windows |
+| Décisions consignées | 290 |
 
 ---
 
@@ -398,6 +404,49 @@ le projet seule : seule une application explicitement humaine le fait. La propos
 fournisseur et la valeur réellement appliquée restent conservées séparément, et aucune des deux
 n'est réécrite ensuite.
 
+### 2.13 Backlog de V1 — planification multi-tâches
+
+**Disponible.** Depuis `/projects/[id]/backlog`, un projet dont le Living V1 Plan est
+défini peut demander à l'Architecte le **backlog des tâches restantes** pour atteindre cette
+V1. Un clic, un appel : la génération est toujours explicite, et l'écran annonce ce qu'elle
+coûte.
+
+Le planificateur reçoit le Project Brief, le Living V1 Plan, la mémoire active,
+l'**inventaire des tâches existantes** et la documentation autorisée du repository. Il ne
+reçoit **aucune conversation** : la connaissance durable du projet suffit à planifier, et
+c'est précisément ce que `TASK-021` a rendu vrai.
+
+La proposition se relit tâche par tâche, en cartes compactes qu'on déplie pour éditer. On
+peut modifier n'importe quel champ, **déplacer** une tâche vers le haut ou vers le bas, et en
+**retirer**. `Apply backlog` crée alors toutes les tâches retenues en `DRAFT`, dans
+l'ordre validé, avec des codes séquentiels et leurs documents Markdown — ou n'en crée aucune.
+
+**Limites.**
+
+- **Aucune dépendance explicite.** L'ordre exprime une séquence recommandée ; il n'existe ni
+  `dependsOn`, ni `blockedBy`, ni graphe.
+- **Aucune file d'exécution.** Les tâches créées sont des brouillons ordinaires ; les lancer
+  reste un geste par tâche.
+- **Aucun ajout de tâche vierge dans la revue.** On édite, on déplace, on retire ; créer une
+  tâche de zéro passe par le formulaire de création, qui existe déjà.
+- **Un seul backlog en attente par projet.** Il faut appliquer ou écarter avant d'en générer
+  un autre — deux plans concurrents ne se départageraient pas.
+- **Un backlog périmé ne se rattrape pas.** Toute modification du contexte de planification —
+  plan, brief, mémoire active, inventaire des tâches, documents inclus — le refuse, et il
+  faut en générer un nouveau.
+- **L'inventaire est borné à quarante tâches**, les plus récentes. Au-delà, un travail très
+  ancien pourrait être reproposé, et c'est la revue humaine qui l'attrapera.
+- **Aucune atomicité entre SQLite et le disque.** Les tâches sont créées en une transaction ;
+  leurs documents Markdown sont écrits après, un par un. Une panne à cette étape laisse des
+  documents à reprendre — état visible et reprenable d'un clic, jamais silencieux.
+
+**Frontières.** Ouvrir la page ne déclenche aucun appel. Aucune génération n'est provoquée
+par un plan enregistré, une mise à jour de projet appliquée, une tâche terminée ou un retour
+sur le projet. `Apply` n'appelle ni OpenAI, ni Claude Code, ne crée aucun commit, aucun
+`git add`, aucun push. Aucune tâche existante n'est modifiée, supprimée ou renumérotée :
+un backlog appliqué s'ajoute à la suite. La proposition du fournisseur reste immuable ; ce
+que l'humain a retenu est conservé séparément.
+
 ---
 
 ## 3. Où en est l'écart avec la cible
@@ -423,16 +472,25 @@ C'est aussi la première fois qu'une proposition du modèle porte sur **l'état 
 que sur une tâche. Le cycle — proposer, relire, corriger, appliquer — est celui que la
 génération multi-tâches réutilisera.
 
-### 3.3 Ce qui reste à faire
+### 3.3 Résolu par `TASK-022` : un plan qui devient un backlog
 
-- **Aucune génération multi-tâches.** Une proposition porte une tâche ; produire un backlog
-  ordonné à partir du plan validé reste à faire.
+La troisième limitation structurante — *une proposition porte une tâche, et rien ne relie le
+plan validé au travail à faire* — n'existe plus. Un Living V1 Plan produit désormais un
+backlog ordonné de plusieurs tâches, relu et corrigé avant d'exister.
+
+Le cycle de `TASK-021` — proposer, relire, corriger, appliquer — a été réutilisé tel
+quel, à une différence près qui compte : ce qui s'applique n'est plus un état, c'est un
+**lot**. D'où l'atomicité de la transaction, et la franchise sur ce qu'elle ne couvre pas.
+
+### 3.4 Ce qui reste à faire
+
 - **Une spécification ne se modifie pas après création.** Un plan vivant suppose de pouvoir
   réécrire ce qui n'a pas encore été lancé.
 - **Aucune dépendance entre tâches**, aucune replanification structurée.
 - **Aucun amorçage d'un projet vide.**
+- **Aucune file d'exécution.** Les tâches d'un backlog se lancent une par une.
 
-Voir [ROADMAP.md](ROADMAP.md), `TASK-022` à `TASK-024`.
+Voir [ROADMAP.md](ROADMAP.md), `TASK-023` à `TASK-026`.
 
 ---
 
@@ -440,11 +498,12 @@ Voir [ROADMAP.md](ROADMAP.md), `TASK-022` à `TASK-024`.
 
 Aucun de ces éléments n'est commencé. Les lister évite de les croire disponibles.
 
-**Conception et planification.** Génération multi-tâches, backlog ordonné, amorçage d'un projet
-vide, dépendances entre tâches, modification d'une spécification après création,
-replanification, historique de versions du Project Brief ou du Living V1 Plan, matérialisation
+**Conception et planification.** Amorçage d'un projet vide, dépendances entre tâches,
+modification d'une spécification après création, replanification depuis la conversation,
+ajout d'une tâche vierge dans une revue de backlog, ordre global entre tâches existantes et
+nouvelles, historique de versions du Project Brief ou du Living V1 Plan, matérialisation
 automatique de l'état structuré en Markdown, extraction automatique de mémoire depuis une
-proposition de projet.
+proposition de projet ou un backlog, déduplication sémantique entre tâches.
 
 **Exécution.** File d'exécution, plusieurs agents en parallèle, worktrees, plusieurs comptes
 Claude, exécution automatique de l'étape recommandée, cron, scheduler, notifications,

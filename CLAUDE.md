@@ -487,3 +487,56 @@ doit le dire explicitement et la justifier.
   l'empreinte de contexte.
 - **La review Architecte ne reçoit pas la mémoire.** Élargir cette surface demande une décision
   séparée.
+
+### 8.11 Backlog de V1
+
+- **Générer un backlog est une action humaine explicite, et coûte au plus un appel.** Aucun
+  rendu de page, aucun plan enregistré, aucune mise à jour de projet appliquée, aucune tâche
+  terminée, aucun minuteur et aucun échec précédent ne la déclenche. Un refus — plan absent,
+  planification en vol, proposition en attente — est constaté **avant** l'appel, et coûte zéro.
+- **Une proposition de backlog ne crée jamais de tâche.** Seule une application explicitement
+  humaine le fait.
+- **Les tâches créées sont toujours `DRAFT`.** Jamais `READY`, jamais en file, jamais lancées.
+- **Appliquer n'appelle personne et ne livre rien** : ni OpenAI, ni Claude Code, ni `git add`,
+  ni commit, ni push.
+- **Aucune tâche existante n'est modifiée, supprimée ou renumérotée** par une application. Un
+  backlog appliqué s'ajoute à la suite ; les numéros viennent de `Project.nextTaskSequence`,
+  qui ne recule jamais.
+- **Une proposition est fondée sur le contexte de planification réellement vu par le
+  fournisseur.** L'empreinte est capturée avant l'appel et jamais relue après — même correction
+  qu'en TASK-021, pour la même raison.
+- **Si ce contexte change avant l'application, la proposition est périmée et refusée**, jamais
+  fusionnée. Aucun chemin de code ne mène d'un conflit à un appel, et il n'existe ni « Merge
+  with current », ni « Auto resolve », ni « Refresh with AI ».
+- **La péremption se dérive, elle ne se stocke pas.** Il n'existe aucun statut `STALE`.
+- **Au plus une proposition en attente par projet**, et au plus une planification en vol. Les
+  deux verrous sont des colonnes de `Project`, prises par mise à jour conditionnelle.
+- **Un backlog est une unité.** Un seul élément invalide condamne toute la proposition à la
+  génération, et tout le lot à l'application. Jamais huit tâches sur neuf.
+- **La création des tâches est atomique.** L'état « trois tâches créées, la quatrième en
+  erreur, proposition marquée appliquée » n'existe pas.
+- **NOX ne prétend pas à l'atomicité entre SQLite et le disque.** Les documents Markdown sont
+  écrits après la transaction, un par un, avec la primitive exclusive de TASK-007. Le préflight
+  refuse d'appliquer si le repository ne répond pas ; une panne pendant l'écriture laisse un
+  document à reprendre, état visible et jamais silencieux.
+- **Aucun chemin de fichier ne vient du fournisseur.** Le code d'une tâche est attribué par
+  NOX, et son document en est dérivé.
+- **L'amorçage du repository n'appartient pas au backlog.** NOX le traite séparément ; le
+  planificateur ne produit aucune tâche d'initialisation, de scaffold ou de documentation
+  initiale, et le prompt ne lui souffle jamais le code de cette tâche.
+- **Le backlog planifie la V1 validée, il n'en propose pas une meilleure.** Chaque capacité
+  visible par l'utilisateur se rattache à une exigence du brief, du plan, de la mémoire ou d'une
+  tâche existante ; une nécessité d'implémentation reste autorisée, une capacité produit non
+  demandée ne l'est pas. Aucun choix technique n'est figé là où le plan le laisse délibérément
+  ouvert : un backlog n'est ni une séance d'idéation, ni la mémoire du projet.
+- **La proposition du fournisseur est immuable.** `providerJson` n'est jamais réécrit ;
+  `appliedJson` porte ce que l'humain a retenu, et les deux restent distincts.
+- **L'ordre appliqué est celui validé par l'humain**, jamais celui du fournisseur.
+- **La planification ne reçoit aucun transcript.** Le brief, le plan, la mémoire, l'inventaire
+  des tâches et la documentation autorisée suffisent — c'est ce que TASK-021 existe pour rendre
+  vrai. `backlog/1` est un workflow séparé : la conversation projet reste inchangée.
+- **La planification ne crée ni mémoire, ni message de conversation, ni mise à jour de projet.**
+  Aucun faux échange n'est ajouté au transcript de l'Architecte.
+- **Le navigateur ne porte aucune autorité** : ni contexte, ni prompt, ni modèle, ni état du
+  projet, ni inventaire, ni empreinte, ni codes de tâche à venir. Il transmet un identifiant
+  et les valeurs que l'utilisateur a saisies, toutes revalidées côté serveur.

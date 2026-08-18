@@ -23,15 +23,48 @@ export {
   createTask,
   deleteTaskWithoutRuns,
   getTaskById,
+  listTaskObjectives,
   listTasksByProject,
   markTaskDocumentConflict,
   markTaskDocumentError,
   markTaskDocumentSynced,
+  peekNextTaskSequence,
+  reserveTaskSequences,
   updateTaskStatus,
+  writeTaskRow,
   type CreateTaskInput,
   type DeleteTaskResult,
+  type TaskRowInput,
+  type TaskWriteClient,
   type UpdateTaskStatusResult,
 } from "./tasks.js";
+
+export {
+  applyBacklogProposal,
+  dismissBacklogProposal,
+  finishBacklogGeneration,
+  getBacklogGeneration,
+  getBacklogProposal,
+  getBacklogProposalForGeneration,
+  listBacklogTasks,
+  loadProjectBacklog,
+  startBacklogGeneration,
+} from "./architect-backlog.js";
+
+export type {
+  ApplyBacklogInput,
+  ApplyBacklogResult,
+  ArchitectBacklogGenerationView,
+  ArchitectBacklogProposalView,
+  BacklogCreatedTask,
+  BacklogPlanningBase,
+  BacklogTaskToCreate,
+  DismissBacklogResult,
+  FinishBacklogGenerationInput,
+  ProjectBacklogView,
+  StartBacklogGenerationInput,
+  StartBacklogGenerationResult,
+} from "./architect-backlog.js";
 
 export {
   InvalidRunRecordError,

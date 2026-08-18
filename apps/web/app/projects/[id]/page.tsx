@@ -6,6 +6,13 @@ import { notFound } from "next/navigation";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { architectHistoryUrl, architectUrl } from "@/lib/architect/display";
+import { loadProjectBacklogView } from "@/lib/backlog";
+import {
+  backlogStateLabel,
+  backlogTaskCountLabel,
+  backlogUrl,
+  type BacklogSurfaceState,
+} from "@/lib/backlog/display";
 import { loadProjectDocuments } from "@/lib/documents";
 import { formatDateTime, formatIsoDateTime } from "@/lib/format";
 import { taskStatusLabel } from "@/lib/labels";
@@ -73,6 +80,20 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const legacyArchitectSessions = (await listArchitectSessions(db, project.id)).filter(
     (session) => session.kind !== ARCHITECT_SESSION_KIND.PROJECT,
   ).length;
+
+  // Le backlog vient lui aussi de SQLite. La peremption d'une proposition n'est
+  // **pas** calculee ici : elle demanderait de relire le repository, et cette
+  // page n'a pas besoin de la reponse — la carte renvoie vers le backlog, qui
+  // la calcule quand elle sert.
+  const backlog = await loadProjectBacklogView(project.id);
+  const backlogState: BacklogSurfaceState =
+    backlog.running !== null
+      ? "generating"
+      : backlog.pending !== null
+        ? "proposal_ready"
+        : backlog.lastApplied !== null
+          ? "applied"
+          : "not_generated";
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -175,6 +196,42 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             Cet etat accompagne chaque conversation Architecte, et prime sur la documentation du
             repository pour l&apos;intention produit. NOX ne le modifie jamais seul : une
             proposition de l&apos;Architecte attend toujours votre validation.
+          </p>
+        </SectionCard>
+
+        {/*
+          Une indication concise, et rien de plus : le tableau de bord complet
+          viendra en TASK-025. Elle vient entierement de SQLite — ouvrir cette
+          page ne relit pas le repository et n'appelle jamais le fournisseur.
+        */}
+        <SectionCard
+          title="V1 Backlog"
+          description="Le travail d'implementation restant pour atteindre le Living V1 Plan."
+          action={
+            <Link
+              href={backlogUrl(project.id)}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Open backlog
+            </Link>
+          }
+        >
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Backlog</dt>
+              <dd className="mt-1 text-sm text-zinc-300">{backlogStateLabel(backlogState)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Taches creees</dt>
+              <dd className="mt-1 text-sm text-zinc-300">
+                {backlogTaskCountLabel(backlog.lastAppliedTasks.length)}
+              </dd>
+            </div>
+          </dl>
+
+          <p className="mt-5 max-w-prose text-sm leading-relaxed text-zinc-400">
+            Generer un backlog est une action explicite, qui engage un appel au fournisseur. Aucune
+            tache n&apos;est creee tant que vous n&apos;avez pas applique un backlog vous-meme.
           </p>
         </SectionCard>
 

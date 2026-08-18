@@ -726,6 +726,182 @@ Project Architect
   d'`ArchitectProjectUpdate`, n'entre ni dans le transcript, ni dans le prompt, ni dans le
   décompte de jetons.
 
+### 6.12 Planification du backlog de V1
+
+**Le flux**
+
+```text
+Living V1 Plan validé
+        ↓
+contexte de planification      ← brief, plan, mémoire, inventaire, documents
+        ↓
+empreinte capturée             ← ce que le fournisseur va voir
+        ↓
+appel backlog/1                ← un clic, un appel, Structured Output strict
+        ↓
+proposition immuable           ← providerJson, jamais réécrit
+        ↓
+revue humaine                  ← éditer, déplacer, retirer
+        ↓
+contrôle de péremption         ← empreinte d'aujourd'hui contre empreinte capturée
+        ↓
+Apply                          ← une transaction, N tâches DRAFT
+        ↓
+documents Markdown             ← un par tâche, reprenable
+```
+
+**Un workflow séparé, pas une extension du chat**
+
+`backlog/1` n'est pas une variante d'`architect/4`. La conversation projet répond à
+un **message** ; la planification répond à un **état**. Les fusionner aurait fait grossir le
+contrat conversationnel d'un champ que la quasi-totalité des tours laisse vide, et rendu un
+backlog dépendant du dernier message écrit.
+
+Le planificateur ne reçoit donc aucun transcript. C'est la démonstration de `TASK-021` :
+si le brief, le plan, la mémoire et l'inventaire des tâches ne suffisaient pas à planifier,
+l'état structuré n'aurait servi à rien.
+
+**Le découpage vise le nombre d'exécutions, pas la granularité**
+
+Une frontière de tâche a un coût réel : une exécution d'agent de plus, un chargement de
+contexte de plus, une relecture de plus, un cycle de correction possible de plus. Le prompt
+demande donc le **plus petit nombre utile de tâches bornées** — jamais la décomposition
+maximale — et indique un ordre de grandeur pour une petite V1 sans en faire un quota : le
+nombre reste une décision du modèle, et les bornes serveur `1..20` ne bougent pas.
+
+Quatre sujets deviennent, par réflexe, des tâches autonomes : les tests, la documentation, une
+passe finale de QA — intégration et build de production compris — le responsive et
+l'accessibilité. Ils appartiennent normalement aux critères d'acceptation et aux commandes de
+validation de la tâche qu'ils servent.
+
+La dernière place du backlog est celle où une tâche fourre-tout s'installe le plus facilement,
+et une règle descriptive n'a pas suffi à l'en empêcher. Le prompt pose donc un test de
+suppression, à appliquer avant d'écrire la dernière tâche : **si je la supprimais et répartissais
+ses tests, ses validations, son accessibilité et sa documentation dans les tâches précédentes,
+manquerait-il encore une capacité observable de la V1 ?** Si non, elle ne doit pas exister. Si
+oui, c'est une vraie tâche transverse, et son objectif nomme la capacité qui manquerait — pas la
+liste de ce qu'elle regroupe. Elle n'est jamais l'occasion d'ajouter une capacité de plus :
+réinitialiser ou vider les données n'entre dans aucun backlog sans exigence explicite.
+
+Deux interdits complètent la politique. **L'amorçage du repository n'appartient pas au
+backlog** : NOX le traite séparément, et une tâche de scaffold ordinaire ferait doublon. **Un
+choix technique laissé ouvert le reste** : dès que le plan énumère des options « selon les
+contraintes », le choix est explicitement retiré au planificateur, et en nommer une seule serait
+une décision, pas une précision. Il exprime alors la capacité attendue plutôt que le moyen, et
+laisse la tâche d'implémentation trancher sur le contexte réellement disponible — un backlog
+n'est pas la mémoire du projet, et ce qu'il y trancherait n'y serait enregistré par personne.
+
+**Le planificateur n'a aucune autorité produit**
+
+Un backlog est le plan d'implémentation de la V1 **déjà validée**, jamais la proposition d'une
+meilleure V1. Chaque capacité visible par l'utilisateur doit se rattacher à une exigence du
+brief, du plan, de la mémoire ou d'une tâche existante — l'utilité, l'habitude, la facilité
+d'implémentation et l'usage courant ne sont pas des justifications.
+
+Le glissement ne vient pas d'idées absurdes ; il vient d'implications tacites, où une exigence
+semble en appeler une autre. Le prompt interdit donc d'inventer une capacité par **proximité
+fonctionnelle** — ce qui est voisin d'une exigence n'est pas contenu dedans — et casse nommément
+les implications observées : la persistance n'implique ni export ni import ; afficher une liste
+n'implique ni marquage, ni export JSON, ni partage, ni recherche ; une liste dérivée porte sur la
+totalité de sa source, sans sélection partielle ; créer, modifier et supprimer n'implique ni
+réinitialisation, ni duplication, ni annulation ; une sortie imprimable n'implique aucun autre
+format ; l'utilisabilité, même pour une personne non technicienne, n'implique ni données de
+démonstration, ni parcours d'accueil ; et la documentation ne justifie jamais une fonctionnalité
+de plus, ni en particulier une page d'aide intégrée à l'application.
+
+La frontière tient en une phrase : **une nécessité d'implémentation est autorisée ; une capacité
+produit ne l'est que si la V1 validée la demande.** Tests, abstractions, migrations, gestion
+d'erreur, validation des saisies et mécanismes techniques indispensables restent donc attendus.
+
+Un contrôle de sortie ferme la boucle : avant de rendre sa réponse, le planificateur reprend
+chaque capacité visible et cherche l'exigence qui la rend nécessaire ; sans réponse concrète, il
+la retire. Ce contrôle ne figure jamais dans la réponse — NOX ne demande, ne reçoit et ne stocke
+aucun raisonnement interne.
+
+**Le contexte de planification, et son budget**
+
+Une liste fermée, exactement celle de l'Architecte : les deux fichiers de conventions et les
+six documents produit, importés depuis le même module. Rien d'autre n'est candidat.
+
+Le budget est **dédié**, et plus large que celui d'une conversation — qui transporte, elle, un
+transcript de 64 Kio :
+
+```text
+ 16 Kio  état structuré (borné à l'écriture)
++64 Kio  conventions (deux documents de 32 Kio)
++48 Kio  mémoire active (bornée à l'écriture)
++32 Kio  inventaire (40 tâches de 800 caractères)
+=160 Kio  ≤ 192 Kio
+```
+
+Les quatre catégories qui ne doivent jamais être tronquées y tiennent ; la documentation du
+repository se partage le reste, et elle seule peut être coupée — en le disant dans son
+manifest.
+
+**L'empreinte de planification**
+
+Un SHA-256 déterministe couvrant le brief, le plan, la mémoire active, l'inventaire des tâches
+et les documents **inclus**. Un fichier hors de la liste fermée ne la change pas : le déclarer
+périmant serait de la sévérité gratuite, et l'avertissement finirait par ne plus rien signaler.
+
+Elle est capturée **avant** l'appel, et jamais relue après — c'est la correction de
+`TASK-021`, appliquée ici pour la même raison : relire à l'arrivée de la réponse
+étiquetterait le backlog comme bâti sur un état que le modèle n'a jamais vu.
+
+À l'application, elle est reconstruite sans aucun appel au fournisseur, puis comparée. Toute
+divergence refuse localement. **Il n'existe aucun chemin de code allant d'un conflit vers un
+nouvel appel.**
+
+Ce n'est pas une primitive de sécurité : SHA-256 nu, comme l'empreinte de contexte de
+l'Architecte, et contrairement à l'empreinte de dossier de travail, qui est un HMAC parce
+qu'elle décide d'une exécution.
+
+**Deux verrous, deux questions**
+
+- `Project.activeBacklogGenerationId` répond à « un appel est-il en vol ? ». Pris avant
+  l'appel, rendu dès qu'il se conclut — réussite comme échec.
+- `Project.pendingBacklogProposalId` répond à « un backlog attend-il une décision ? ».
+  Posé à l'écriture d'une proposition, retiré par `Apply` comme par `Dismiss`.
+
+Les deux sont pris par des **mises à jour conditionnelles**, jamais par une lecture suivie
+d'une écriture : c'est la seule forme qui résiste à deux requêtes simultanées.
+
+**La stratégie base de données et système de fichiers**
+
+C'est le point où NOX doit être franc plutôt qu'élégant. SQLite et le système de fichiers ne
+partagent aucune transaction, et prétendre le contraire serait faux.
+
+L'ordre retenu, et ce que chaque étape protège :
+
+1. **Validation** de chaque élément — bornes, commandes, chemins. Rien n'est écrit avant.
+2. **Préflight** du repository : le runner doit répondre, et aucune destination
+   `tasks/TASK-0NN.md` ne doit être déjà occupée. Cette étape rend inoffensif le cas de
+   loin le plus fréquent — un runner arrêté : rien n'est écrit, rien n'est annoncé appliqué.
+3. **Transaction SQLite** : contrôle du statut, contrôle de péremption, prise de la
+   proposition, réservation des numéros en une seule incrémentation, écriture des N tâches,
+   retrait du pointeur d'attente. Tout, ou rien.
+4. **Documents Markdown**, un par tâche, avec exactement la primitive de `TASK-007` :
+   création exclusive, adoption d'un fichier identique, conflit sinon — jamais un écrasement.
+
+Ce qui reste possible, et qui est assumé : une panne **pendant** l'étape 4 laisse des tâches
+dont le document est à produire. Cet état est modélisé depuis `TASK-007`, visible dans
+l'interface, et se reprend d'un clic. Ce n'est ni silencieux, ni perdu.
+
+Le préflight des destinations est une **précaution**, pas une garantie : le compteur de numéros
+peut avancer entre la lecture et la transaction. La garantie, elle, n'a pas bougé — la création
+d'un document passe par une primitive exclusive, et n'écrase jamais rien.
+
+**Provenance**
+
+Deux colonnes sur `Task` : `backlogProposalId` et `backlogItemPosition`. Une
+table de liaison aurait modélisé une relation plusieurs-à-plusieurs qui n'existe pas, et rendu
+possible un état — deux origines pour une tâche — que rien ne devrait pouvoir produire.
+
+L'ordre affiché après application est celui de `backlogItemPosition`, donc celui que
+l'humain a validé, jamais celui du fournisseur.
+
+---
+
 ## 7. Invariants transverses
 
 Ces règles ne dépendent d'aucun flux. Elles valent partout, et une tâche qui les contredirait

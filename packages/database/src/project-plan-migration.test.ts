@@ -34,8 +34,8 @@ const MIGRATIONS_DIR = path.join(
  *
  * Il y en a deux : les tables de l'etat structure, puis la colonne qui conserve
  * ce que l'utilisateur a reellement applique. Les nommer plutot que de prendre
- * « la derniere » garde au test son sens le jour ou une TASK-022 en ajoutera une
- * troisieme.
+ * « la derniere » est ce qui garde au test son sens : TASK-022 en a ajoute une
+ * apres, et le test continue de prouver exactement ce qu'il annonce.
  */
 const TASK_021 = [
   "20260814120000_add_project_plan",
@@ -64,12 +64,13 @@ after(async () => {
 
 describe("migration de TASK-021 sur une base historique", () => {
   it("laisse toutes les donnees anterieures intactes", async () => {
-    // Les migrations de TASK-021 ferment bien la marche : si une autre venait
-    // s'intercaler, ce test cesserait de prouver ce qu'il annonce.
+    // Les deux migrations de TASK-021 se suivent, et dans cet ordre. Si l'une
+    // venait a bouger, ce test cesserait de prouver ce qu'il annonce.
+    const first = directories.indexOf(TASK_021[0] ?? "");
     assert.deepEqual(
-      directories.slice(-TASK_021.length),
+      directories.slice(first, first + TASK_021.length),
       TASK_021,
-      "TASK-021 ferme la liste des migrations",
+      "les migrations de TASK-021 se suivent",
     );
 
     const file = path.join(workspace, "historique.db");
@@ -77,7 +78,7 @@ describe("migration de TASK-021 sur une base historique", () => {
 
     try {
       // --- Schema d'avant TASK-021 ---------------------------------------
-      for (const directory of directories.slice(0, -TASK_021.length)) {
+      for (const directory of directories.slice(0, first)) {
         db.exec(await migrationSql(directory));
       }
 
