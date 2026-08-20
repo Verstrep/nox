@@ -58,6 +58,7 @@ function task(overrides: Partial<DevelopmentTaskSummary> = {}): DevelopmentTaskS
   return {
     id: "task-1",
     code: "TASK-001",
+    kind: "NORMAL",
     title: "Poser le schema",
     status: "DRAFT",
     priority: "HIGH",

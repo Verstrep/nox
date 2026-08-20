@@ -42,11 +42,11 @@ sans clic.
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
 | Modèles Prisma | 20 |
-| Migrations appliquées | 15 |
-| Routes du runner | 16, dont une seule publique (`GET /health`) |
-| Pages de l'application web | 28 |
-| Tests automatisés | 3 026, dont 5 ignorés sous Windows |
-| Décisions consignées | 290 |
+| Migrations appliquées | 16 |
+| Routes du runner | 17, dont une seule publique (`GET /health`) |
+| Pages de l'application web | 30 |
+| Tests automatisés | 3 233, dont 5 ignorés sous Windows |
+| Décisions consignées | 298 |
 
 ---
 
@@ -447,6 +447,46 @@ sur le projet. `Apply` n'appelle ni OpenAI, ni Claude Code, ne crée aucun commi
 un backlog appliqué s'ajoute à la suite. La proposition du fournisseur reste immuable ; ce
 que l'humain a retenu est conservé séparément.
 
+### 2.14 Amorçage d'un projet — TASK-000
+
+**Disponible.** Un projet dont le brief, le plan de V1 et un backlog appliqué existent peut
+préparer son repository. La page `/projects/[id]/bootstrap` annonce l'état, nomme les
+préconditions manquantes, et offre un aperçu.
+
+L'aperçu construit **exactement** la tâche qui sera créée : titre, objectif, contexte,
+critères d'acceptation, hors périmètre. Il est **déterministe** — même état, même texte — et
+n'appelle aucune IA. Il lit le repository une fois, en lecture seule, pour distinguer un dépôt
+vide d'un dépôt qui porte déjà une application.
+
+`Create TASK-000` crée alors une tâche `DRAFT` de nature `BOOTSTRAP`, portant le
+code réservé `TASK-000`, et son document `tasks/TASK-000.md`. Elle suit ensuite le
+cycle de vie habituel : relecture, `Mark ready`, exécution explicite, review, corrections.
+
+**Limites.**
+
+- **Aucune exécution automatique.** Créer la tâche ne lance rien. NOX peut recevoir un
+  repository qui n'a besoin d'aucun amorçage : « disponible » n'a jamais signifié « fait ».
+- **Aucune commande de validation n'est proposée.** NOX ne peut pas les connaître — la pile
+  d'un dépôt vide sera choisie pendant l'exécution, et les scripts d'un dépôt existant ne
+  sont jamais lus. L'utilisateur en ajoute une fois qu'elles existent.
+- **Aucune synchronisation dans les deux sens.** L'amorçage matérialise l'état structuré en
+  Markdown une fois. Modifier ensuite le plan dans NOX ne réécrit pas `docs/V1_SCOPE.md` :
+  cette synchronisation appartient à un travail futur.
+- **Aucune entrée de mémoire n'est créée**, ni à la préparation, ni après l'exécution. Les
+  décisions techniques prises pendant l'amorçage sont consignées dans le repository, pas
+  dans la mémoire NOX, qui reste contrôlée par l'utilisateur seul.
+- **L'inspection est grossière.** Elle constate des manifestes et des dossiers de code
+  reconnus, pas une pile technique. Claude Code lit le détail au moment où il travaille.
+
+**Frontières.** Aucun appel à OpenAI, à aucune étape — ouvrir la page, prévisualiser, créer.
+Le numéro `0` est réservé : `Project.nextTaskSequence` démarre à `1` et ne recule
+jamais, donc aucune attribution ordinaire ne peut le produire, et `@@unique([projectId, sequence])`
+garantit qu'un projet n'en porte qu'une. Créer `TASK-000` ne consomme aucun numéro : la tâche
+suivante reçoit celui qu'elle aurait reçu sans elle. Aucune tâche existante n'est modifiée,
+renumérotée ou déplacée, et leur provenance de backlog reste intacte. `TASK-000` n'en porte
+aucune.
+
+---
 ---
 
 ## 3. Où en est l'écart avec la cible
@@ -495,6 +535,10 @@ Voir [ROADMAP.md](ROADMAP.md), `TASK-023` à `TASK-026`.
 ---
 
 ## 4. Ce qui n'existe pas
+
+**Synchronisation Markdown bidirectionnelle.** L'amorçage matérialise le brief et le plan
+dans le repository une fois. Un plan modifié ensuite dans NOX ne réécrit aucun document, et
+un document modifié à la main ne remonte pas dans NOX.
 
 Aucun de ces éléments n'est commencé. Les lister évite de les croire disponibles.
 

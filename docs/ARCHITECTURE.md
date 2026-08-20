@@ -97,12 +97,13 @@ apps/web/lib/
 
 ### 3.2 `apps/runner` — la frontière avec la machine
 
-API HTTP locale sur `node:http`, sans framework. Seize routes, dont **une seule publique** :
+API HTTP locale sur `node:http`, sans framework. Dix-sept routes, dont **une seule publique** :
 
 | Route | Rôle |
 | --- | --- |
 | `GET /health` | Sonde publique en local, sans authentification |
 | `POST /repositories/resolve` | Résout la racine Git d'un chemin |
+| `POST /repositories/inspect` | Inventorie **grossièrement** un repository — noms d'entrées reconnues, jamais de contenu |
 | `POST /repositories/documents/list` | Inventorie les Markdown reconnus |
 | `POST /repositories/documents/read` | Lit un document autorisé, renvoie sa révision |
 | `POST /repositories/documents/update` | Remplace un document après contrôle de révision |
@@ -165,7 +166,7 @@ structurelle.
 
 ### 3.4 `packages/database` — l'accès aux données
 
-Schéma Prisma, migrations versionnées, et fonctions d'accès. Quinze modèles :
+Schéma Prisma, migrations versionnées, et fonctions d'accès. Vingt modèles :
 
 ```text
 Project ─┬─ mainArchitectSessionId  →  la conversation principale
@@ -420,6 +421,12 @@ Server Action  →  prompt régénéré côté serveur  →  runner  →  spawn 
 - **Le lancement est toujours explicite.** NOX ne déclenche jamais Claude Code de lui-même, ni
   pour réessayer, ni pour enchaîner une tâche.
 - **Une seule exécution active**, tous projets confondus.
+- **L'amorçage est la seule exception, et elle est fermée.** Une tâche `BOOTSTRAP` choisit sa
+  pile technique pendant son exécution : ses commandes d'installation ne peuvent pas être
+  enregistrées avant. Elle reçoit une liste nommée de programmes d'écosystème — jamais l'outil
+  `Bash` entier, jamais un interpréteur de commandes — et des refus élargis à la publication, au
+  déploiement, à l'accès distant et à l'élévation de privilèges. La page de préparation affiche
+  ces programmes avant tout lancement.
 - `--dangerously-skip-permissions` n'est jamais passé, sous aucune condition.
 - Les secrets `NOX_*` sont retirés de l'environnement de l'enfant — § 5.4.
 - **Un résultat de Claude Code ne vaut pas validation humaine** : une exécution réussie fait
@@ -902,6 +909,89 @@ l'humain a validé, jamais celui du fournisseur.
 
 ---
 
+### 6.13 Amorçage d'un projet
+
+**Le flux**
+
+```text
+Project Brief + Living V1 Plan + Project Memory
+        + backlog appliqué (vraies Tasks) + inspection du repository
+                    ↓  déterministe, zéro appel
+        aperçu de TASK-000 + empreinte
+                    ↓  Create — action humaine explicite
+        empreinte revalidée sur l'état courant
+                    ↓
+        Task DRAFT, sequence 0, kind BOOTSTRAP
+                    ↓
+        tasks/TASK-000.md, puis le pipeline d'exécution existant
+```
+
+**Pourquoi aucun fournisseur**
+
+Le planificateur de backlog répond à « quel travail produit reste-t-il ? » — une question
+ouverte, qui dépend du projet et mérite un modèle. L'amorçage répond à « quelles fondations
+ces tâches demandent-elles ? », et NOX connaît déjà la réponse : un repository qui démarre, et
+huit documents dont il sait qui possède quoi.
+
+Dépenser un appel pour reformuler une responsabilité connue serait payer pour de la
+variabilité. La construction est donc **pure** — même entrée, même sortie — ce qui rend
+l'aperçu honnête : le texte affiché avant création est exactement celui qui sera créé.
+
+**Où vit l'unicité**
+
+Dans `@@unique([projectId, sequence])`, qui existait avant cette tâche. Le numéro
+d'amorçage est `0` ; `Project.nextTaskSequence` démarre à `1` et ne recule jamais,
+donc aucune attribution ordinaire ne peut le produire.
+
+Deux créations concurrentes n'en produisent qu'une, et la perdante échoue sur la contrainte
+plutôt que sur une vérification applicative — une garantie qui vit dans le schéma ne peut pas
+être contournée par un chemin de code oublié. Zéro place aussi la tâche avant les autres dans
+tout tri par code, ce qui est exactement sa position logique.
+
+**L'inspection du repository**
+
+Une route runner nouvelle, `POST /repositories/inspect`, en lecture seule. Elle lit des
+**noms d'entrées** — manifestes reconnus, dossiers de code reconnus, documents fondamentaux
+présents, nombre d'entrées à la racine, présence d'un commit — et **aucun contenu de fichier**.
+Un `.env` présent n'y apparaît donc pas : il n'appartient à aucune liste reconnue, et personne
+ne l'ouvre.
+
+Le runner constate ; il ne conclut pas. La classification — vide, minimal, application
+existante — est calculée côté web, où elle est pure et testable. La frontière qui compte est
+la dernière : un repository qui porte déjà une application ne se ré-amorce pas, il s'adapte.
+
+**L'empreinte d'amorçage**
+
+SHA-256 déterministe couvrant le brief, le plan, la mémoire active, l'inventaire des tâches,
+l'état constaté du repository et la version du constructeur. Capturée à l'aperçu, revalidée à
+la création.
+
+Elle protège une seule chose : que la tâche créée soit celle qui a été lue. Le cas dangereux
+est concret — une application apparaît entre l'aperçu et le clic, et la tâche « choisis une
+pile minimale » la détruirait. Ce n'est **pas** une primitive de sécurité : SHA-256 nu, comme
+l'empreinte de contexte de l'Architecte, contrairement à l'empreinte de dossier de travail qui
+est un HMAC parce qu'elle décide d'une exécution.
+
+**Ce que la tâche dit, et ne dit pas**
+
+Elle décide des **moyens** : sur un dépôt vide dont le plan laisse le choix ouvert, elle
+autorise à choisir la solution minimale cohérente — c'est le point précis où un choix laissé
+ouvert devient nécessaire, parce qu'il faut bien créer quelque chose. Chaque choix fait devient
+une décision durable, à consigner dans le repository.
+
+Elle ne décide jamais du **produit**. Les tâches à venir lui sont transmises pour être
+évitées, pas faites : une fondation qui implémenterait une capacité du produit aurait volé son
+travail à la tâche qui la porte.
+
+**Documents référencés**
+
+Le champ `documents` d'une tâche ne porte que des documents **existants**. Le contrat ne
+vérifie pas l'existence d'un chemin : y mettre les huit documents fondamentaux aurait produit
+une liste dont la moitié désigne des fichiers absents, et contourné silencieusement ce que ce
+champ signifie. Les documents à créer sont décrits comme livrables — on ne demande pas de lire
+ce qu'on demande d'écrire.
+
+---
 ## 7. Invariants transverses
 
 Ces règles ne dépendent d'aucun flux. Elles valent partout, et une tâche qui les contredirait

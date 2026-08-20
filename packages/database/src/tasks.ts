@@ -11,11 +11,14 @@
  */
 
 import {
+  BOOTSTRAP_TASK_SEQUENCE,
   TASK_DOCUMENT_SYNC_STATUS,
+  TASK_KIND,
   TASK_STATUS,
   canTransitionTaskStatus,
   formatTaskCode,
   isTaskDocumentSyncStatus,
+  isTaskKind,
   isTaskPriority,
   isTaskStatus,
   taskDocumentPath,
@@ -23,6 +26,7 @@ import {
   type DevelopmentTaskDetail,
   type DevelopmentTaskSummary,
   type TaskDocumentSyncStatus,
+  type TaskKind,
   type TaskPriority,
   type TaskStatus,
 } from "@nox/shared";
@@ -57,6 +61,7 @@ export class InvalidTaskRecordError extends Error {
 type SummaryRow = {
   id: string;
   sequence: number;
+  kind: string;
   title: string;
   status: string;
   priority: string;
@@ -82,6 +87,7 @@ type DetailRow = SummaryRow & {
 const SUMMARY_SELECT = {
   id: true,
   sequence: true,
+  kind: true,
   title: true,
   status: true,
   priority: true,
@@ -117,13 +123,19 @@ function toSummary(row: SummaryRow): DevelopmentTaskSummary {
   if (!isTaskDocumentSyncStatus(row.documentSyncStatus)) {
     throw new InvalidTaskRecordError(row.id, "synchronisation", row.documentSyncStatus);
   }
-  if (!Number.isInteger(row.sequence) || row.sequence < 1) {
+  // `BOOTSTRAP_TASK_SEQUENCE` plutot que `1` : le numero zero est legitime, et
+  // reserve a l'amorcage. Le reste de la borne ne bouge pas.
+  if (!Number.isInteger(row.sequence) || row.sequence < BOOTSTRAP_TASK_SEQUENCE) {
     throw new InvalidTaskRecordError(row.id, "numero", String(row.sequence));
+  }
+  if (!isTaskKind(row.kind)) {
+    throw new InvalidTaskRecordError(row.id, "nature", row.kind);
   }
 
   return {
     id: row.id,
     code: formatTaskCode(row.sequence),
+    kind: row.kind,
     title: row.title,
     status: readStatus(row),
     priority: row.priority,
@@ -318,8 +330,10 @@ export async function peekNextTaskSequence(
 
 /** Une tache a ecrire : sa specification, son numero, et sa provenance. */
 export type TaskRowInput = CreateTaskInput & {
-  /** Numero deja reserve par `reserveTaskSequences`. */
+  /** Numero deja reserve par `reserveTaskSequences`, ou zero pour l'amorcage. */
   sequence: number;
+  /** Nature de la tache. `NORMAL` par defaut : l'amorcage est l'exception. */
+  kind?: TaskKind;
   /** Proposition de backlog dont cette tache est issue, le cas echeant. */
   backlogProposalId?: string | null;
   /** Position dans l'ordre valide par l'humain, a partir de 0. */
@@ -349,6 +363,7 @@ export async function writeTaskRow(
     data: {
       projectId: input.projectId,
       sequence: input.sequence,
+      kind: input.kind ?? TASK_KIND.NORMAL,
       title: input.title,
       objective: input.objective,
       context: input.context,

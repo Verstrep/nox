@@ -7,6 +7,8 @@ import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { architectHistoryUrl, architectUrl } from "@/lib/architect/display";
 import { loadProjectBacklogView } from "@/lib/backlog";
+import { loadProjectBootstrapTask } from "@/lib/bootstrap";
+import { bootstrapUrl } from "@/lib/bootstrap/display";
 import {
   backlogStateLabel,
   backlogTaskCountLabel,
@@ -85,6 +87,10 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // **pas** calculee ici : elle demanderait de relire le repository, et cette
   // page n'a pas besoin de la reponse — la carte renvoie vers le backlog, qui
   // la calcule quand elle sert.
+  // L'amorcage vient de SQLite : `null` signifie « pas encore preparee », et la
+  // page ne sonde pas le repository pour le savoir.
+  const bootstrapTask = await loadProjectBootstrapTask(project.id);
+
   const backlog = await loadProjectBacklogView(project.id);
   const backlogState: BacklogSurfaceState =
     backlog.running !== null
@@ -233,6 +239,40 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             Generer un backlog est une action explicite, qui engage un appel au fournisseur. Aucune
             tache n&apos;est creee tant que vous n&apos;avez pas applique un backlog vous-meme.
           </p>
+        </SectionCard>
+
+        {/*
+          Amorcage : une carte compacte, et un lien. L'etat affiche est derive de
+          la tache elle-meme — NOX ne tient aucun second cycle de vie.
+        */}
+        <SectionCard
+          title="Bootstrap"
+          description="TASK-000 prepare le repository avant les taches produit."
+          action={
+            <Link
+              href={bootstrapUrl(project.id)}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Open bootstrap
+            </Link>
+          }
+        >
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Etat</dt>
+              <dd className="mt-1 text-sm text-zinc-300">
+                {bootstrapTask === null
+                  ? "Not prepared"
+                  : `${bootstrapTask.code} · ${taskStatusLabel(bootstrapTask.status)}`}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Execution</dt>
+              <dd className="mt-1 text-sm text-zinc-300">
+                Toujours explicite : creer TASK-000 ne lance rien.
+              </dd>
+            </div>
+          </dl>
         </SectionCard>
 
         <SectionCard

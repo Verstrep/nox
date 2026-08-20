@@ -105,7 +105,7 @@ export async function startRunAction(
 
     // Les commandes sont verifiees ici pour produire un message precis ; le
     // runner les revalidera de toute facon avant d'en faire des permissions.
-    const policy = buildClaudeToolPolicy(task.validationCommands);
+    const policy = buildClaudeToolPolicy(task.validationCommands, task.kind);
     if (!policy.ok) {
       return {
         error: `La commande « ${policy.refusal.command} » ne peut pas etre autorisee : ${policy.refusal.reason}`,
@@ -140,6 +140,9 @@ export async function startRunAction(
       prompt,
       expectedGitHead,
       validationCommands: [...task.validationCommands],
+      // La nature vient de la base, jamais du formulaire : c'est elle qui decide
+      // si l'execution recoit les programmes d'amorcage.
+      taskKind: task.kind,
     });
 
     if (!started.ok) {

@@ -31,6 +31,7 @@ import {
   parseCreateTaskDocumentRequest,
   parseDeleteProjectDocumentRequest,
   parseDeleteTaskDocumentRequest,
+  parseInspectRepositoryRequest,
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseResolveRepositoryRequest,
@@ -46,6 +47,7 @@ import {
   type CreateTaskDocumentSuccess,
   type DeleteProjectDocumentSuccess,
   type DeleteTaskDocumentSuccess,
+  type InspectRepositorySuccess,
   type ListProjectDocumentsSuccess,
   type ReadProjectDocumentSuccess,
   type ResolveRepositorySuccess,
@@ -72,6 +74,10 @@ import {
   updateDocument,
   type UpdateDocumentResult,
 } from "./repositories/documents/update-document.ts";
+import {
+  inspectRepository,
+  type InspectRepositoryResult,
+} from "./repositories/inspect-repository.ts";
 import { resolveRepository, type ResolveRepositoryResult } from "./repositories/resolve-repository.ts";
 import {
   createTaskDocument,
@@ -95,6 +101,7 @@ import { deriveFingerprintKey } from "./repositories/workspace-fingerprint.ts";
 /** Fonctions remplacables dans les tests. */
 export type RunnerDependencies = {
   resolveRepository?: (repositoryPath: string) => Promise<ResolveRepositoryResult>;
+  inspectRepository?: (repositoryPath: string) => Promise<InspectRepositoryResult>;
   listDocuments?: (repositoryPath: string) => Promise<ListDocumentsResult>;
   readDocument?: (repositoryPath: string, documentPath: string) => Promise<ReadDocumentResult>;
   updateDocument?: (
@@ -142,6 +149,7 @@ export type RunnerDependencies = {
 
 const HEALTH_ROUTE = "/health";
 const RESOLVE_ROUTE = "/repositories/resolve";
+const INSPECT_ROUTE = "/repositories/inspect";
 const DOCUMENTS_LIST_ROUTE = "/repositories/documents/list";
 const DOCUMENTS_READ_ROUTE = "/repositories/documents/read";
 const DOCUMENTS_UPDATE_ROUTE = "/repositories/documents/update";
@@ -228,6 +236,9 @@ export function createRunnerServer(
 ): Server {
   const resolve =
     dependencies.resolveRepository ?? ((repositoryPath: string) => resolveRepository(repositoryPath));
+  const inspect =
+    dependencies.inspectRepository ??
+    ((repositoryPath: string) => inspectRepository(repositoryPath));
   const list = dependencies.listDocuments ?? ((repositoryPath: string) => listDocuments(repositoryPath));
   const read =
     dependencies.readDocument ??
@@ -317,6 +328,32 @@ export function createRunnerServer(
           ok: true,
           repository: { canonicalPath: result.canonicalPath },
         };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === INSPECT_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, INSPECT_ROUTE, log,
+          parseInspectRepositoryRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        const result = await inspect(parsed.repositoryPath);
+        if (!result.ok) {
+          logRefusal(requestId, INSPECT_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: InspectRepositorySuccess = { ok: true, inspection: result.inspection };
         sendJson(response, 200, payload, requestId);
         return;
       }

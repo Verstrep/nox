@@ -454,7 +454,22 @@ model Task {
   projectId String
 
   /// Numero attribue a la creation, unique dans le projet et jamais modifie.
+  ///
+  /// `0` est reserve a la tache d'amorcage : `Project.nextTaskSequence` demarre
+  /// a `1` et ne recule jamais, donc aucune attribution ordinaire ne peut le
+  /// produire. L'unicite de `TASK-000` est ainsi portee par
+  /// `@@unique([projectId, sequence])`, sans verrou applicatif ni index de plus.
   sequence Int
+
+  /// Nature de la tache : `NORMAL` ou `BOOTSTRAP`.
+  ///
+  /// Declaree, jamais deduite du code. `sequence === 0` suffirait aujourd'hui et
+  /// cesserait de suffire des qu'une regle porterait sur la nature plutot que
+  /// sur le numero : une convention d'affichage ne doit pas porter de semantique.
+  ///
+  /// Deux valeurs, et il n'en faut pas plus. Un systeme generique de types de
+  /// taches serait une abstraction sans deuxieme usage.
+  kind String @default("NORMAL")
 
   title      String
   objective  String

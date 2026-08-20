@@ -432,7 +432,31 @@ describe("validation des lignes lues en base", () => {
     const task = await createTask(db, specification(projectId));
     assert.ok(task !== null);
 
+    // `0` n'est plus impossible depuis TASK-023 : il est reserve a l'amorcage.
+    // Un negatif, lui, ne peut venir d'aucun chemin de code.
+    corrupt(task.id, "sequence", "-1");
+
+    await assert.rejects(getTaskById(db, task.id), InvalidTaskRecordError);
+  });
+
+  it("accepte le numero reserve a l'amorcage", async () => {
+    const projectId = await newProject();
+    const task = await createTask(db, specification(projectId));
+    assert.ok(task !== null);
+
     corrupt(task.id, "sequence", "0");
+
+    const read = await getTaskById(db, task.id);
+    assert.ok(read !== null);
+    assert.equal(read.code, "TASK-000");
+  });
+
+  it("refuse une nature de tache inconnue", async () => {
+    const projectId = await newProject();
+    const task = await createTask(db, specification(projectId));
+    assert.ok(task !== null);
+
+    corrupt(task.id, "kind", "EXPERIMENTAL");
 
     await assert.rejects(getTaskById(db, task.id), InvalidTaskRecordError);
   });

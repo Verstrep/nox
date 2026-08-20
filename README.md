@@ -34,6 +34,7 @@ base SQLite dans le dossier du projet.
 | **Mémoire projet** | Enregistrer décisions, contraintes, conventions et connaissances durables, et les faire suivre à l'Architecte |
 | **Project plan** | Tenir le Project Brief et le Living V1 Plan du projet, à la main ou en appliquant une proposition relue de l'Architecte |
 | **V1 Backlog** | Générer le backlog des tâches restantes, le relire, le réordonner, et créer les tâches en un lot |
+| **Bootstrap** | Préparer le repository et sa documentation fondamentale avec `TASK-000`, construite sans appel à une IA |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
 modèles, aucun commit, aucun push, aucun résumé silencieux, aucune estimation de coût. Les

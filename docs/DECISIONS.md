@@ -4151,3 +4151,194 @@ reprend chaque capacité visible, cherche l'exigence qui la rend nécessaire, et
 a pas. Il lui est explicitement demandé de ne rendre ni le déroulement, ni la liste de ce qu'il a
 retiré — NOX ne demande, ne reçoit et ne stocke aucun raisonnement interne, et une exception ici
 aurait contredit une garantie tenue partout ailleurs.
+
+---
+
+## Décisions de TASK-023 — Amorçage d'un projet et `TASK-000`
+
+### D-291 — Le numéro zéro, plutôt qu'un drapeau et un verrou
+
+**Décision.** La tâche d'amorçage porte `sequence = 0`. Son unicité par projet vient de
+`@@unique([projectId, sequence])`, qui existait déjà ; sa réservation vient de
+`Project.nextTaskSequence`, qui démarre à `1` et ne recule jamais.
+
+**Justification.** Les deux garanties tombent gratuitement. Aucune attribution ordinaire ne
+peut produire `0`, donc le numéro est réservé **par construction** — sans liste d'exclusion à
+maintenir, et sans risque qu'un chemin de code futur l'oublie. Et un projet ne peut porter
+qu'une ligne de numéro `0`, donc deux créations concurrentes n'en produisent qu'une, la
+perdante échouant sur la contrainte plutôt que sur une vérification applicative.
+
+L'alternative — une colonne `isBootstrap` plus un index unique partiel, ou un verrou de
+`Project` comme pour le backlog — aurait ajouté une garantie là où le schéma en offrait déjà
+une. Une garantie de plus n'est pas une garantie meilleure : c'est une occasion de plus de
+diverger.
+
+Zéro place aussi la tâche **avant** toutes les autres dans un tri par code, ce qui est
+exactement sa position logique. Ce n'est pas la raison du choix, mais c'était le signe qu'il
+était le bon.
+
+### D-292 — Une nature déclarée, pas un code interprété
+
+**Décision.** `Task.kind` vaut `NORMAL` ou `BOOTSTRAP`, avec `NORMAL` par défaut. Deux
+valeurs, et aucun système générique de types de tâches.
+
+**Justification.** `sequence === 0` suffirait aujourd'hui à reconnaître l'amorçage, et
+cesserait de suffire dès qu'une règle porterait sur la **nature** plutôt que sur le numéro.
+Une convention d'affichage ne doit pas porter de sémantique : le jour où l'on voudrait une
+seconde tâche spéciale, tout le code qui teste un numéro serait à relire.
+
+Deux valeurs et pas davantage, parce que NOX ne distingue aujourd'hui que le travail produit
+de l'amorçage. Un registre extensible de types de tâches serait une abstraction sans deuxième
+usage — et deux usages ne font toujours pas un motif.
+
+La colonne porte aussi la **provenance** : une tâche d'amorçage ne vient d'aucun backlog, et
+ses colonnes `backlogProposalId` et `backlogItemPosition` restent nulles. La question « d'où
+vient cette tâche ? » a une réponse dans le schéma, pas dans un texte d'interface.
+
+### D-293 — L'amorçage est déterministe, et n'appelle aucun fournisseur
+
+**Décision.** `TASK-000` est construite par une fonction **pure**, à partir du brief, du plan,
+de la mémoire active, des tâches déjà enregistrées et d'une inspection du repository. Zéro
+appel à OpenAI : ni à l'ouverture de la page, ni à l'aperçu, ni à la création.
+
+**Justification.** La question n'est pas ouverte. Le planificateur de backlog répond à « quel
+travail produit reste-t-il ? » — cela dépend du projet, et mérite un modèle. L'amorçage répond
+à « quelles fondations ces tâches demandent-elles ? », et NOX connaît déjà la réponse : un
+repository qui démarre, et huit documents dont il sait qui possède quoi.
+
+Dépenser un appel pour reformuler une responsabilité connue, ce serait payer pour de la
+variabilité. Deux projets identiques recevraient deux amorçages différents, sans que la
+différence signifie quoi que ce soit.
+
+Le déterminisme a un second effet, qui vaut à lui seul la décision : **l'aperçu devient
+honnête**. Le texte affiché avant création est exactement celui qui sera créé, et un test le
+vérifie en construisant deux fois la même tâche. Avec un modèle dans la boucle, l'aperçu
+n'aurait été qu'une promesse.
+
+### D-294 — L'inspection du repository constate, elle ne conclut pas
+
+**Décision.** Une route runner nouvelle, `POST /repositories/inspect`, rend des faits :
+manifestes reconnus, dossiers de code reconnus, documents fondamentaux présents, nombre
+d'entrées à la racine, présence d'un commit. La classification — vide, minimal, application
+existante — est calculée côté web, où elle est pure et testable.
+
+**Justification.** C'est la règle du runner depuis TASK-002, et elle vaut ici comme ailleurs :
+il exécute, il ne décide pas. Une classification calculée dans le runner aurait été testable
+seulement en montant un repository, et invisible depuis les tests du web qui s'en servent.
+
+L'inspection est **grossière**, et c'est délibéré. NOX ne cherche pas à savoir s'il a affaire à
+Next.js ou à Django : il constate qu'il y a déjà quelque chose. Classer cinquante piles aurait
+produit un catalogue à maintenir, faux le jour où il compte — et Claude Code lit le détail au
+moment où il travaille réellement dans le repository.
+
+Aucun contenu n'est lu. La route rend des **noms d'entrées reconnues**, jamais des octets : un
+`.env` présent n'y apparaît donc pas, faute d'appartenir à une liste reconnue, et personne
+ne l'ouvre de toute façon. La liste fermée n'est pas un filtre appliqué après coup, c'est le
+seul chemin qui existe.
+
+### D-295 — L'amorçage exige un backlog appliqué
+
+**Décision.** Créer `TASK-000` demande un Project Brief, un Living V1 Plan **et** au moins une
+proposition de backlog `APPLIED`. Une proposition `PENDING` ou `DISMISSED` ne compte pas.
+
+**Justification.** L'amorçage prépare un repository **pour des tâches précises**. Sans elles,
+il ne saurait dire ce que les fondations doivent porter, et produirait un scaffold générique
+que le plan n'a jamais demandé.
+
+`APPLIED` seulement, parce que c'est le seul état qui a produit de vraies tâches. Une
+proposition en attente décrit un plan que l'utilisateur n'a pas encore retenu ; une
+proposition écartée décrit un plan qu'il a refusé. Bâtir des fondations sur l'un ou l'autre
+serait bâtir sur une intention qui n'existe pas.
+
+Le contexte transmis vient d'ailleurs des **vraies tâches**, pas du `providerJson` : si
+l'humain a modifié, réordonné ou retiré avant d'appliquer, c'est sa version qui fait foi. La
+vérité est ce qui a été créé, pas ce qui a été proposé.
+
+### D-296 — La matérialisation Markdown n'est pas une synchronisation
+
+**Décision.** `TASK-000` matérialise le Project Brief et le Living V1 Plan dans
+`docs/PROJECT_BRIEF.md` et `docs/V1_SCOPE.md`. Une fois. Modifier ensuite le plan
+dans NOX ne réécrit aucun document, et modifier un document à la main ne remonte pas dans NOX.
+
+**Justification.** L'état structuré reste l'intention produit **courante** dans NOX ; les
+Markdown en sont une matérialisation datée, destinée aux agents qui liront le repository. Ce
+sont deux rôles, et les confondre est exactement l'erreur que TASK-021 a passé une tâche
+entière à éviter.
+
+Une synchronisation bidirectionnelle demanderait de trancher des questions que NOX ne sait pas
+encore trancher : qui gagne en cas de divergence, que faire d'un document réécrit à la main,
+comment détecter un changement qui n'est pas passé par NOX. La construire à moitié aurait
+produit une garantie fausse — la pire espèce.
+
+La limite est donc **écrite** plutôt que masquée, dans l'état du projet comme dans le contrat
+de la tâche. Et une conséquence en découle directement : `TASK-000` ne crée **aucune entrée de
+mémoire**, ni à la préparation ni après l'exécution. Les décisions techniques prises pendant
+l'amorçage sont consignées dans `docs/DECISIONS.md` du projet amorcé ; la mémoire NOX reste
+contrôlée par l'utilisateur, et par lui seul.
+
+### D-297 — L'amorçage peut installer ; il ne reçoit pas un shell
+
+**Décision.** Une tâche de nature `BOOTSTRAP` reçoit une liste **fermée** de programmes
+d'écosystème — gestionnaires de paquets, outils de build, runtimes — sous forme de règles
+`Bash(<programme>:*)`, doublée de refus supplémentaires qui couvrent la publication, le
+déploiement, l'accès distant, l'élévation de privilèges et la lecture de fichiers hors de
+l'outil de lecture. Une tâche `NORMAL` ne reçoit rien de plus qu'avant : pas une règle de
+plus, pas une de moins.
+
+**Justification.** Le premier run réel de `TASK-000` a buté sur une contradiction que
+TASK-023 avait laissée en place. NOX n'autorise que les commandes **enregistrées avec la
+tâche**, et une tâche d'amorçage n'en a aucune — elle **choisit sa pile pendant son
+exécution**. L'agent a donc choisi React, TypeScript, Vite et Vitest, puis s'est vu refuser
+`npm install` : le repository a été livré sans dépendances installées, sans fichier de
+verrouillage, sans build ni tests exécutés, et son compte rendu l'a dit « avec une réserve ».
+
+La réserve était honnête ; la cause ne l'était pas. Rien dans le produit ne demandait un
+repository non installé — seule une règle écrite pour un autre cas l'imposait.
+
+Deux réponses ont été écartées. `--dangerously-skip-permissions` annulerait tout le travail
+de `claude-commands.ts`, et l'invariant qui l'interdit n'a pas de condition. Une règle
+`Bash` nue reviendrait au même par un autre chemin.
+
+La liste nomme des **programmes**, pas des commandes complètes, parce que NOX ne peut pas
+deviner la sous-commande : `npm run build` ou `npm run compile`, `go test ./...` ou
+`go build ./cmd/...`. Elle ne privilégie aucun écosystème — `npm` n'y a pas plus de droits
+que `cargo` —, et ce qui n'y figure pas reste refusé, l'agent devant **signaler** le refus
+plutôt que le contourner.
+
+**Ce que cette décision ne prétend pas.** Elle ne rend pas l'exécution inoffensive.
+`npm install` exécute les scripts de cycle de vie des dépendances, et `npm run` exécute un
+script que l'agent vient lui-même d'écrire : autoriser l'installation d'un écosystème, c'est
+autoriser du code tiers à s'exécuter. Ce qui reste borné est **où** cela s'exécute — le
+repository, seul dossier de travail, sans variable `NOX_*` — et **ce qui reste interdit**.
+
+Le refus de `cat` en est l'illustration exacte : il empêche de lire un `.env` à la main, pas
+qu'un script installé le lise. Aucune liste de permissions ne le pourrait, et prétendre le
+contraire produirait la pire des garanties — celle qu'on croit avoir.
+
+### D-298 — Setup et validation structurée sont deux questions distinctes
+
+**Décision.** Le prompt d'une tâche `BOOTSTRAP` ne dit plus « n'en lance aucune ». Il dit
+qu'aucune validation **structurée** n'était connue avant l'exécution, puis autorise
+explicitement l'installation et la vérification de la fondation. Son compte rendu porte deux
+sections là où les autres n'en portent qu'une : ce qui était **configuré avant**, et ce qui a
+**réellement tourné**.
+
+**Justification.** La phrase d'origine était juste pour ce qu'elle désignait et fausse pour
+ce qu'elle laissait entendre. La règle générale — « si aucune validation n'est configurée,
+n'en invente pas » — reste vraie, et elle est répétée mot pour mot dans le nouveau texte.
+Ce qui change est qu'elle ne recouvre plus l'installation, qui n'a jamais été une validation.
+
+La seconde section n'est pas un ornement. Avec une seule section « Validations exécutées »,
+un amorçage réussi aurait affiché « aucune » juste après avoir lancé une build et une suite
+de tests. Un compte rendu qui dit le contraire de ce qui s'est passé est pire qu'un compte
+rendu vide.
+
+Le contrat de `TASK-000` a été corrigé dans le même mouvement, et c'était nécessaire : une
+permission sans exigence n'aurait rien changé, et une exigence sans permission serait restée
+invérifiable. Ses critères demandent désormais des dépendances installées, un fichier de
+verrouillage lorsque l'écosystème en produit un, une build et des tests lancés lorsqu'ils
+existent, un démarrage **vérifié plutôt que supposé** — et, pour tout ce qui n'a pas pu
+l'être, une réserve **nommée**, avec sa raison.
+
+Aucun de ces textes ne cite d'écosystème. NOX ne sait pas encore laquelle sera choisie, et
+souffler `npm` reviendrait à la choisir à moitié.

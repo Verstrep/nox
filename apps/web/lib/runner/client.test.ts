@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { TASK_KIND } from "@nox/shared";
+
 import {
   checkRunnerHealth,
   claudePreflight,
@@ -1166,6 +1168,7 @@ describe("startClaudeRun", () => {
     prompt: "Prompt d'execution.",
     expectedGitHead: "a".repeat(40),
     validationCommands: ["npm run test"],
+    taskKind: TASK_KIND.NORMAL,
   };
   const accepted = {
     ok: true,
@@ -1191,7 +1194,7 @@ describe("startClaudeRun", () => {
     assert.equal(failureOf(result).kind, "invalid_response");
   });
 
-  it("envoie exactement les cinq champs du contrat", async () => {
+  it("envoie exactement les six champs du contrat", async () => {
     const capture: { request?: Request } = {};
 
     await startClaudeRun(request, {
@@ -1209,6 +1212,7 @@ describe("startClaudeRun", () => {
       "prompt",
       "repositoryPath",
       "runId",
+      "taskKind",
       "validationCommands",
     ]);
     // Aucune liste d'outils ni aucun executable ne circule : le runner les

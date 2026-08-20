@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 // Le package compile est importe volontairement : c'est l'artefact que
 // consomment `apps/web` et `apps/runner`.
 import {
+  BOOTSTRAP_TASK_CODE,
+  BOOTSTRAP_TASK_SEQUENCE,
   RESERVED_TASK_STATUSES,
   TASK_DOCUMENT_SYNC_STATUSES,
   TASK_PRIORITIES,
@@ -139,8 +141,16 @@ describe("code d'une tache", () => {
     assert.equal(formatTaskCode(12345), "TASK-12345");
   });
 
-  it("refuse un numero qui ne peut pas venir du compteur", () => {
-    assert.throws(() => formatTaskCode(0), RangeError);
+  it("rend le code reserve de l'amorcage pour le numero zero", () => {
+    // Zero n'est jamais attribue par le compteur : il est reserve a la tache
+    // d'amorcage, et c'est ce qui rend son unicite structurelle.
+    assert.equal(formatTaskCode(BOOTSTRAP_TASK_SEQUENCE), BOOTSTRAP_TASK_CODE);
+    assert.equal(formatTaskCode(0), "TASK-000");
+    assert.equal(isTaskCode(BOOTSTRAP_TASK_CODE), true);
+  });
+
+  it("refuse un numero qui ne peut venir ni du compteur, ni de l'amorcage", () => {
+    assert.throws(() => formatTaskCode(-1), RangeError);
     assert.throws(() => formatTaskCode(-3), RangeError);
     assert.throws(() => formatTaskCode(1.5), RangeError);
     assert.throws(() => formatTaskCode(Number.NaN), RangeError);

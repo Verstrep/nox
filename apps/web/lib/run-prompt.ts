@@ -62,6 +62,7 @@ export function buildCorrectionPrompt(input: {
     sourceRunCode: input.sourceRunCode,
     feedback: input.feedback,
     validationCommands: input.task.validationCommands,
+    kind: input.task.kind,
   });
   return { prompt, sha256: fingerprintPrompt(prompt) };
 }

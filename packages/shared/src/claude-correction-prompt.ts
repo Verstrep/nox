@@ -30,6 +30,8 @@
  */
 
 import { boundText, RUN_LIMITS } from "./runs.js";
+import { BOOTSTRAP_SETUP_STEP, validationReportSections } from "./claude-prompt.js";
+import { TASK_KIND, type TaskKind } from "./tasks.js";
 
 /** Marqueur encadrant le texte de l'utilisateur. */
 export const FEEDBACK_OPEN = "<review_feedback>";
@@ -83,16 +85,27 @@ const BEFORE_MODIFYING = [
   "5. présente brièvement ton plan dans tes propres logs.",
 ].join("\n");
 
-const REPORT_SECTIONS = [
-  "## Résultat",
-  "## Points du feedback traités",
-  "## Fichiers modifiés",
-  "## Validations exécutées",
-  "## Erreurs ou blocages",
-  "## Décisions prises",
-  "## Dette ou limites",
-  "## Git",
-].join("\n");
+/**
+ * Sections du compte rendu d'une correction.
+ *
+ * Une correction d'amorcage suit **exactement** le pipeline d'un run initial :
+ * meme politique d'outils, donc meme distinction entre ce qui etait configure
+ * avant et ce qui a reellement tourne. Une seconde forme de compte rendu, propre
+ * aux corrections, aurait fait diverger les deux chemins des la premiere
+ * evolution.
+ */
+function reportSections(kind: TaskKind): string {
+  return [
+    "## Résultat",
+    "## Points du feedback traités",
+    "## Fichiers modifiés",
+    ...validationReportSections(kind),
+    "## Erreurs ou blocages",
+    "## Décisions prises",
+    "## Dette ou limites",
+    "## Git",
+  ].join("\n");
+}
 
 export type CorrectionPromptInput = {
   /** Code de la tache : `TASK-006`. */
@@ -104,8 +117,42 @@ export type CorrectionPromptInput = {
   feedback: string;
   /** Commandes de validation attendues au moment du lancement. */
   validationCommands: readonly string[];
+  /**
+   * Nature de la tache corrigee.
+   *
+   * Une correction d'amorcage garde les permissions d'un amorcage : elle peut
+   * encore installer et verifier la fondation, parce que c'est souvent le
+   * defaut que la review lui demande de reparer.
+   */
+  kind: TaskKind;
 };
 
+/**
+ * Ce que la correction doit lancer a la fin.
+ *
+ * Le texte d'amorcage est **importe**, pas recopie : deux versions de la meme
+ * consigne finiraient par diverger, et l'une des deux deviendrait fausse sans
+ * que rien ne le signale.
+ */
+function correctionValidationStep(kind: TaskKind, commands: readonly string[]): string {
+  if (kind === TASK_KIND.BOOTSTRAP) {
+    return commands.length === 0
+      ? BOOTSTRAP_SETUP_STEP
+      : [
+          BOOTSTRAP_SETUP_STEP,
+          "   Exécute également les commandes de validation enregistrées avec la tâche :",
+          ...commands.map((entry) => `   - ${entry}`),
+        ].join("\n");
+  }
+
+  return commands.length === 0
+    ? "1. aucune commande de validation n'est enregistrée pour cette tâche : n'en lance aucune ;"
+    : [
+        "1. exécute les commandes de validation autorisées ci-dessous, qui sont les seules",
+        "   commandes applicatives préautorisées :",
+        ...commands.map((entry) => `   - ${entry}`),
+      ].join("\n");
+}
 /**
  * Rend le prompt d'une correction ciblee.
  *
@@ -146,14 +193,7 @@ export function renderClaudeCorrectionPrompt(input: CorrectionPromptInput): stri
   blocks.push(`Règles :\n${CORRECTION_RULES}`);
 
   const commands = usableEntries(input.validationCommands);
-  const validationStep =
-    commands.length === 0
-      ? "1. aucune commande de validation n'est enregistrée pour cette tâche : n'en lance aucune ;"
-      : [
-          "1. exécute les commandes de validation autorisées ci-dessous, qui sont les seules",
-          "   commandes applicatives préautorisées :",
-          ...commands.map((entry) => `   - ${entry}`),
-        ].join("\n");
+  const validationStep = correctionValidationStep(input.kind, commands);
 
   blocks.push(
     [
@@ -165,7 +205,7 @@ export function renderClaudeCorrectionPrompt(input: CorrectionPromptInput): stri
     ].join("\n"),
   );
 
-  blocks.push(`Compte rendu final :\n${REPORT_SECTIONS}`);
+  blocks.push(`Compte rendu final :\n${reportSections(input.kind)}`);
 
   return boundText(`${blocks.join("\n\n")}\n`, RUN_LIMITS.prompt);
 }

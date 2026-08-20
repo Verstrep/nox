@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { renderClaudeExecutionPrompt, type TaskSpecification } from "../dist/index.js";
+import {
+  TASK_KIND,
+  renderClaudeExecutionPrompt,
+  type TaskSpecification,
+  type TaskKind,
+} from "../dist/index.js";
 
-type PromptInput = TaskSpecification & { documentPath: string };
+type PromptInput = TaskSpecification & { documentPath: string; kind: TaskKind };
 
 const MINIMAL: PromptInput = {
   code: "TASK-012",
@@ -15,6 +20,7 @@ const MINIMAL: PromptInput = {
   acceptanceCriteria: ["Un projet peut etre cree."],
   validationCommands: [],
   documentPath: "tasks/TASK-012.md",
+  kind: TASK_KIND.NORMAL,
 };
 
 const COMPLETE: PromptInput = {
@@ -191,5 +197,133 @@ describe("renderClaudeExecutionPrompt - robustesse", () => {
       assert.ok(prompt.endsWith("\n"));
       assert.equal(prompt.endsWith("\n\n"), false);
     }
+  });
+});
+
+
+/**
+ * Tests de la frontiere entre setup et validation structuree.
+ *
+ * Le premier run reel de TASK-000 s'est arrete sur une phrase de ce prompt :
+ * « aucune commande de validation n'est enregistrée pour cette tâche : n'en lance
+ * aucune ». Elle etait juste pour ce qu'elle designait, et fausse pour ce qu'elle
+ * laissait entendre — l'agent n'a installe ni verifie la fondation qu'il venait de
+ * choisir.
+ */
+describe("renderClaudeExecutionPrompt — setup et validation structuree", () => {
+  const BOOTSTRAP: PromptInput = {
+    ...MINIMAL,
+    code: "TASK-000",
+    title: "Bootstrap project repository and foundational documentation",
+    documentPath: "tasks/TASK-000.md",
+    kind: TASK_KIND.BOOTSTRAP,
+  };
+
+  it("garde la consigne d'origine pour une tache ordinaire sans validation", () => {
+    const prompt = renderClaudeExecutionPrompt(MINIMAL);
+
+    assert.ok(
+      prompt.includes(
+        "aucune commande de validation n'est enregistrée pour cette tâche : n'en lance aucune",
+      ),
+    );
+    assert.ok(!prompt.includes("installe les dépendances"));
+  });
+
+  it("n'interdit plus toute commande a une tache d'amorcage", () => {
+    const prompt = renderClaudeExecutionPrompt(BOOTSTRAP);
+
+    assert.ok(!prompt.includes("n'en lance aucune"));
+    assert.ok(prompt.includes("aucune commande de validation structurée n'était connue"));
+  });
+
+  it("nomme ce que l'amorcage doit installer et verifier", () => {
+    const prompt = renderClaudeExecutionPrompt(BOOTSTRAP);
+
+    assert.ok(prompt.includes("installe les dépendances de la pile retenue"));
+    assert.ok(prompt.includes("fichier de verrouillage"));
+    assert.ok(prompt.includes("lance la build"));
+    assert.ok(prompt.includes("lance les tests"));
+    assert.ok(prompt.includes("sans laisser tourner un serveur permanent"));
+  });
+
+  it("interdit toujours d'inventer une validation etrangere a l'amorcage", () => {
+    const prompt = renderClaudeExecutionPrompt(BOOTSTRAP);
+    assert.ok(prompt.includes("n'invente aucune validation étrangère à l'amorçage"));
+  });
+
+  it("demande de signaler un refus plutot que de le contourner", () => {
+    const prompt = renderClaudeExecutionPrompt(BOOTSTRAP);
+
+    assert.ok(prompt.includes("ne cherche pas à la contourner"));
+    assert.ok(prompt.includes("ce qui reste non vérifié"));
+  });
+
+  it("ne souffle aucun ecosysteme a l'agent", () => {
+    const prompt = renderClaudeExecutionPrompt(BOOTSTRAP);
+
+    // NOX ne choisit pas la pile : citer `npm` ici la choisirait a moitie.
+    for (const forbidden of ["npm ", "pnpm", "yarn", "cargo", "pytest", "gradle", "composer"]) {
+      assert.ok(!prompt.includes(forbidden), forbidden);
+    }
+  });
+
+  it("separe ce qui etait configure de ce qui a reellement tourne", () => {
+    const prompt = renderClaudeExecutionPrompt(BOOTSTRAP);
+
+    assert.ok(prompt.includes("## Validations structurées configurées avant l'exécution"));
+    assert.ok(
+      prompt.includes("## Installation et vérification de la fondation réellement exécutées"),
+    );
+    // La section unique disparait : elle aurait affiche « aucune » juste apres une
+    // build et une suite de tests.
+    assert.ok(!prompt.includes("## Validations exécutées"));
+  });
+
+  it("garde une seule section de validations pour une tache ordinaire", () => {
+    const prompt = renderClaudeExecutionPrompt(COMPLETE);
+
+    assert.ok(prompt.includes("## Validations exécutées"));
+    assert.ok(!prompt.includes("## Validations structurées configurées avant l'exécution"));
+  });
+
+  it("borne l'amorcage au repository, sans publication ni deploiement", () => {
+    const prompt = renderClaudeExecutionPrompt(BOOTSTRAP);
+
+    assert.ok(prompt.includes("n'installe et ne modifie rien en dehors du repository"));
+    assert.ok(prompt.includes("ne publie, ne déploie et ne provisionne rien"));
+    // Les regles d'origine restent, mot pour mot.
+    assert.ok(prompt.includes("- ne crée aucun commit ;"));
+    assert.ok(prompt.includes("- ne lance aucun push ;"));
+    assert.ok(prompt.includes("- ne lis aucun secret ni fichier .env ;"));
+  });
+
+  it("n'ajoute ces deux regles qu'a l'amorcage", () => {
+    const prompt = renderClaudeExecutionPrompt(COMPLETE);
+
+    assert.ok(!prompt.includes("ne publie, ne déploie et ne provisionne rien"));
+    assert.ok(!prompt.includes("n'installe et ne modifie rien en dehors du repository"));
+  });
+
+  it("ajoute les validations enregistrees sans remplacer le setup", () => {
+    const prompt = renderClaudeExecutionPrompt({
+      ...BOOTSTRAP,
+      validationCommands: ["npm run test"],
+    });
+
+    assert.ok(prompt.includes("aucune commande de validation structurée n'était connue"));
+    assert.ok(prompt.includes("Exécute également les commandes de validation enregistrées"));
+    assert.ok(prompt.includes("- npm run test"));
+  });
+
+  it("reste deterministe", () => {
+    assert.equal(
+      renderClaudeExecutionPrompt(BOOTSTRAP),
+      renderClaudeExecutionPrompt(BOOTSTRAP),
+    );
+    assert.notEqual(
+      renderClaudeExecutionPrompt(BOOTSTRAP),
+      renderClaudeExecutionPrompt({ ...BOOTSTRAP, kind: TASK_KIND.NORMAL }),
+    );
   });
 });

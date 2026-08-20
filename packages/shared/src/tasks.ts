@@ -161,11 +161,55 @@ export function isTaskCode(value: unknown): value is string {
  * par diverger ; une seule ne le peut pas.
  */
 export function formatTaskCode(sequence: number): string {
-  if (!Number.isInteger(sequence) || sequence < 1) {
+  if (!Number.isInteger(sequence) || sequence < BOOTSTRAP_TASK_SEQUENCE) {
     throw new RangeError(`Numero de tache invalide : ${String(sequence)}`);
   }
   return `${TASK_CODE_PREFIX}${String(sequence).padStart(3, "0")}`;
 }
+
+/**
+ * Numero reserve a la tache d'amorcage du repository.
+ *
+ * ## Pourquoi zero, et pourquoi c'est structurel
+ *
+ * `Project.nextTaskSequence` demarre a `1` et ne recule jamais : aucune
+ * attribution ordinaire ne peut donc produire `0`. Le numero est reserve par
+ * construction, sans liste d'exclusion a maintenir.
+ *
+ * Et l'unicite suit gratuitement : `@@unique([projectId, sequence])` existait
+ * deja, donc un projet ne peut porter qu'une seule tache de numero `0`. Deux
+ * creations concurrentes n'en produisent qu'une, sans verrou applicatif.
+ *
+ * Zero place aussi la tache **avant** les autres dans tout tri par numero, ce
+ * qui est exactement sa position logique.
+ */
+export const BOOTSTRAP_TASK_SEQUENCE = 0;
+
+/** Code affiche de la tache d'amorcage : `TASK-000`. */
+export const BOOTSTRAP_TASK_CODE = `${TASK_CODE_PREFIX}000`;
+
+/**
+ * Nature d'une tache.
+ *
+ * Deux valeurs, et il n'en faut pas davantage : NOX distingue le travail
+ * produit de l'amorcage du repository, et rien d'autre. Un systeme generique
+ * de types de taches serait une abstraction sans deuxieme usage.
+ *
+ * Le type est **declare**, jamais deduit d'un code. `task.code === "TASK-000"`
+ * suffirait aujourd'hui et cesserait de suffire des qu'une regle porterait sur
+ * la nature plutot que sur le numero : une convention d'affichage ne doit pas
+ * porter de semantique.
+ */
+export const TASK_KIND = {
+  NORMAL: "NORMAL",
+  BOOTSTRAP: "BOOTSTRAP",
+} as const;
+
+export type TaskKind = (typeof TASK_KIND)[keyof typeof TASK_KIND];
+
+export const TASK_KINDS: readonly TaskKind[] = Object.values(TASK_KIND);
+
+export const isTaskKind = createStatusGuard(TASK_KINDS);
 
 /** Chemin relatif, stable, du document d'une tache. */
 export function taskDocumentPath(code: string): string {
@@ -207,6 +251,8 @@ export type DevelopmentTaskSummary = {
   id: string;
   /** Derive de `sequence`, jamais stocke : `TASK-001`. */
   code: string;
+  /** Nature declaree de la tache. `NORMAL` pour l'immense majorite. */
+  kind: TaskKind;
   title: string;
   status: TaskStatus;
   priority: TaskPriority;

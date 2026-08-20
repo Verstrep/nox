@@ -22,6 +22,7 @@ import {
   isCreateTaskDocumentSuccess,
   isDeleteProjectDocumentSuccess,
   isDeleteTaskDocumentSuccess,
+  isInspectRepositorySuccess,
   isListProjectDocumentsSuccess,
   isStartClaudeRunSuccess,
   isReadProjectDocumentSuccess,
@@ -47,6 +48,8 @@ import {
   type DeleteProjectDocumentSuccess,
   type DeleteTaskDocumentRequest,
   type DeleteTaskDocumentSuccess,
+  type InspectRepositoryRequest,
+  type RepositoryInspection,
   type ListProjectDocumentsRequest,
   type StartClaudeRunRequest,
   type ProjectDocumentContent,
@@ -235,6 +238,32 @@ export function resolveRepositoryPath(
     payload,
     isResolveRepositorySuccess,
     (value) => (value as { repository: { canonicalPath: string } }).repository.canonicalPath,
+    options,
+  );
+}
+
+/**
+ * Inspecte grossierement un repository, en lecture seule.
+ *
+ * Le runner rend des faits — manifestes reconnus, dossiers de code, documents
+ * fondamentaux presents, nombre d'entrees — et aucun contenu de fichier. La
+ * conclusion « ce repository porte deja une application » se calcule ici, cote
+ * web, ou elle est pure et testable.
+ *
+ * Aucun chemin absolu ne figure dans la reponse : seuls des chemins relatifs.
+ */
+export function inspectRepository(
+  repositoryPath: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<RepositoryInspection>> {
+  const payload: InspectRepositoryRequest = { repositoryPath };
+
+  return postAuthenticated(
+    "/repositories/inspect",
+    "repositories/inspect",
+    payload,
+    isInspectRepositorySuccess,
+    (value) => (value as { inspection: RepositoryInspection }).inspection,
     options,
   );
 }

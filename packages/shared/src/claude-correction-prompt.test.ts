@@ -16,6 +16,7 @@ import {
   FEEDBACK_CLOSE,
   RUN_LIMITS,
   FEEDBACK_OPEN,
+  TASK_KIND,
   renderClaudeCorrectionPrompt,
   type CorrectionPromptInput,
 } from "../dist/index.js";
@@ -27,6 +28,7 @@ function input(overrides: Partial<CorrectionPromptInput> = {}): CorrectionPrompt
     sourceRunCode: "RUN-001",
     feedback: "La deuxieme phrase du README doit etre plus courte. Ne touche pas au reste.",
     validationCommands: ["npm run test", "git diff --check"],
+    kind: TASK_KIND.NORMAL,
     ...overrides,
   };
 }
@@ -49,6 +51,7 @@ describe("renderClaudeCorrectionPrompt — determinisme", () => {
       sourceRunCode: "RUN-002",
       taskTitle: "Titre",
       taskCode: "TASK-009",
+      kind: TASK_KIND.NORMAL,
     });
     const other = renderClaudeCorrectionPrompt({
       taskCode: "TASK-009",
@@ -56,6 +59,7 @@ describe("renderClaudeCorrectionPrompt — determinisme", () => {
       sourceRunCode: "RUN-002",
       feedback: "Corrige le titre.",
       validationCommands: ["npm run test"],
+      kind: TASK_KIND.NORMAL,
     });
     assert.equal(direct, other);
   });
@@ -187,6 +191,61 @@ describe("renderClaudeCorrectionPrompt — ce qui n'y figure jamais", () => {
     assert.ok(
       prompt.length <= RUN_LIMITS.prompt,
       `prompt de ${String(prompt.length)} caracteres`,
+    );
+  });
+});
+
+
+/**
+ * Une correction d'amorcage reste un amorcage.
+ *
+ * L'invariant de TASK-013 le dit deja pour les validations : une correction suit
+ * **exactement** le meme pipeline qu'un run initial, sans branche selon `kind`.
+ * Il vaut aussi pour les permissions — et c'est souvent l'installation ratee que
+ * la review demande de reparer.
+ */
+describe("une correction d'amorcage", () => {
+  it("garde la consigne d'origine pour une tache ordinaire", () => {
+    const prompt = renderClaudeCorrectionPrompt(input({ validationCommands: [] }));
+
+    assert.ok(
+      prompt.includes(
+        "aucune commande de validation n'est enregistrée pour cette tâche : n'en lance aucune",
+      ),
+    );
+  });
+
+  it("peut encore installer et verifier la fondation", () => {
+    const prompt = renderClaudeCorrectionPrompt(
+      input({ kind: TASK_KIND.BOOTSTRAP, validationCommands: [] }),
+    );
+
+    assert.ok(!prompt.includes("n'en lance aucune"));
+    assert.ok(prompt.includes("aucune commande de validation structurée n'était connue"));
+    assert.ok(prompt.includes("installe les dépendances de la pile retenue"));
+  });
+
+  it("separe ce qui etait configure de ce qui a reellement tourne", () => {
+    const prompt = renderClaudeCorrectionPrompt(input({ kind: TASK_KIND.BOOTSTRAP }));
+
+    assert.ok(prompt.includes("## Validations structurées configurées avant l'exécution"));
+    assert.ok(
+      prompt.includes("## Installation et vérification de la fondation réellement exécutées"),
+    );
+    assert.ok(!prompt.includes("## Validations exécutées"));
+  });
+
+  it("laisse le compte rendu d'une correction ordinaire inchange", () => {
+    const prompt = renderClaudeCorrectionPrompt(input());
+
+    assert.ok(prompt.includes("## Validations exécutées"));
+    assert.ok(!prompt.includes("## Installation et vérification de la fondation"));
+  });
+
+  it("change le prompt des que la nature change", () => {
+    assert.notEqual(
+      renderClaudeCorrectionPrompt(input()),
+      renderClaudeCorrectionPrompt(input({ kind: TASK_KIND.BOOTSTRAP })),
     );
   });
 });

@@ -210,6 +210,22 @@ doit le dire explicitement et la justifier.
 
 ### 8.3 Exécution de Claude Code
 
+- **Une tâche d'amorçage peut installer et vérifier sa fondation ; aucune autre ne le peut.**
+  Une tâche `BOOTSTRAP` reçoit une **liste fermée** de programmes d'écosystème, jamais l'outil
+  `Bash` entier, jamais un interpréteur de commandes, jamais `cd`. Une tâche `NORMAL` ne reçoit
+  pas une règle de plus qu'avant. `--dangerously-skip-permissions` reste interdit, sans condition.
+- **Les refus tiennent pendant un amorçage, et s'étendent.** Commit, push, réinitialisation Git,
+  suppression et commandes réseau restent refusés ; s'y ajoutent la publication, le déploiement,
+  l'accès à une machine distante, l'élévation de privilèges et la lecture d'un fichier hors de
+  l'outil de lecture. Un refus l'emporte toujours sur une autorisation, et une commande
+  enregistrée qui entrerait en conflit **bloque le lancement** au lieu d'être arbitrée à
+  l'exécution.
+- **Installer n'est pas valider.** « Aucune validation structurée configurée » et « aucune
+  commande exécutée » sont deux faits distincts, et le compte rendu d'un amorçage les sépare en
+  deux sections. La règle générale — ne pas inventer de validation là où rien n'est configuré —
+  reste entière.
+- **La nature d'une tâche est transmise au runner, jamais déduite.** Elle est relue en base par
+  le serveur web ; le navigateur ne la porte pas, et un corps qui ne la déclare pas est refusé.
 - **Les commandes de validation enregistrées ne sont jamais exécutées par NOX.** Elles sont
   autorisées à Claude Code, une par une et à l'identique ; le runner n'en exécute aucune, et
   n'en relance aucune.
@@ -540,3 +556,46 @@ doit le dire explicitement et la justifier.
 - **Le navigateur ne porte aucune autorité** : ni contexte, ni prompt, ni modèle, ni état du
   projet, ni inventaire, ni empreinte, ni codes de tâche à venir. Il transmet un identifiant
   et les valeurs que l'utilisateur a saisies, toutes revalidées côté serveur.
+
+### 8.12 Amorçage d'un projet
+
+- **`TASK-000` est réservée à l'amorçage du repository.** Son numéro est `0` ;
+  `Project.nextTaskSequence` démarre à `1` et ne recule jamais, donc aucune attribution
+  ordinaire ne peut le produire. Une tâche normale ou issue d'un backlog ne reçoit jamais ce
+  code, même en concurrence.
+- **Au plus une tâche d'amorçage par projet**, et la garantie est structurelle :
+  `@@unique([projectId, sequence])`. Deux créations simultanées n'en produisent qu'une.
+- **Créer `TASK-000` ne consomme aucun numéro.** `nextTaskSequence` n'est ni lu, ni
+  incrémenté : la tâche suivante reçoit le numéro qu'elle aurait reçu sans elle.
+- **Aucune tâche existante n'est modifiée, supprimée, renumérotée ou déplacée** par un
+  amorçage, et leur provenance de backlog reste intacte. `TASK-000` n'en porte aucune.
+- **La nature d'une tâche est déclarée, jamais déduite d'un code.** `Task.kind` vaut `NORMAL`
+  ou `BOOTSTRAP` ; il n'existe pas de troisième valeur, et un registre générique de types de
+  tâches n'a pas lieu d'être.
+- **L'amorçage est explicite et déterministe : il n'appelle aucun fournisseur.** Ni à
+  l'ouverture de la page, ni à l'aperçu, ni à la création. Le texte affiché avant création est
+  exactement celui qui sera créé.
+- **Aucune création automatique.** Ni un projet créé, ni un brief enregistré, ni un plan
+  enregistré, ni un backlog appliqué, ni l'ouverture d'une page ne produit `TASK-000`.
+- **Créer `TASK-000` ne lance jamais Claude Code.** Elle naît `DRAFT`, et c'est un humain qui
+  la passe `READY` puis la lance. « Disponible » ne signifie pas « fait » : NOX peut recevoir
+  un repository qui n'a besoin d'aucun amorçage.
+- **L'exécution réutilise le pipeline existant.** Aucun second moteur, aucun second cycle de
+  vie : l'état d'amorçage est **dérivé** de la tâche, jamais persisté.
+- **Les préconditions sont vérifiées avant de faire travailler le runner** : brief, plan et
+  au moins un backlog `APPLIED`. Une proposition `PENDING` ou `DISMISSED` ne compte pas.
+- **Le contexte vient des vraies tâches créées**, jamais du `providerJson` d'une proposition :
+  ce que l'humain a appliqué fait foi.
+- **L'inspection du repository est en lecture seule et ne lit aucun contenu.** Le runner rend
+  des noms d'entrées reconnues ; la classification est calculée côté web.
+- **Un repository existant est inspecté et préservé, jamais remplacé.** Le contrat interdit de
+  supprimer du code, de réinitialiser Git ou d'écraser une documentation sans l'avoir lue.
+- **Si l'état change entre l'aperçu et la création, la création est refusée**, jamais fusionnée.
+  Il n'existe ni « créer quand même », ni résolution automatique.
+- **`TASK-000` prépare les fondations ; elle n'implémente aucune fonctionnalité du backlog.**
+  Les tâches à venir lui sont transmises pour être évitées, pas faites.
+- **Aucun document inexistant n'est référencé.** Le champ `documents` ne porte que des fichiers
+  réellement présents ; ceux à créer sont décrits comme livrables.
+- **Aucune entrée de mémoire n'est créée par l'amorçage**, ni avant, ni après l'exécution.
+- **Le Project Brief et le Living V1 Plan restent l'autorité dans NOX.** Leur matérialisation
+  en Markdown est un instantané, jamais une synchronisation bidirectionnelle.

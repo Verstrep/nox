@@ -132,7 +132,7 @@ export async function startCorrectionAction(
 
     // Les commandes sont revalidees pour produire un message precis ; le runner
     // les revalidera de toute facon avant d'en faire des permissions.
-    const policy = buildClaudeToolPolicy(task.validationCommands);
+    const policy = buildClaudeToolPolicy(task.validationCommands, task.kind);
     if (!policy.ok) {
       return {
         error: `La commande « ${policy.refusal.command} » ne peut pas etre autorisee : ${policy.refusal.reason}`,
@@ -185,6 +185,9 @@ export async function startCorrectionAction(
       prompt,
       expectedGitHead: head,
       validationCommands: [...task.validationCommands],
+      // Une correction d'amorcage garde les permissions d'un amorcage : le
+      // pipeline est le meme, sans branche selon `kind`.
+      taskKind: task.kind,
       correction: {
         sessionId,
         expectedBranch: branch,

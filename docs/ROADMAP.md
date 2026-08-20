@@ -131,11 +131,15 @@ Human validation only when necessary
 Validated delivery
 ```
 
-### `TASK-023` — Amorçage d'un projet — `TASK-000` — **suivante**
+### `TASK-023` — Amorçage d'un projet — `TASK-000` — terminée
 
-Le premier pas d'un projet vide : structure, documents de référence, premier commit préparé.
+Le premier pas d'un projet : `TASK-000` prépare le repository et sa documentation fondamentale
+avant les tâches produit. Construite **déterministement** à partir du brief, du plan, de la
+mémoire, du backlog appliqué et d'une inspection en lecture seule du repository — sans aucun
+appel à une IA. Le numéro `0` lui est réservé, un projet n'en porte qu'une, et sa création ne
+consomme aucun numéro de tâche ordinaire.
 
-### `TASK-024` — Dépendances entre tâches et modification des tâches futures
+### `TASK-024` — Dépendances entre tâches et modification des tâches futures — **suivante**
 
 Un plan vivant suppose de pouvoir réécrire ce qui n'a pas encore été lancé, et de dire qu'une
 tâche en attend une autre.

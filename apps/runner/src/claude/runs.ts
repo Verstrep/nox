@@ -34,6 +34,7 @@ import {
   type RunStatus,
   type RunWorkspaceFingerprint,
   type RunnerErrorCode,
+  type TaskKind,
 } from "@nox/shared";
 
 import type { ClaudeConfig } from "../config.ts";
@@ -57,6 +58,8 @@ export type StartRunRequest = {
   prompt: string;
   expectedGitHead: string;
   validationCommands: readonly string[];
+  /** Nature de la tache : elle decide des programmes d'amorcage autorises. */
+  taskKind: TaskKind;
   /** Correction ciblee : session a reprendre et etat de depart attendu. */
   correction?: {
     sessionId: string;
@@ -128,7 +131,7 @@ export async function startClaudeRun(
   // Les commandes sont revalidees ici meme si le web les a deja verifiees : le
   // runner est la derniere barriere avant l'execution, et il ne fait confiance a
   // personne sur ce point.
-  const policy = buildClaudeToolPolicy([...request.validationCommands]);
+  const policy = buildClaudeToolPolicy([...request.validationCommands], request.taskKind);
   if (!policy.ok) {
     return { ok: false, code: RUNNER_ERROR.CLAUDE_COMMAND_NOT_ALLOWED };
   }

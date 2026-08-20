@@ -97,41 +97,47 @@ Un backlog bâti sur un état devenu obsolète est refusé, jamais fusionné.
 
 ---
 
+### 1.12 Amorçage d'un projet — `TASK-000`
+
+Un projet dont le brief, le plan et un backlog appliqué existent peut préparer son repository.
+NOX construit `TASK-000` de façon **déterministe**, sans aucun appel à une IA : l'aperçu montre
+exactement la tâche qui sera créée, et une seule lecture du repository distingue un dépôt vide
+d'un dépôt qui porte déjà une application.
+
+Le numéro `0` lui est réservé, un projet n'en porte qu'une, et sa création ne consomme aucun
+numéro de tâche ordinaire. Elle naît en brouillon et suit ensuite le cycle de vie habituel :
+rien n'est exécuté sans un geste humain.
+
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Amorçage d'un projet — `TASK-000`
-
-Le premier pas d'un projet vide : initialiser le repository, poser la structure, produire les
-documents de référence. Aujourd'hui, ce travail se fait entièrement hors de NOX.
-
-### 2.2 Dépendances entre tâches
+### 2.1 Dépendances entre tâches
 
 Dire qu'une tâche en attend une autre, et que l'ordre n'est pas qu'une préférence d'affichage.
 
-### 2.3 Modification des tâches futures
+### 2.2 Modification des tâches futures
 
 Une spécification ne se modifie pas après création. Tant que le plan est vivant, cette
 contrainte devient bloquante : replanifier suppose de pouvoir réécrire ce qui n'a pas encore
 été lancé.
 
-### 2.4 Tableau de bord d'un projet
+### 2.3 Tableau de bord d'un projet
 
 Une vue qui répond « où en est ce projet » sans ouvrir chaque tâche.
 
-### 2.5 File d'exécution
+### 2.4 File d'exécution
 
 Enchaîner plusieurs tâches prêtes, sans qu'un enchaînement devienne une autonomie : chaque
 départ reste décidé, et une exécution reste seule active.
 
-### 2.6 Validation intelligente
+### 2.5 Validation intelligente
 
 Distinguer ce qu'une commande peut prouver, ce qu'une relecture par l'Architecte peut établir,
 et ce qui exige réellement un test humain — pour ne solliciter l'humain que dans le troisième
 cas.
 
-### 2.7 Livraison Git contrôlée
+### 2.6 Livraison Git contrôlée
 
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.

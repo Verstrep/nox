@@ -49,7 +49,7 @@ export default async function NewRunPage({
   // Le prompt affiche est produit par la meme fonction que celle de la Server
   // Action : ce qui est montre est exactement ce qui sera envoye.
   const { prompt, sha256 } = buildExecutionPrompt(task);
-  const policy = buildClaudeToolPolicy(task.validationCommands);
+  const policy = buildClaudeToolPolicy(task.validationCommands, task.kind);
   const preflight = await loadPreflight(project.repositoryPath);
 
   const isReady = task.status === TASK_STATUS.READY;
@@ -186,20 +186,47 @@ export default async function NewRunPage({
           description="Les seules commandes applicatives que Claude Code pourra executer."
         >
           {policy.ok ? (
-            policy.policy.authorizedCommands.length === 0 ? (
-              <p className="text-sm text-zinc-500">
-                Aucune commande de validation n&apos;est enregistree : Claude Code ne pourra
-                executer aucune commande applicative.
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-2">
-                {policy.policy.authorizedCommands.map((command) => (
-                  <li key={command} className="font-mono text-sm text-zinc-300">
-                    {command}
-                  </li>
-                ))}
-              </ul>
-            )
+            <div className="flex flex-col gap-5">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-zinc-500">
+                  Validations enregistrees avec la tache
+                </p>
+                {policy.policy.authorizedCommands.length === 0 ? (
+                  <p className="mt-2 text-sm text-zinc-500">
+                    Aucune commande de validation n&apos;est enregistree.
+                  </p>
+                ) : (
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {policy.policy.authorizedCommands.map((command) => (
+                      <li key={command} className="font-mono text-sm text-zinc-300">
+                        {command}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/*
+                Ce bloc n'existe que pour une tache d'amorcage. Le montrer partout
+                laisserait croire qu'une tache ordinaire dispose des memes
+                programmes — elle n'en dispose d'aucun.
+              */}
+              {policy.policy.setupPrograms.length > 0 ? (
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-zinc-500">
+                    Programmes d&apos;amorcage autorises
+                  </p>
+                  <p className="mt-2 text-sm text-zinc-400">
+                    Cette tache choisit sa pile technique pendant son execution : ses commandes
+                    d&apos;installation ne pouvaient pas etre enregistrees avant. Elle peut lancer
+                    ces programmes, et eux seuls, dans le repository du projet.
+                  </p>
+                  <p className="mt-3 font-mono text-sm leading-relaxed text-zinc-300">
+                    {policy.policy.setupPrograms.join("  ·  ")}
+                  </p>
+                </div>
+              ) : null}
+            </div>
           ) : (
             <p className="text-sm text-amber-200">
               {`« ${policy.refusal.command} » : ${policy.refusal.reason}`}
@@ -209,7 +236,11 @@ export default async function NewRunPage({
           <p className="mt-5 text-xs leading-relaxed text-zinc-600">
             S&apos;y ajoutent la lecture et la modification de fichiers, la recherche dans le code,
             et Git en <strong>lecture seule</strong>. Le commit, le push, la suppression de fichiers
-            et les commandes reseau sont explicitement refuses.
+            et les commandes reseau sont explicitement refuses
+            {policy.ok && policy.policy.setupPrograms.length > 0
+              ? ", comme la publication, le deploiement, l'acces a une machine distante et l'elevation de privileges"
+              : ""}
+            .
           </p>
         </SectionCard>
 

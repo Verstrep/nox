@@ -1,0 +1,12 @@
+-- TASK-023 : nature d'une tache.
+--
+-- Additive, et volontairement minimale. `TASK-000` n'a besoin d'aucune table,
+-- d'aucun index et d'aucun compteur : son unicite par projet est deja portee
+-- par `Task_projectId_sequence_key`, qui existe depuis la creation du modele.
+-- La seule chose qui manquait etait de dire ce qu'est une tache d'amorcage
+-- autrement que par son numero.
+--
+-- La valeur par defaut rend la migration sure sur des donnees existantes :
+-- toute tache deja enregistree devient `NORMAL`, ce qu'elle a toujours ete.
+-- Aucune table n'est reconstruite, aucune ligne n'est reecrite.
+ALTER TABLE "Task" ADD COLUMN "kind" TEXT NOT NULL DEFAULT 'NORMAL';

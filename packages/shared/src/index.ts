@@ -42,10 +42,14 @@ export type {
 } from "./runner.js";
 
 export {
+  BOOTSTRAP_TASK_CODE,
+  BOOTSTRAP_TASK_SEQUENCE,
   RESERVED_TASK_STATUSES,
   TASK_CODE_PREFIX,
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_DOCUMENT_SYNC_STATUSES,
+  TASK_KIND,
+  TASK_KINDS,
   TASK_PRIORITIES,
   TASK_PRIORITY,
   allowedTaskStatusTransitions,
@@ -55,6 +59,7 @@ export {
   isReservedTaskStatus,
   isTaskCode,
   isTaskDocumentSyncStatus,
+  isTaskKind,
   isTaskPriority,
   taskDocumentPath,
   taskPriorityRank,
@@ -64,9 +69,44 @@ export type {
   DevelopmentTaskDetail,
   DevelopmentTaskSummary,
   TaskDocumentSyncStatus,
+  TaskKind,
   TaskPriority,
   TaskSpecification,
 } from "./tasks.js";
+
+export {
+  FOUNDATIONAL_DOCUMENTS,
+  REPOSITORY_INSPECTION_MAX_ENTRIES,
+  REPOSITORY_MANIFEST_FILES,
+  REPOSITORY_SHAPE,
+  REPOSITORY_SHAPES,
+  REPOSITORY_SOURCE_DIRECTORIES,
+  classifyRepository,
+  isInspectRepositorySuccess,
+  isRepositoryInspection,
+  isRepositoryShape,
+  parseInspectRepositoryRequest,
+} from "./repository-inspection.js";
+
+export type {
+  InspectRepositoryRequest,
+  InspectRepositorySuccess,
+  RepositoryInspection,
+  RepositoryShape,
+} from "./repository-inspection.js";
+
+export {
+  BOOTSTRAP_SPEC_LIMITS,
+  BOOTSTRAP_SPEC_VERSION,
+  BOOTSTRAP_TASK_TITLE,
+  buildBootstrapTaskSpec,
+} from "./bootstrap.js";
+
+export type {
+  BootstrapSpecInput,
+  BootstrapTaskSpec,
+  BootstrapUpcomingTask,
+} from "./bootstrap.js";
 
 export { renderTaskMarkdown } from "./task-markdown.js";
 
@@ -112,6 +152,8 @@ export type {
 
 export {
   CLAUDE_BASE_ALLOWED_TOOLS,
+  CLAUDE_BOOTSTRAP_DENIED_COMMANDS,
+  CLAUDE_BOOTSTRAP_SETUP_PROGRAMS,
   CLAUDE_DENIED_COMMANDS,
   CLAUDE_GIT_READ_ONLY_COMMANDS,
   MAX_VALIDATION_COMMAND_LENGTH,
@@ -126,7 +168,11 @@ export type {
   CommandRefusal,
 } from "./claude-commands.js";
 
-export { renderClaudeExecutionPrompt } from "./claude-prompt.js";
+export {
+  BOOTSTRAP_SETUP_STEP,
+  renderClaudeExecutionPrompt,
+  validationReportSections,
+} from "./claude-prompt.js";
 
 export {
   FEEDBACK_CLOSE,

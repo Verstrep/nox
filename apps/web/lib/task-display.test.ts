@@ -8,6 +8,7 @@ function summary(overrides: Partial<DevelopmentTaskSummary> = {}): DevelopmentTa
   return {
     id: "t1",
     code: "TASK-001",
+    kind: "NORMAL",
     title: "Une tache",
     status: "DRAFT",
     priority: "MEDIUM",

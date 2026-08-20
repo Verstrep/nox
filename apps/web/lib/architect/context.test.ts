@@ -41,6 +41,7 @@ function task(code: string, overrides: Partial<DevelopmentTaskDetail> = {}): Dev
     id: `id-${code}`,
     projectId: "projet",
     code,
+    kind: "NORMAL",
     title: `Titre ${code}`,
     status: "COMPLETED",
     priority: "MEDIUM",

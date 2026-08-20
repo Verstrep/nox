@@ -40,6 +40,13 @@ export {
 } from "./tasks.js";
 
 export {
+  countAppliedBacklogProposals,
+  createBootstrapTask,
+  getBootstrapTask,
+  type CreateBootstrapTaskResult,
+} from "./bootstrap.js";
+
+export {
   applyBacklogProposal,
   dismissBacklogProposal,
   finishBacklogGeneration,

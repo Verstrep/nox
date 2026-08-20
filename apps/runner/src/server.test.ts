@@ -1668,6 +1668,7 @@ describe("POST /claude/runs/start", () => {
       prompt: "Prompt d'execution.",
       expectedGitHead: "a".repeat(40),
       validationCommands: ["npm run test"],
+      taskKind: "NORMAL",
       ...overrides,
     });
   }
@@ -1730,12 +1731,19 @@ describe("POST /claude/runs/start", () => {
 
   it("refuse un corps auquel il manque un champ", async () => {
     for (const raw of [
-      JSON.stringify({ runId: RUN_ID, prompt: "x", expectedGitHead: "y", validationCommands: [] }),
+      JSON.stringify({
+        runId: RUN_ID,
+        prompt: "x",
+        expectedGitHead: "y",
+        validationCommands: [],
+        taskKind: "NORMAL",
+      }),
       JSON.stringify({
         runId: RUN_ID,
         repositoryPath: "x",
         expectedGitHead: "y",
         validationCommands: [],
+        taskKind: "NORMAL",
       }),
       JSON.stringify({
         runId: RUN_ID,
@@ -1743,6 +1751,24 @@ describe("POST /claude/runs/start", () => {
         prompt: "y",
         expectedGitHead: "z",
         validationCommands: [1],
+        taskKind: "NORMAL",
+      }),
+      // La nature est exigee : sans elle, NOX ne saurait pas nommer le niveau de
+      // privilege de l'execution, et ne la lance pas.
+      JSON.stringify({
+        runId: RUN_ID,
+        repositoryPath: "x",
+        prompt: "y",
+        expectedGitHead: "z",
+        validationCommands: [],
+      }),
+      JSON.stringify({
+        runId: RUN_ID,
+        repositoryPath: "x",
+        prompt: "y",
+        expectedGitHead: "z",
+        validationCommands: [],
+        taskKind: "AUTRE",
       }),
     ]) {
       const response = await call("/claude/runs/start", { ...authorized, body: raw });
@@ -2345,6 +2371,7 @@ describe("POST /claude/runs/start — correction ciblee", () => {
     prompt: "Corrige la deuxieme phrase.",
     expectedGitHead: "a".repeat(40),
     validationCommands: ["npm run test"],
+    taskKind: "NORMAL",
   };
 
   const CORRECTION = {

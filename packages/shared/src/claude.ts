@@ -25,6 +25,7 @@ import {
 import { isRunReviewSnapshot, type RunReviewSnapshot } from "./review.js";
 import { isRunnerRunId } from "./runs.js";
 import { RUN_STATUS, type RunStatus } from "./statuses.js";
+import { isTaskKind, type TaskKind } from "./tasks.js";
 
 /** Corps de `POST /claude/preflight`. */
 export type ClaudePreflightRequest = {
@@ -75,6 +76,19 @@ export type StartClaudeRunRequest = {
   prompt: string;
   expectedGitHead: string;
   validationCommands: string[];
+  /**
+   * Nature de la tache lancee, relue en base par le serveur web.
+   *
+   * Elle decide d'une **permission** : une tache d'amorcage recoit les
+   * programmes d'installation de `claude-commands.ts`, une tache ordinaire non.
+   * Le navigateur ne la transmet jamais — il n'envoie qu'un identifiant de
+   * tache, et le serveur relit tout le reste.
+   *
+   * Le champ est **obligatoire**. Un corps qui ne le porte pas est refuse plutot
+   * que ramene a `NORMAL` : NOX ne lance pas une execution dont il ne saurait pas
+   * nommer le niveau de privilege.
+   */
+  taskKind: TaskKind;
   /**
    * Correction ciblee : session a reprendre et etat de depart attendu.
    *
@@ -252,7 +266,8 @@ export function parseStartClaudeRunRequest(value: unknown): StartClaudeRunReques
     typeof value["prompt"] !== "string" ||
     typeof value["expectedGitHead"] !== "string" ||
     !Array.isArray(value["validationCommands"]) ||
-    !value["validationCommands"].every((entry) => typeof entry === "string")
+    !value["validationCommands"].every((entry) => typeof entry === "string") ||
+    !isTaskKind(value["taskKind"])
   ) {
     return null;
   }
@@ -263,6 +278,7 @@ export function parseStartClaudeRunRequest(value: unknown): StartClaudeRunReques
     prompt: value["prompt"],
     expectedGitHead: value["expectedGitHead"],
     validationCommands: value["validationCommands"] as string[],
+    taskKind: value["taskKind"],
   };
 
   // Le bloc de correction est **tout ou rien** : une session sans empreinte

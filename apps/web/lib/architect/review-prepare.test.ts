@@ -22,6 +22,7 @@ const TASK: DevelopmentTaskDetail = {
   id: "task-1",
   projectId: "project-1",
   code: "TASK-003",
+  kind: "NORMAL",
   title: "Filtrer les recettes",
   status: "REVIEW",
   priority: "MEDIUM",

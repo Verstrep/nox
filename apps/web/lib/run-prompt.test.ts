@@ -9,6 +9,7 @@ const TASK: DevelopmentTaskDetail = {
   id: "t1",
   projectId: "p1",
   code: "TASK-012",
+  kind: "NORMAL",
   title: "Ajouter la gestion des projets",
   status: "READY",
   priority: "HIGH",
