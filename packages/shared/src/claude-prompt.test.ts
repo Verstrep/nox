@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   TASK_KIND,
+  TASK_STATUS,
   renderClaudeExecutionPrompt,
   type TaskSpecification,
   type TaskKind,
@@ -324,6 +325,71 @@ describe("renderClaudeExecutionPrompt — setup et validation structuree", () =>
     assert.notEqual(
       renderClaudeExecutionPrompt(BOOTSTRAP),
       renderClaudeExecutionPrompt({ ...BOOTSTRAP, kind: TASK_KIND.NORMAL }),
+    );
+  });
+});
+
+
+/**
+ * Les dependances revalidees dans le prompt.
+ *
+ * Elles rendent l'execution historique lisible : dans six mois, le prompt
+ * enregistre dira sur quel travail celle-ci s'appuyait.
+ */
+describe("renderClaudeExecutionPrompt — dependances revalidees", () => {
+  const DEPENDENCIES = [
+    {
+      id: "t0",
+      code: "TASK-000",
+      title: "Bootstrap project repository",
+      status: TASK_STATUS.COMPLETED,
+      kind: TASK_KIND.BOOTSTRAP,
+    },
+    {
+      id: "t1",
+      code: "TASK-001",
+      title: "Definir le modele de domaine",
+      status: TASK_STATUS.COMPLETED,
+      kind: TASK_KIND.NORMAL,
+    },
+  ];
+
+  it("n'ajoute rien quand la tache n'attend personne", () => {
+    const prompt = renderClaudeExecutionPrompt(MINIMAL);
+    assert.ok(!prompt.includes("Dépendances satisfaites"));
+    assert.equal(prompt, renderClaudeExecutionPrompt(MINIMAL, []));
+  });
+
+  it("nomme les dependances satisfaites", () => {
+    const prompt = renderClaudeExecutionPrompt(MINIMAL, DEPENDENCIES);
+
+    assert.ok(prompt.includes("Dépendances satisfaites avant cette exécution :"));
+    assert.ok(prompt.includes("- TASK-000 — Bootstrap project repository"));
+    assert.ok(prompt.includes("- TASK-001 — Definir le modele de domaine"));
+  });
+
+  it("ne recopie aucune specification", () => {
+    const prompt = renderClaudeExecutionPrompt(MINIMAL, DEPENDENCIES);
+
+    // Codes et titres seulement : l'agent sait lire tasks/TASK-xxx.md.
+    for (const forbidden of ["Objectif de TASK-000", "Critères de TASK-001", "COMPLETED"]) {
+      assert.ok(!prompt.includes(forbidden), forbidden);
+    }
+  });
+
+  it("dit a quoi elles servent", () => {
+    const prompt = renderClaudeExecutionPrompt(MINIMAL, DEPENDENCIES);
+    assert.ok(prompt.includes("appuie-toi dessus plutôt que"));
+  });
+
+  it("reste deterministe et sensible a la liste", () => {
+    assert.equal(
+      renderClaudeExecutionPrompt(MINIMAL, DEPENDENCIES),
+      renderClaudeExecutionPrompt(MINIMAL, DEPENDENCIES),
+    );
+    assert.notEqual(
+      renderClaudeExecutionPrompt(MINIMAL, DEPENDENCIES),
+      renderClaudeExecutionPrompt(MINIMAL, DEPENDENCIES.slice(0, 1)),
     );
   });
 });

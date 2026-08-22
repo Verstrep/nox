@@ -10,6 +10,13 @@ import { StatusBadge } from "./StatusBadge";
 type TaskRowProps = {
   projectId: string;
   task: DevelopmentTaskSummary;
+  /**
+   * Dependances de cette tache, derivees au rendu de la liste.
+   *
+   * Absentes quand il n'y en a aucune — c'est le cas de presque toutes les
+   * taches, et une mention « 0 dependance » sur chaque ligne serait du bruit.
+   */
+  dependencies?: { total: number; unresolved: number };
 };
 
 /**
@@ -19,7 +26,7 @@ type TaskRowProps = {
  * un document en ordre ne merite pas une pastille de plus dans une liste deja
  * dense.
  */
-export function TaskRow({ projectId, task }: TaskRowProps) {
+export function TaskRow({ projectId, task, dependencies }: TaskRowProps) {
   const updatedAt = formatIsoDateTime(task.updatedAt);
   const needsAttention = task.documentSyncStatus !== TASK_DOCUMENT_SYNC_STATUS.SYNCED;
 
@@ -44,6 +51,14 @@ export function TaskRow({ projectId, task }: TaskRowProps) {
 
       <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
         {updatedAt === null ? null : <span>Modifiee le {updatedAt}</span>}
+        {dependencies === undefined || dependencies.total === 0 ? null : (
+          <span className={dependencies.unresolved > 0 ? "text-amber-200/80" : undefined}>
+            · {String(dependencies.total)} dependance(s)
+            {dependencies.unresolved > 0
+              ? ` · ${String(dependencies.unresolved)} en attente`
+              : " · toutes terminees"}
+          </span>
+        )}
         {needsAttention ? (
           <span className="text-amber-200/80">
             {/* Le mot « Document » reste francais : c'est lui qui dit de quoi

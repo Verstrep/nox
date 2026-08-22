@@ -432,6 +432,7 @@ const ARCHITECT_REVIEW_BLOCKER_LABELS: Record<ArchitectReviewBlocker, string> = 
 const GUIDED_STAGE_LABELS: Record<GuidedWorkflowStage, string> = {
   [GUIDED_STAGE.DRAFTING]: "Drafting",
   [GUIDED_STAGE.READY_TO_RUN]: "Ready to run",
+  [GUIDED_STAGE.WAITING_FOR_DEPENDENCIES]: "Waiting for dependencies",
   [GUIDED_STAGE.RUNNING]: "Running",
   [GUIDED_STAGE.RUN_FAILED]: "Run failed",
   [GUIDED_STAGE.REVIEWING]: "Reviewing",
@@ -490,6 +491,8 @@ const GUIDED_BLOCKER_LABELS: Record<GuidedBlockerCode, string> = {
     "Le document Markdown de cette tache n'est pas synchronise avec sa specification. Le lancement d'une execution l'exige.",
   [GUIDED_BLOCKER.ACCEPTANCE_CRITERIA_MISSING]:
     "Cette tache ne porte aucun critere d'acceptation : rien ne permettrait de dire « c'est fait ».",
+  [GUIDED_BLOCKER.DEPENDENCIES_UNRESOLVED]:
+    "Cette tache attend une ou plusieurs taches qui ne sont pas terminees. Son statut ne change pas pour autant : c'est le lancement qui est refuse, pas la tache qui est bloquee.",
   [GUIDED_BLOCKER.RUNNER_UNAVAILABLE]:
     "Le runner local ne repond pas. Les operations de NOX qui ne touchent pas au repository restent disponibles.",
   [GUIDED_BLOCKER.CLAUDE_UNAVAILABLE]:

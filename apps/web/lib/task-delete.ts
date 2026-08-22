@@ -26,6 +26,25 @@ export const TASK_RUNNING_MESSAGE =
   "Une execution est en cours sur cette tache : sa suppression est refusee tant qu'elle n'est " +
   "pas terminee.";
 
+/**
+ * Refus lorsqu'une autre tache attend celle-ci.
+ *
+ * Le message **nomme** les taches concernees. « Suppression impossible » sans
+ * dire par qui obligerait a parcourir tout le backlog pour comprendre, et NOX
+ * connait deja la reponse.
+ */
+export function taskHasDependentsMessage(
+  dependents: readonly { code: string; title: string }[],
+): string {
+  const names = dependents.map((entry) => `${entry.code} — ${entry.title}`).join(" ; ");
+  return (
+    "Cette tache ne peut pas etre supprimee : " +
+    `${names} ${dependents.length === 1 ? "en depend" : "en dependent"}. ` +
+    "Retirez la dependance depuis la ou les taches concernees, puis reessayez. NOX ne " +
+    "modifie pas un plan a votre place."
+  );
+}
+
 export const TASK_DOCUMENT_CONFLICT_MESSAGE =
   "Le document de cette tache est en conflit : un fichier different occupe son chemin. NOX ne " +
   "supprime pas un fichier dont il ne peut pas affirmer qu'il lui appartient. Ouvrez-le et " +
@@ -46,6 +65,14 @@ export type TaskDeletionState = {
   status: TaskStatus;
   documentSyncStatus: TaskDocumentSyncStatus;
   runCount: number;
+  /**
+   * Taches qui attendent celle-ci, relues en base.
+   *
+   * Verifie **avant** de toucher au document : la suppression retire d'abord le
+   * fichier, puis la ligne. Decouvrir le refus au second temps aurait laisse un
+   * document supprime et une tache toujours la.
+   */
+  dependents: readonly { code: string; title: string }[];
 };
 
 export type TaskDeletionCheck = { ok: true } | { ok: false; message: string };
@@ -68,6 +95,10 @@ export function checkTaskDeletion(
 ): TaskDeletionCheck {
   if (state.runCount > 0) {
     return { ok: false, message: TASK_HAS_RUNS_MESSAGE };
+  }
+
+  if (state.dependents.length > 0) {
+    return { ok: false, message: taskHasDependentsMessage(state.dependents) };
   }
 
   if (state.status === TASK_STATUS.RUNNING) {

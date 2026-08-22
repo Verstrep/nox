@@ -32,12 +32,38 @@ export {
   reserveTaskSequences,
   updateTaskStatus,
   writeTaskRow,
+  type BlockingDependent,
   type CreateTaskInput,
   type DeleteTaskResult,
   type TaskRowInput,
   type TaskWriteClient,
   type UpdateTaskStatusResult,
 } from "./tasks.js";
+
+export {
+  addTaskDependency,
+  countProjectDependencies,
+  hasAnyCycle,
+  listDependencyCandidates,
+  listDependencyIds,
+  listTaskDependencies,
+  readProjectDependencyEdges,
+  removeTaskDependency,
+  type AddDependencyResult,
+  type ProjectDependencyCounts,
+  type RemoveDependencyResult,
+  type TaskDependencyRows,
+} from "./task-dependencies.js";
+
+export {
+  readTaskCode,
+  taskContractChanged,
+  updateFutureTask,
+  type TaskEditInput,
+  type TaskEditResult,
+  type TaskEditRevision,
+  type TaskEditSnapshot,
+} from "./task-edit.js";
 
 export {
   countAppliedBacklogProposals,

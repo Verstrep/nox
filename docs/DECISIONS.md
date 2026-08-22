@@ -4342,3 +4342,159 @@ l'être, une réserve **nommée**, avec sa raison.
 
 Aucun de ces textes ne cite d'écosystème. NOX ne sait pas encore laquelle sera choisie, et
 souffler `npm` reviendrait à la choisir à moitié.
+
+---
+
+## Décisions de TASK-024 — Dépendances entre tâches et tâches futures modifiables
+
+### D-299 — Un graphe explicite, jamais déduit de l'ordre des codes
+
+**Décision.** Une dépendance est une arête persistée dans `TaskDependency`, posée à la
+main. NOX n'en déduit aucune d'un numéro de tâche, et le planificateur de backlog n'en propose
+aucune.
+
+**Justification.** Les codes disent **quand** une tâche a été créée, pas dans quel ordre le
+travail doit se faire. Un backlog appliqué produit `TASK-001` à `TASK-004` dans l'ordre validé
+par l'humain, mais rien n'y dit que la troisième attend la deuxième — souvent, elles attendent
+toutes les deux la première, et rien d'autre.
+
+Déduire une dépendance de l'ordre aurait donc introduit des contraintes que personne n'a
+voulues, et les aurait rendues invisibles : on ne débogue pas une règle qui n'est écrite nulle
+part. L'inverse est vrai aussi — `TASK-002` peut attendre `TASK-004` si l'utilisateur a
+réorganisé son travail, et NOX ne s'y oppose pas.
+
+Le planificateur reste à l'écart pour la même raison, et pour une seconde : il produit une
+proposition, et une proposition de graphe se relit beaucoup moins facilement qu'une liste de
+tâches. Une évolution pourra le lui confier ; elle méritera sa propre décision.
+
+### D-300 — Le cycle se vérifie après l'écriture, dans la transaction
+
+**Décision.** L'ajout d'une arête écrit d'abord, relit le graphe **entier** ensuite, et annule
+la transaction si un cycle apparaît — au lieu de vérifier avant d'écrire.
+
+**Justification.** L'ordre naturel — vérifier puis écrire — est faux sous concurrence, et il
+est faux d'une façon qui ne se voit pas en relisant le code. Deux requêtes simultanées lisent
+chacune un graphe sans cycle, chacune conclut que son arête est valide, et le graphe final en
+contient un. C'est exactement le scénario que TASK-024 demandait de couvrir :
+`A → B` et `B → A` envoyées ensemble.
+
+En écrivant d'abord, la première transaction prend le verrou d'écriture de SQLite. La seconde
+ne peut ni s'intercaler, ni lire un état antérieur : ce qu'elle relit contient l'arête de la
+première, et son cycle est vu. La détection porte sur le graphe complet, pas sur l'arête qu'on
+vient d'ajouter — c'est ce qui rend la transaction perdante capable de voir un cycle que son
+propre ajout, pris isolément, ne fermait pas.
+
+C'est la plus petite stratégie sûre compatible avec le projet : aucun verrou applicatif, aucune
+colonne de version, aucune table de fermeture transitive. Elle s'appuie sur ce que SQLite
+garantit déjà, et un test le vérifie en lançant les deux requêtes ensemble.
+
+**Le prix.** Une exception traverse la transaction pour la faire annuler — un retour en échec,
+même explicite, la validerait. C'est laid, et c'est le seul moyen : la laideur est signalée en
+commentaire plutôt que masquée.
+
+### D-301 — Seul `COMPLETED` satisfait une dépendance
+
+**Décision.** Une dépendance n'est satisfaite que lorsque la tâche attendue est **terminée**.
+Ni `READY`, ni `RUNNING`, ni `REVIEW`, ni `BLOCKED`.
+
+**Justification.** `REVIEW` est le cas piégeux : le travail existe, il est peut-être même
+complet. Mais aucun humain ne l'a accepté, et il peut encore repartir en correction. Une tâche
+qui démarrerait sur ce fondement construirait sur quelque chose qui n'a pas été validé — ce que
+toute l'architecture de NOX existe pour empêcher.
+
+Une dépendance qui se satisferait d'un « presque » ne contraindrait rien. Un seuil unique et
+strict est plus utile qu'un seuil négociable, et il ne demande à personne de retenir une règle.
+
+### D-302 — Une dépendance ne change jamais un statut
+
+**Décision.** Une dépendance non satisfaite ne pose pas `BLOCKED`, ni aucun autre statut. Une
+tâche `READY` qui attend reste `READY` ; c'est son **lancement** qui est refusé.
+
+**Justification.** Ce sont deux questions différentes. `Task.status` répond à « où en est ce
+travail » ; l'état des dépendances répond à « peut-il commencer maintenant ». Les confondre
+aurait créé un statut qui change tout seul — une tâche mise en file le matin se retrouvant
+bloquée l'après-midi parce qu'un humain a rouvert une autre tâche.
+
+Un statut qui bouge sans geste humain se met à mentir : plus personne ne sait si `BLOCKED`
+signifie « quelqu'un a décidé de mettre cela de côté » ou « une dépendance manquait ce
+jour-là ». `BLOCKED` reste donc ce qu'il a toujours été : une décision.
+
+La conséquence pratique est qu'il **fallait** protéger le lancement. Sans cela, la dépendance
+serait restée décorative : affichée dans l'interface, ignorée par le serveur. Le contrôle est
+donc refait au démarrage, avant toute écriture et avant toute sollicitation du runner — et il
+vaut aussi pour une correction, qui est une nouvelle exécution.
+
+Cette séparation est aussi ce qui rendra la file d'exécution possible : elle aura besoin de
+distinguer « prête » de « prête et sans attente », et les deux existent déjà.
+
+### D-303 — Une tâche n'est modifiable qu'avant sa première exécution
+
+**Décision.** Le critère est `runCount === 0`, jamais le statut. Dès qu'une exécution existe,
+la spécification est figée — y compris après un `Reopen`.
+
+**Justification.** Une spécification exécutée est un **fait historique**. Le prompt envoyé, la
+review capturée, les validations enregistrées et le compte rendu s'y rattachent tous. La
+modifier après coup ferait mentir tout ce qui la cite, sans qu'aucune trace ne le signale.
+
+Le statut aurait été le mauvais critère, et d'une façon précise : une tâche passée en `FAILED`
+puis rouverte redevient `READY`, avec toute son histoire derrière elle. Elle ressemble à une
+tâche neuve, et n'en est pas une. `runCount` ne se laisse pas tromper.
+
+NOX possède déjà une façon de faire évoluer un travail produit : `Request changes`, `Reopen`,
+et la boucle de correction. En ajouter une seconde aurait créé deux chemins pour un même
+besoin, et le moins fréquenté des deux aurait été le moins testé.
+
+### D-304 — Modifier une tâche en file la ramène en brouillon
+
+**Décision.** `READY` redevient `DRAFT` quand le contrat change — et **seulement** alors. Une
+sauvegarde sans modification ne touche ni le statut, ni `updatedAt`, ni le document.
+
+**Justification.** `READY` n'est pas un rangement : c'est une validation humaine, « ce contrat
+est prêt à être exécuté ». Si son contenu change, la validation ne porte plus sur rien. La
+laisser en place aurait produit exactement le pire cas : un lancement sur une spécification que
+personne n'a relue sous sa forme actuelle.
+
+La réciproque compte autant. Dégrader un `READY` parce qu'un formulaire a été ouvert puis
+refermé aurait puni la relecture, et la relecture est précisément ce qu'on veut encourager. La
+comparaison porte donc sur le contrat réel, avec une nuance : l'ordre des critères compte — un
+agent les lira dans cet ordre —, celui des dépendances non.
+
+### D-305 — L'empreinte de concurrence porte le contrat, pas `updatedAt`
+
+**Décision.** La protection contre deux onglets repose sur un SHA-256 des champs éditables et
+de l'ensemble des dépendances. Pas sur `updatedAt`, pas sur un compteur de version.
+
+**Justification.** `updatedAt` change pour des raisons qui n'ont rien à voir avec le contrat :
+une resynchronisation du document Markdown le touche, une transition de statut aussi. Deux
+onglets se seraient donc périmés mutuellement sans que personne n'ait rien modifié — et
+l'utilisateur aurait appris à ignorer le message, ce qui est pire que de ne pas l'afficher.
+
+Un compteur de version aurait demandé une colonne, donc une migration, donc un état de plus à
+tenir cohérent. L'empreinte se calcule à partir de ce qui existe déjà, et elle répond
+exactement à la question posée : « ce que je m'apprête à écraser est-il bien ce que j'ai lu ? »
+
+Ce n'est **pas** une primitive de sécurité — SHA-256 nu, comme l'empreinte de contexte de
+l'Architecte. L'empreinte du dossier de travail, elle, décide d'une exécution : c'est pour cela
+qu'elle est un HMAC. Ne pas confondre les deux.
+
+### D-306 — Une tâche attendue par une autre n'est pas supprimable
+
+**Décision.** Supprimer une tâche dont d'autres dépendent est refusé, et le refus les **nomme**.
+Le schéma double la garantie avec un `Restrict` du côté de la tâche attendue.
+
+**Justification.** L'alternative aurait été de retirer l'arête au passage. C'est précisément ce
+qu'il ne faut pas faire : ces arêtes sont un plan humain, et les effacer en silence modifie ce
+plan sans que personne ne l'ait décidé. La tâche qui attendait se retrouverait libre de démarrer
+sans que quiconque ait jugé que sa dépendance n'avait plus lieu d'être.
+
+Nommer les tâches concernées n'est pas un détail d'interface : « suppression impossible » sans
+dire par qui obligerait à parcourir tout le backlog pour comprendre, alors que NOX connaît déjà
+la réponse.
+
+`Restrict` plutôt que `Cascade` du côté attendu, `Cascade` du côté qui attend : les deux
+questions sont différentes. Supprimer une tâche emporte ce qu'**elle** attendait — l'arête n'a
+plus de sujet. Elle n'emporte pas ce qui l'attendait.
+
+**Ce que cela coûtera plus tard.** Une suppression de projet devra retirer ces lignes avant les
+tâches, en une opération explicite. C'est un `deleteMany` de plus, connu d'avance, écrit dans le
+schéma — pas une découverte au moment de l'écrire.

@@ -2,6 +2,7 @@
 
 import {
   deleteTaskWithoutRuns,
+  listTaskDependencies,
   getDatabaseClient,
   getProjectById,
   getTaskById,
@@ -14,7 +15,11 @@ import { redirect } from "next/navigation";
 
 import { deleteTaskDocument } from "@/lib/runner/client";
 import { describeRunnerFailure } from "@/lib/runner/errors";
-import { checkTaskDeletion, TASK_HAS_RUNS_MESSAGE } from "@/lib/task-delete";
+import {
+  checkTaskDeletion,
+  taskHasDependentsMessage,
+  TASK_HAS_RUNS_MESSAGE,
+} from "@/lib/task-delete";
 import { backlogUrl } from "@/lib/task-display";
 import { applyTaskDocumentSync } from "@/lib/tasks";
 
@@ -190,12 +195,14 @@ export async function deleteTaskAction(
     }
 
     const runs = await listRunsByTask(db, task.id);
+    const dependents = (await listTaskDependencies(db, task.id)).dependents;
     const check = checkTaskDeletion(
       {
         code: task.code,
         status: task.status,
         documentSyncStatus: task.documentSyncStatus,
         runCount: runs.length,
+        dependents,
       },
       confirmationCode,
     );
@@ -226,7 +233,12 @@ export async function deleteTaskAction(
       // Une execution a demarre entre la verification et ici : le document est
       // deja supprime, et NOX le dit plutot que de le recreer en silence.
       return {
-        error: result.reason === "has_runs" ? TASK_HAS_RUNS_MESSAGE : UNKNOWN_TASK_MESSAGE,
+        error:
+          result.reason === "has_runs"
+            ? TASK_HAS_RUNS_MESSAGE
+            : result.reason === "has_dependents"
+              ? taskHasDependentsMessage(result.dependents)
+              : UNKNOWN_TASK_MESSAGE,
       };
     }
   } catch (error) {

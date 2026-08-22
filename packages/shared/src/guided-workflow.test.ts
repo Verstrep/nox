@@ -26,6 +26,7 @@ import {
   RUN_KIND,
   RUN_STATUS,
   TASK_DOCUMENT_SYNC_STATUS,
+  TASK_KIND,
   TASK_STATUS,
   deriveGuidedWorkflowState,
   guidedActionCallsOpenAI,
@@ -54,6 +55,7 @@ const RUN: GuidedRunFact = {
 function facts(overrides: Partial<GuidedWorkflowFacts> = {}): GuidedWorkflowFacts {
   return {
     taskStatus: TASK_STATUS.DRAFT,
+    unresolvedDependencies: [],
     documentSyncStatus: TASK_DOCUMENT_SYNC_STATUS.SYNCED,
     hasAcceptanceCriteria: true,
     designedWithArchitect: false,
@@ -724,5 +726,119 @@ describe("purete", () => {
     // depuis un rendu sans effet de bord : le type de retour est la garantie.
     const result: GuidedWorkflowState = deriveGuidedWorkflowState(facts());
     assert.equal(typeof (result as unknown as { then?: unknown }).then, "undefined");
+  });
+});
+
+
+/**
+ * L'attente d'une dependance.
+ *
+ * Une etape a part entiere : ni « pret a lancer », qui serait faux, ni
+ * « bloquee », qui dramatiserait une situation normale.
+ */
+describe("attente d'une dependance", () => {
+  const WAITING = [
+    {
+      id: "t1",
+      code: "TASK-001",
+      title: "Definir le modele de domaine",
+      status: TASK_STATUS.DRAFT,
+      kind: TASK_KIND.NORMAL,
+      satisfied: false,
+    },
+  ];
+
+  it("remplace « pret a lancer » quand une dependance manque", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({ taskStatus: TASK_STATUS.READY, unresolvedDependencies: WAITING }),
+    );
+
+    assert.equal(state.stage, GUIDED_STAGE.WAITING_FOR_DEPENDENCIES);
+    assert.equal(state.recommendedAction, null);
+    assert.ok(state.summary.includes("TASK-001"));
+  });
+
+  it("nomme la tache attendue dans le blocage", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({ taskStatus: TASK_STATUS.READY, unresolvedDependencies: WAITING }),
+    );
+
+    const blocker = state.blockers.find(
+      (entry) => entry.code === GUIDED_BLOCKER.DEPENDENCIES_UNRESOLVED,
+    );
+    assert.ok(blocker !== undefined);
+    assert.ok(blocker.detail?.includes("TASK-001"));
+  });
+
+  it("ne recommande jamais de lancer Claude Code", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({
+        taskStatus: TASK_STATUS.READY,
+        unresolvedDependencies: WAITING,
+        launch: { state: "ready" },
+      }),
+    );
+
+    assert.notEqual(state.recommendedAction?.kind, GUIDED_ACTION.RUN_CLAUDE);
+    assert.ok(
+      !state.alternativeActions.some((entry) => entry.kind === GUIDED_ACTION.RUN_CLAUDE),
+    );
+  });
+
+  it("laisse revenir au brouillon", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({ taskStatus: TASK_STATUS.READY, unresolvedDependencies: WAITING }),
+    );
+
+    assert.ok(
+      state.alternativeActions.some((entry) => entry.kind === GUIDED_ACTION.BACK_TO_DRAFT),
+    );
+  });
+
+  it("ne change pas l'etape d'un brouillon", () => {
+    // Une tache en brouillon qui attend reste en redaction : la mettre en file
+    // reste l'etape suivante, et c'est ce qui permet de preparer a l'avance.
+    const state = deriveGuidedWorkflowState(
+      facts({ taskStatus: TASK_STATUS.DRAFT, unresolvedDependencies: WAITING }),
+    );
+
+    assert.equal(state.stage, GUIDED_STAGE.DRAFTING);
+    assert.equal(state.recommendedAction?.kind, GUIDED_ACTION.MARK_READY);
+  });
+
+  it("redevient lancable des que la dependance est terminee", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({
+        taskStatus: TASK_STATUS.READY,
+        unresolvedDependencies: [],
+        launch: { state: "ready" },
+      }),
+    );
+
+    assert.equal(state.stage, GUIDED_STAGE.READY_TO_RUN);
+    assert.equal(state.recommendedAction?.kind, GUIDED_ACTION.RUN_CLAUDE);
+  });
+
+  it("garde la specification comme etape franchie", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({ taskStatus: TASK_STATUS.READY, unresolvedDependencies: WAITING }),
+    );
+
+    const specification = state.progress.find((entry) => entry.step === "SPECIFICATION");
+    assert.equal(specification?.state, "done");
+  });
+
+  it("laisse une execution active primer", () => {
+    // Une dependance qui devient non satisfaite pendant qu'un processus ecrit ne
+    // doit pas escamoter l'execution en cours.
+    const state = deriveGuidedWorkflowState(
+      facts({
+        taskStatus: TASK_STATUS.RUNNING,
+        unresolvedDependencies: WAITING,
+        runs: [{ ...RUN, status: RUN_STATUS.RUNNING }],
+      }),
+    );
+
+    assert.equal(state.stage, GUIDED_STAGE.RUNNING);
   });
 });

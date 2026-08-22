@@ -599,3 +599,51 @@ doit le dire explicitement et la justifier.
 - **Aucune entrée de mémoire n'est créée par l'amorçage**, ni avant, ni après l'exécution.
 - **Le Project Brief et le Living V1 Plan restent l'autorité dans NOX.** Leur matérialisation
   en Markdown est un instantané, jamais une synchronisation bidirectionnelle.
+
+### 8.13 Dépendances entre tâches
+
+- **Une dépendance est une arête explicite et persistée.** `taskId` **attend**
+  `dependsOnTaskId` ; inverser les deux produirait un graphe qui a l'air correct et qui bloque
+  exactement les mauvaises tâches. Aucune dépendance n'est jamais déduite d'un numéro : un code
+  plus petit ne fait pas une antériorité.
+- **Le graphe est acyclique et local au projet.** Les cycles **transitifs** sont refusés, pas
+  seulement l'arête inverse, et la vérification a lieu dans la transaction, **après** l'écriture :
+  c'est ce qui empêche deux requêtes simultanées d'en fermer un à elles deux. Une tâche ne dépend
+  jamais d'elle-même, et jamais d'une tâche d'un autre projet — même si le navigateur forge
+  l'identifiant.
+- **Seul `COMPLETED` satisfait une dépendance.** Ni `READY`, ni `RUNNING`, ni `REVIEW`.
+- **Une dépendance ne modifie jamais `Task.status`.** Une tâche prête qui attend reste prête :
+  c'est le lancement qui est refusé, pas la tâche qui est bloquée. `BLOCKED` reste un état
+  décidé par un humain.
+- **Rien de ce qui se dérive n'est stocké.** Aucun compteur de dépendances satisfaites en base :
+  il serait faux dès la première réouverture d'une tâche terminée.
+- **Une exécution est refusée tant qu'une dépendance n'est pas terminée**, correction comprise —
+  une reprise est une nouvelle exécution. Le contrôle est refait côté serveur, avant toute
+  écriture et avant toute sollicitation du runner, et le refus nomme les tâches qui manquent.
+- **`TASK-000` ne dépend d'aucune tâche produit.** L'inverse est autorisé, et c'est le cas
+  utile. L'amorçage ne reçoit aucune dépendance implicite : rien n'est créé automatiquement.
+- **Une tâche attendue par une autre n'est pas supprimable.** Le refus la nomme ; retirer la
+  dépendance reste un geste humain.
+
+### 8.14 Modification d'une tâche future
+
+- **Une tâche n'est modifiable qu'avant sa première exécution.** Le critère est `runCount === 0`,
+  jamais le statut : une tâche rouverte après un échec porte un historique, donc reste figée.
+  Les corrections d'un travail déjà produit passent par `Request changes` et `Reopen` — il
+  n'existe pas de seconde façon de réécrire une tâche.
+- **Code, numéro, nature, provenance de backlog et historique d'exécution sont immuables.** Une
+  proposition de backlog `APPLIED` reste ce qui a été appliqué à l'époque ; la tâche devient le
+  contrat courant, et les deux restent distincts.
+- **Une sauvegarde est une seule opération.** Contrat, dépendances et statut changent ensemble
+  ou pas du tout, et toute la validation précède la première écriture.
+- **Une tâche en file redevient un brouillon dès que son contrat change**, et seulement alors.
+  Une sauvegarde sans modification ne touche ni le statut, ni `updatedAt`, ni le document.
+- **La concurrence optimiste porte sur le contrat, jamais sur `updatedAt`.** Un onglet resté
+  sur un état dépassé est refusé, jamais fusionné, et son contenu lui est rendu.
+- **Le document Markdown suit la transaction, il ne la conditionne pas.** Il est réécrit sous
+  contrôle de révision ; un fichier modifié à la main produit un conflit, jamais un écrasement.
+  Éditer ce fichier ne modifie toujours pas la tâche : la synchronisation reste à sens unique.
+- **Aucun appel OpenAI, aucun Claude Code, aucune écriture Git.** Éditer une tâche ou gérer ses
+  dépendances sont des écritures SQLite ; les pages fonctionnent runner arrêté.
+- **Le planificateur de backlog est inchangé.** `backlog/1` ne propose aucune dépendance : elles
+  sont posées à la main après l'application.

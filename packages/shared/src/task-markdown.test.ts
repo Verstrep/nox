@@ -210,3 +210,73 @@ describe("renderTaskMarkdown", () => {
     assert.ok(renderTaskMarkdown(MINIMAL).includes("## Règles d'exécution"));
   });
 });
+
+
+/**
+ * La section des dependances.
+ *
+ * Elle suit la meme convention que toutes les autres sections de ce document :
+ * absente quand elle serait vide. Un « ## Dépendances / Aucune » sur la
+ * quasi-totalite des taches ajouterait deux lignes de bruit par fichier.
+ */
+describe("section des dependances", () => {
+  const TASK = {
+    code: "TASK-003",
+    title: "Livrer la liste de courses",
+    objective: "La liste se derive du planning.",
+    context: null,
+    outOfScope: null,
+    documentReferences: [],
+    acceptanceCriteria: ["La liste s'affiche."],
+    validationCommands: [],
+  };
+
+  it("n'ecrit rien quand la tache n'attend personne", () => {
+    const markdown = renderTaskMarkdown(TASK);
+    assert.ok(!markdown.includes("Dépendances"));
+    // Le comportement d'avant TASK-024, au caractere pres.
+    assert.equal(markdown, renderTaskMarkdown(TASK, []));
+  });
+
+  it("liste les dependances par code et par titre", () => {
+    const markdown = renderTaskMarkdown(TASK, [
+      { code: "TASK-000", title: "Bootstrap project repository" },
+      { code: "TASK-001", title: "Definir le modele de domaine" },
+    ]);
+
+    assert.ok(markdown.includes("## Dépendances"));
+    assert.ok(markdown.includes("- TASK-000 — Bootstrap project repository"));
+    assert.ok(markdown.includes("- TASK-001 — Definir le modele de domaine"));
+  });
+
+  it("n'inscrit aucun statut", () => {
+    // Meme raison que pour le statut de la tache elle-meme : il change sans que
+    // la specification change, et l'inscrire obligerait a reecrire le fichier a
+    // chaque transition.
+    const markdown = renderTaskMarkdown(TASK, [{ code: "TASK-001", title: "Domaine" }]);
+
+    for (const status of ["DRAFT", "READY", "COMPLETED", "Brouillon", "Terminee"]) {
+      assert.ok(!markdown.includes(status), status);
+    }
+  });
+
+  it("place les dependances avant les regles d'execution", () => {
+    const markdown = renderTaskMarkdown(TASK, [{ code: "TASK-001", title: "Domaine" }]);
+    assert.ok(markdown.indexOf("## Dépendances") < markdown.indexOf("## Règles d'exécution"));
+  });
+
+  it("reste deterministe", () => {
+    const dependencies = [{ code: "TASK-001", title: "Domaine" }];
+    assert.equal(
+      renderTaskMarkdown(TASK, dependencies),
+      renderTaskMarkdown(TASK, dependencies),
+    );
+  });
+
+  it("ramene un titre multiligne sur une seule ligne", () => {
+    const markdown = renderTaskMarkdown(TASK, [
+      { code: "TASK-001", title: "Domaine\net persistance" },
+    ]);
+    assert.ok(markdown.includes("- TASK-001 — Domaine et persistance"));
+  });
+});

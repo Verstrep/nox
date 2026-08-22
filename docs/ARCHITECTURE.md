@@ -406,6 +406,55 @@ indétectable alors qu'une tâche sans document est visible et reprenable.
 Une synchronisation n'écrase jamais un fichier existant : un document identique au Markdown
 attendu est adopté, un document différent produit un conflit.
 
+### 6.2 bis Dépendances entre tâches et modification d'une tâche future
+
+```text
+Task  →  0..n dépendances explicites  →  graphe acyclique, local au projet
+        ↓
+statut de la tache attendue  →  satisfaction dérivée  →  préflight de lancement
+```
+
+- **Une arête est explicite et persistée.** `TaskDependency` porte `taskId` — la tâche qui
+  attend — et `dependsOnTaskId` — celle qui est attendue. Aucune dépendance n'est déduite d'un
+  numéro : `TASK-002` peut légitimement attendre `TASK-004`.
+- **Le graphe reste un DAG, et local au projet.** Les cycles transitifs sont refusés, pas
+  seulement l'arête inverse. La vérification a lieu **dans** la transaction et **après**
+  l'écriture : c'est ce qui rend deux requêtes simultanées incapables de fermer une boucle à
+  elles deux — la seconde relit un graphe qui contient déjà l'arête de la première.
+- **Seul `COMPLETED` satisfait une dépendance.** `REVIEW` veut dire qu'un humain n'a pas
+  tranché ; une dépendance qui s'en satisferait ne contraindrait rien.
+- **Rien n'est persisté de ce qui se dérive.** Les compteurs se recalculent à chaque rendu :
+  rouvrir une tâche terminée remet ses dépendants en attente sans qu'aucune ligne ne bouge.
+- **Une dépendance ne change jamais un statut.** Une tâche `READY` qui attend reste `READY` ;
+  c'est le **lancement** qui est refusé, pas la tâche qui est bloquée. Les deux notions restent
+  distinctes, et c'est ce qui rendra la file d'exécution possible.
+- **Le préflight de lancement revalide.** L'ordre est fixe : tâche et projet, puis cycle de vie,
+  puis dépendances, puis permissions, puis prompt, puis repository. Le refus de dépendance
+  arrive donc **avant** toute écriture et avant toute sollicitation du runner — il ne coûte ni
+  ligne en base, ni inspection.
+- **Une tâche attendue n'est pas supprimable.** Le refus nomme les tâches concernées ; retirer
+  la dépendance reste un geste humain.
+
+```text
+future Task sans exécution  →  édition structurée  →  validation complète
+        ↓
+transaction SQLite (contrat + dépendances + statut)  →  document Markdown
+```
+
+- **Éditable seulement avant la première exécution.** Le critère est le passé de la tâche, pas
+  son statut : une tâche rouverte après un échec porte un historique, donc reste figée. Les
+  corrections d'un travail déjà produit passent par `Request changes` et `Reopen`.
+- **Une seule opération logique.** Contrat, dépendances et statut changent ensemble ou pas du
+  tout ; la validation entière précède la première écriture.
+- **`READY` redevient `DRAFT` quand le contrat change**, et seulement alors. Une sauvegarde
+  sans modification ne touche ni le statut, ni `updatedAt`, ni le document.
+- **Concurrence optimiste par empreinte de contrat.** SHA-256 sur ce que l'éditeur peut changer,
+  jamais sur `updatedAt` — une resynchronisation de Markdown aurait sinon périmé tous les
+  formulaires ouverts. Un onglet resté sur un état dépassé est refusé, jamais fusionné.
+- **Le Markdown suit, il ne précède pas.** Le document est réécrit après la transaction, sous
+  contrôle de révision. Un fichier modifié à la main produit un conflit, jamais un écrasement —
+  et éditer ce fichier ne modifie toujours pas la tâche.
+
 ### 6.3 Exécution Claude Code
 
 ```text

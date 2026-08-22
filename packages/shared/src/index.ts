@@ -109,6 +109,7 @@ export type {
 } from "./bootstrap.js";
 
 export { renderTaskMarkdown } from "./task-markdown.js";
+export type { TaskMarkdownDependency } from "./task-markdown.js";
 
 export {
   ACTIVE_RUN_STATUSES,
@@ -167,6 +168,42 @@ export type {
   ClaudeToolPolicyResult,
   CommandRefusal,
 } from "./claude-commands.js";
+
+export {
+  TASK_DEPENDENCIES_UNRESOLVED,
+  TASK_DEPENDENCY_ERROR,
+  TASK_DEPENDENCY_ERROR_CODES,
+  TASK_DEPENDENCY_LIMIT,
+  checkTaskDependencyPair,
+  createsDependencyCycle,
+  dependencyPathExists,
+  isDependencySatisfied,
+  isTaskDependencyErrorCode,
+  normalizeDependencyIds,
+  sameDependencySet,
+  summarizeTaskDependencies,
+} from "./task-dependencies.js";
+
+export type {
+  TaskDependencyEdge,
+  TaskDependencyEndpoint,
+  TaskDependencyErrorCode,
+  TaskDependencyLink,
+  TaskDependencyRef,
+  TaskDependencySummary,
+} from "./task-dependencies.js";
+
+export {
+  EDITABLE_TASK_STATUSES,
+  TASK_EDIT_ERROR,
+  TASK_EDIT_ERROR_CODES,
+  checkTaskEditable,
+  isEditableTaskStatus,
+  isTaskEditErrorCode,
+  taskStatusAfterEdit,
+} from "./task-edit.js";
+
+export type { TaskEditEligibility, TaskEditErrorCode, TaskEditGate } from "./task-edit.js";
 
 export {
   BOOTSTRAP_SETUP_STEP,

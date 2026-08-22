@@ -75,3 +75,13 @@ export function backlogUrl(projectId: string, status: TaskStatus | null = null):
   const base = `/projects/${projectId}/tasks`;
   return status === null ? base : `${base}?status=${status}`;
 }
+
+/**
+ * URL de l'editeur d'une tache future.
+ *
+ * Construite cote serveur a partir de deux identifiants, comme toutes les
+ * autres : aucune URL ne voyage depuis le navigateur.
+ */
+export function taskEditUrl(projectId: string, taskId: string): string {
+  return `${taskUrl(projectId, taskId)}/edit`;
+}

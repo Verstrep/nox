@@ -8,7 +8,7 @@ import { TaskRow } from "@/components/TaskRow";
 import { taskStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
 import { backlogUrl, countTasksByStatus, readStatusFilter } from "@/lib/task-display";
-import { loadProjectTasks } from "@/lib/tasks";
+import { loadProjectDependencyCounts, loadProjectTasks } from "@/lib/tasks";
 
 /**
  * Statuts proposes comme filtres.
@@ -71,6 +71,9 @@ export default async function ProjectTasksPage({
 
   // Les taches viennent de SQLite : cette page reste consultable runner arrete.
   const tasks = await loadProjectTasks(project.id);
+  // Une requete pour toute la liste, jamais une par ligne. Rien n'est persiste :
+  // ces compteurs se recalculent a chaque rendu, a partir des statuts courants.
+  const dependencyCounts = await loadProjectDependencyCounts(project.id);
   const counts = countTasksByStatus(tasks);
   const visible = statusFilter === null ? tasks : tasks.filter((task) => task.status === statusFilter);
 
@@ -131,7 +134,11 @@ export default async function ProjectTasksPage({
           <ul className="flex flex-col gap-2">
             {visible.map((task) => (
               <li key={task.id}>
-                <TaskRow projectId={project.id} task={task} />
+                <TaskRow
+                  projectId={project.id}
+                  task={task}
+                  dependencies={dependencyCounts.get(task.id)}
+                />
               </li>
             ))}
           </ul>

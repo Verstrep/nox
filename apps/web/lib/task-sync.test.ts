@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { RunnerResult } from "./runner/errors.ts";
-import { synchronizeTaskDocument, type SynchronizableTask, type TaskSyncPorts } from "./task-sync.ts";
+import {
+  resynchronizeTaskDocument,
+  synchronizeTaskDocument,
+  type SynchronizableTask,
+  type TaskSyncPorts,
+} from "./task-sync.ts";
 
 const REPOSITORY = "D:\\Projets\\depot";
 const REVISION = "a".repeat(64);
@@ -285,5 +290,127 @@ describe("synchronizeTaskDocument - reprise idempotente", () => {
 
     assert.equal((await synchronizeTaskDocument(REPOSITORY, TASK, flaky)).kind, "error");
     assert.equal((await synchronizeTaskDocument(REPOSITORY, TASK, flaky)).kind, "synced");
+  });
+});
+
+
+/**
+ * Reecriture apres edition.
+ *
+ * ## Ce que ces tests protegent
+ *
+ * Deux promesses inverses, et elles tiennent ensemble. NOX reecrit le document
+ * quand la specification change ; et NOX n'ecrase **pas** un fichier modifie a
+ * la main. La revision attendue est ce qui distingue les deux cas.
+ */
+describe("resynchronizeTaskDocument", () => {
+  const WITH_DEPENDENCIES: SynchronizableTask = {
+    ...TASK,
+    dependencies: [{ code: "TASK-000", title: "Bootstrap project repository" }],
+  };
+
+  it("reecrit le document sous controle de revision", async () => {
+    const seen: { revision?: string; content?: string } = {};
+    const outcome = await resynchronizeTaskDocument(REPOSITORY, TASK, REVISION, {
+      ...ports(),
+      updateDocument: (_repository, _path, content, expectedRevision) => {
+        seen.content = content;
+        seen.revision = expectedRevision;
+        return Promise.resolve(ok(document(content, OTHER_REVISION)));
+      },
+    });
+
+    assert.equal(outcome.kind, "synced");
+    assert.equal(outcome.kind === "synced" && outcome.revision, OTHER_REVISION);
+    // La revision vient de la base, jamais du formulaire : c'est elle qui prouve
+    // que le fichier vise est bien celui que NOX a ecrit.
+    assert.equal(seen.revision, REVISION);
+    assert.equal(seen.content, EXPECTED_MARKDOWN);
+  });
+
+  it("ecrit les dependances dans le document", async () => {
+    let written = "";
+    await resynchronizeTaskDocument(REPOSITORY, WITH_DEPENDENCIES, REVISION, {
+      ...ports(),
+      updateDocument: (_repository, _path, content) => {
+        written = content;
+        return Promise.resolve(ok(document(content, OTHER_REVISION)));
+      },
+    });
+
+    assert.ok(written.includes("## Dépendances"));
+    assert.ok(written.includes("- TASK-000 — Bootstrap project repository"));
+  });
+
+  it("n'ecrase pas un document modifie a la main", async () => {
+    const outcome = await resynchronizeTaskDocument(REPOSITORY, TASK, REVISION, {
+      ...ports(),
+      updateDocument: () =>
+        Promise.resolve({
+          ok: false,
+          failure: { kind: "runner_error", code: "DOCUMENT_CONFLICT" },
+        }),
+    });
+
+    // Un conflit, jamais un forcage : personne ne peut ecraser un fichier sans
+    // l'avoir vu. C'est aussi ce qui rend vraie la promesse inverse — editer le
+    // Markdown a la main ne modifie pas la tache, et NOX ne detruit pas cette
+    // edition en silence.
+    assert.equal(outcome.kind, "conflict");
+    assert.ok(outcome.kind === "conflict" && outcome.message.includes("en dehors de NOX"));
+  });
+
+  it("recree un document disparu", async () => {
+    let created = false;
+    const outcome = await resynchronizeTaskDocument(REPOSITORY, TASK, REVISION, {
+      createDocument: () => {
+        created = true;
+        return Promise.resolve(ok(document(EXPECTED_MARKDOWN)));
+      },
+      readDocument: () => Promise.resolve(ok(document(EXPECTED_MARKDOWN))),
+      updateDocument: () =>
+        Promise.resolve({
+          ok: false,
+          failure: { kind: "runner_error", code: "DOCUMENT_NOT_FOUND" },
+        }),
+    });
+
+    // Un document absent n'est pas une panne : c'est quelque chose a creer.
+    assert.equal(outcome.kind, "synced");
+    assert.equal(created, true);
+  });
+
+  it("cree le document quand aucune revision n'est connue", async () => {
+    let created = false;
+    const outcome = await resynchronizeTaskDocument(REPOSITORY, TASK, null, {
+      ...ports(),
+      createDocument: () => {
+        created = true;
+        return Promise.resolve(ok(document(EXPECTED_MARKDOWN)));
+      },
+      updateDocument: () => {
+        throw new Error("ne doit pas etre appele");
+      },
+    });
+
+    assert.equal(outcome.kind, "synced");
+    assert.equal(created, true);
+  });
+
+  it("cree le document quand le port de reecriture manque", async () => {
+    // Son absence est dite plutot que contournee : la creation reprend son
+    // cours, et rien ne pretend avoir reecrit.
+    const outcome = await resynchronizeTaskDocument(REPOSITORY, TASK, REVISION, ports());
+    assert.equal(outcome.kind, "synced");
+  });
+
+  it("signale une panne du runner sans toucher a la base", async () => {
+    const outcome = await resynchronizeTaskDocument(REPOSITORY, TASK, REVISION, {
+      ...ports(),
+      updateDocument: () =>
+        Promise.resolve({ ok: false, failure: { kind: "unreachable", detail: "ECONNREFUSED" } }),
+    });
+
+    assert.equal(outcome.kind, "error");
   });
 });

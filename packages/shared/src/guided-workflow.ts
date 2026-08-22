@@ -41,6 +41,7 @@ import { RUN_KIND } from "./corrections.js";
 import { isFinalRunStatus } from "./runs.js";
 import { RUN_STATUS, TASK_STATUS, createStatusGuard } from "./statuses.js";
 import type { RunStatus, TaskStatus } from "./statuses.js";
+import type { TaskDependencyLink } from "./task-dependencies.js";
 import { TASK_DOCUMENT_SYNC_STATUS } from "./tasks.js";
 import type { TaskDocumentSyncStatus } from "./tasks.js";
 
@@ -56,6 +57,16 @@ export const GUIDED_STAGE = {
   DRAFTING: "DRAFTING",
   /** La specification est arretee ; Claude Code n'est pas encore passe. */
   READY_TO_RUN: "READY_TO_RUN",
+  /**
+   * La specification est arretee, mais une dependance explicite n'est pas
+   * terminee.
+   *
+   * Distincte de `READY_TO_RUN` parce que la reponse a « que faire ensuite »
+   * est differente : il n'y a rien a faire **ici**, le travail attendu est
+   * ailleurs. Distincte de `BLOCKED` parce que rien n'est casse — le statut de
+   * la tache reste `READY`, et l'attente se resoudra d'elle-meme.
+   */
+  WAITING_FOR_DEPENDENCIES: "WAITING_FOR_DEPENDENCIES",
   /** Une execution est en cours. */
   RUNNING: "RUNNING",
   /** La derniere execution a echoue. */
@@ -159,6 +170,8 @@ export const GUIDED_BLOCKER = {
   ARCHITECT_LIMIT_REACHED: "ARCHITECT_LIMIT_REACHED",
   CORRECTION_PRECONDITION_FAILED: "CORRECTION_PRECONDITION_FAILED",
   TASK_BLOCKED: "TASK_BLOCKED",
+  /** Une ou plusieurs dependances explicites ne sont pas terminees. */
+  DEPENDENCIES_UNRESOLVED: "DEPENDENCIES_UNRESOLVED",
 } as const;
 
 export type GuidedBlockerCode = (typeof GUIDED_BLOCKER)[keyof typeof GUIDED_BLOCKER];
@@ -309,6 +322,14 @@ export type GuidedCorrectionFact = {
 
 export type GuidedWorkflowFacts = {
   taskStatus: TaskStatus;
+  /**
+   * Dependances explicites **non terminees**, dans l'ordre d'affichage.
+   *
+   * Derivees du statut courant des taches attendues, jamais stockees : rouvrir
+   * une tache terminee fait reapparaitre l'attente au rendu suivant, sans
+   * qu'aucune ligne ne soit reecrite.
+   */
+  unresolvedDependencies: readonly TaskDependencyLink[];
   documentSyncStatus: TaskDocumentSyncStatus;
   hasAcceptanceCriteria: boolean;
   /** La tache vient d'une conversation Architecte. */
@@ -389,7 +410,10 @@ function buildProgress(
     case GUIDED_STAGE.DRAFTING:
       mark([], S.SPECIFICATION);
       break;
+    // L'attente d'une dependance est une etape d'execution qui n'a pas encore
+    // commence, pas un retour a la specification : celle-ci est arretee.
     case GUIDED_STAGE.READY_TO_RUN:
+    case GUIDED_STAGE.WAITING_FOR_DEPENDENCIES:
       mark([S.SPECIFICATION], S.EXECUTION);
       break;
     case GUIDED_STAGE.RUNNING:
@@ -917,7 +941,54 @@ function correctionState(correction: GuidedCorrectionFact, run: GuidedRunFact): 
 
 // --- 6. Tache prete ----------------------------------------------------------
 
+/**
+ * La specification est arretee, mais une dependance manque.
+ *
+ * Aucune action recommandee : la seule chose utile a faire se trouve sur une
+ * autre tache, et le guide ne pretend pas la lancer d'ici. `Back to draft`
+ * reste offert — corriger la specification pendant l'attente est legitime.
+ *
+ * Le statut de la tache n'est pas touche : elle reste `READY`. NOX ne confond
+ * pas « ou en est le travail » avec « ce qui l'empeche de demarrer ».
+ */
+function waitingForDependenciesState(
+  waiting: readonly TaskDependencyLink[],
+): PartialState {
+  const names = waiting.map((entry) => entry.code).join(", ");
+
+  return {
+    stage: GUIDED_STAGE.WAITING_FOR_DEPENDENCIES,
+    summary:
+      waiting.length === 1
+        ? `Cette tache attend ${names}.`
+        : `Cette tache attend ${String(waiting.length)} taches : ${names}.`,
+    reason:
+      "Une dependance n'est satisfaite que lorsque la tache attendue est terminee. " +
+      "Le lancement est refuse tant que ce n'est pas le cas — y compris si vous cliquez " +
+      "quand meme : le serveur revalide. Le statut de cette tache, lui, ne change pas.",
+    recommendedAction: null,
+    alternativeActions: [action(GUIDED_ACTION.BACK_TO_DRAFT)],
+    blockers: [
+      blocker(
+        GUIDED_BLOCKER.DEPENDENCIES_UNRESOLVED,
+        waiting
+          .map((entry) => `${entry.code} — ${entry.title}`)
+          .join(" · "),
+      ),
+    ],
+    architectBlockers: [],
+  };
+}
+
 function readyState(facts: GuidedWorkflowFacts): PartialState {
+  // Verifie **avant** les autres blocages, et avant toute sonde : une tache qui
+  // attend une autre tache n'a rien a faire du runner, et afficher « repository
+  // occupe » a cote de « attend TASK-001 » melangerait deux problemes dont un
+  // seul compte aujourd'hui.
+  if (facts.unresolvedDependencies.length > 0) {
+    return waitingForDependenciesState(facts.unresolvedDependencies);
+  }
+
   const blockers: GuidedBlocker[] = [];
 
   if (facts.documentSyncStatus !== TASK_DOCUMENT_SYNC_STATUS.SYNCED) {

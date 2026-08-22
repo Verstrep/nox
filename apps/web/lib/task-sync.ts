@@ -28,9 +28,20 @@
  * aucun forcage : personne ne peut choisir d'ecraser un fichier sans l'avoir vu.
  */
 
-import { renderTaskMarkdown, type ProjectDocumentContent, type TaskSpecification } from "@nox/shared";
+import {
+  renderTaskMarkdown,
+  type ProjectDocumentContent,
+  type TaskMarkdownDependency,
+  type TaskSpecification,
+} from "@nox/shared";
 
-import { isDocumentAlreadyExists, type RunnerFailure, type RunnerResult } from "./runner/errors.ts";
+import {
+  isDocumentAlreadyExists,
+  isDocumentConflict,
+  isDocumentMissing,
+  type RunnerFailure,
+  type RunnerResult,
+} from "./runner/errors.ts";
 import { describeRunnerFailure } from "./runner/errors.ts";
 
 export type TaskDocumentSyncOutcome =
@@ -54,13 +65,41 @@ export type TaskSyncPorts = {
     repositoryPath: string,
     documentPath: string,
   ) => Promise<RunnerResult<ProjectDocumentContent>>;
+  /**
+   * Reecriture d'un document deja present, sous controle de revision.
+   *
+   * Facultative : la creation d'une tache n'en a pas besoin, et les tests qui
+   * ne couvrent que la creation n'ont pas a la fournir. Son absence rend une
+   * resynchronisation impossible, ce qui est dit plutot que contourne.
+   */
+  updateDocument?: (
+    repositoryPath: string,
+    documentPath: string,
+    content: string,
+    expectedRevision: string,
+  ) => Promise<RunnerResult<ProjectDocumentContent>>;
 };
 
-/** Tache telle que ce module en a besoin : sa specification et son chemin. */
-export type SynchronizableTask = TaskSpecification & { documentPath: string };
+/**
+ * Tache telle que ce module en a besoin : sa specification, son chemin et ses
+ * dependances.
+ *
+ * Les dependances ne viennent pas de `TaskSpecification` : elles ne sont pas du
+ * texte saisi, elles sont des aretes relues en base. Les y ajouter aurait
+ * oblige la creation, le backlog et l'amorcage a en porter une liste vide.
+ */
+export type SynchronizableTask = TaskSpecification & {
+  documentPath: string;
+  dependencies?: readonly TaskMarkdownDependency[];
+};
 
 const UNREADABLE_EXISTING_MESSAGE =
   "Un document occupe deja cet emplacement, et NOX n'a pas pu le lire pour le comparer.";
+
+const RESYNC_CONFLICT_MESSAGE =
+  "Le document de cette tache a ete modifie en dehors de NOX. La specification enregistree, " +
+  "elle, vient d'etre mise a jour : ouvrez le fichier, tranchez, puis relancez la " +
+  "synchronisation. NOX n'ecrase pas un document qu'il n'a pas ecrit.";
 
 const CONFLICT_MESSAGE =
   "Un document different occupe deja cet emplacement. NOX ne l'ecrase pas : ouvrez-le pour decider quoi en faire.";
@@ -81,7 +120,7 @@ export async function synchronizeTaskDocument(
   task: SynchronizableTask,
   ports: TaskSyncPorts,
 ): Promise<TaskDocumentSyncOutcome> {
-  const expected = renderTaskMarkdown(task);
+  const expected = renderTaskMarkdown(task, task.dependencies ?? []);
 
   const created = await ports.createDocument(repositoryPath, task.code, expected);
   if (created.ok) {
@@ -106,4 +145,56 @@ export async function synchronizeTaskDocument(
   }
 
   return { kind: "conflict", message: CONFLICT_MESSAGE };
+}
+
+/**
+ * Reecrit le document d'une tache dont la specification vient de changer.
+ *
+ * ## Pourquoi une seconde fonction, et pas un drapeau
+ *
+ * Creer et reecrire ne posent pas la meme question au disque. La creation
+ * demande « cet emplacement est-il libre ? » ; la reecriture demande « le
+ * fichier est-il encore celui que j'ai ecrit ? ». Les deux se repondent avec des
+ * primitives differentes — creation exclusive d'un cote, controle de revision de
+ * l'autre — et un drapeau aurait cache ce fait derriere un booleen.
+ *
+ * ## Ce qui arrive a un document modifie a la main
+ *
+ * Il produit un **conflit**, jamais un ecrasement. La revision attendue est celle
+ * que NOX a enregistree ; si le fichier a bouge depuis, le runner refuse, et NOX
+ * ne propose aucun forcage. C'est exactement l'invariant de TASK-007, et c'est
+ * aussi ce qui rend vraie la promesse inverse : editer le Markdown a la main ne
+ * modifie pas la tache, et NOX ne detruit pas cette edition en silence.
+ *
+ * Sans revision connue — document jamais cree, ou en erreur —, la creation
+ * reprend son cours normal.
+ */
+export async function resynchronizeTaskDocument(
+  repositoryPath: string,
+  task: SynchronizableTask,
+  currentRevision: string | null,
+  ports: TaskSyncPorts,
+): Promise<TaskDocumentSyncOutcome> {
+  const update = ports.updateDocument;
+  if (currentRevision === null || update === undefined) {
+    return synchronizeTaskDocument(repositoryPath, task, ports);
+  }
+
+  const expected = renderTaskMarkdown(task, task.dependencies ?? []);
+  const updated = await update(repositoryPath, task.documentPath, expected, currentRevision);
+  if (updated.ok) {
+    return { kind: "synced", path: updated.value.path, revision: updated.value.revision };
+  }
+
+  if (isDocumentConflict(updated.failure)) {
+    return { kind: "conflict", message: RESYNC_CONFLICT_MESSAGE };
+  }
+
+  // Le document a disparu depuis sa derniere synchronisation : le recreer est la
+  // bonne reponse, et c'est exactement ce que fait le chemin de creation.
+  if (isDocumentMissing(updated.failure)) {
+    return synchronizeTaskDocument(repositoryPath, task, ports);
+  }
+
+  return describeError(updated.failure);
 }

@@ -275,6 +275,17 @@ export function isDocumentAlreadyExists(failure: RunnerFailure): boolean {
 }
 
 /**
+ * Distingue un document absent d'une panne.
+ *
+ * Une resynchronisation qui ne trouve plus son fichier n'a pas echoue : elle a
+ * simplement quelque chose a creer. Confondre les deux ferait afficher une
+ * erreur la ou NOX sait quoi faire.
+ */
+export function isDocumentMissing(failure: RunnerFailure): boolean {
+  return failure.kind === "runner_error" && failure.code === RUNNER_ERROR.DOCUMENT_NOT_FOUND;
+}
+
+/**
  * Distingue le refus de supprimer une version non affichee.
  *
  * Comme le conflit d'ecriture, ce n'est pas une panne : le fichier est

@@ -16,6 +16,7 @@ function state(overrides: Partial<TaskDeletionState> = {}): TaskDeletionState {
     status: "DRAFT",
     documentSyncStatus: "SYNCED",
     runCount: 0,
+    dependents: [],
     ...overrides,
   };
 }

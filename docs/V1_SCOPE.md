@@ -108,36 +108,40 @@ Le numéro `0` lui est réservé, un projet n'en porte qu'une, et sa création n
 numéro de tâche ordinaire. Elle naît en brouillon et suit ensuite le cycle de vie habituel :
 rien n'est exécuté sans un geste humain.
 
+### 1.13 Dépendances entre tâches et modification des tâches futures
+
+Une tâche peut en attendre d'autres, explicitement. Le graphe est acyclique et local au projet ;
+les cycles transitifs sont refusés, et deux requêtes simultanées ne peuvent pas en fermer un à
+elles deux. Seule une tâche **terminée** satisfait une dépendance, et une dépendance ne change
+jamais un statut : une tâche prête qui attend reste prête, c'est son lancement qui est refusé.
+
+Une tâche qui n'a jamais été exécutée reste modifiable — contrat, dépendances et statut d'un
+seul geste. Modifier une tâche en file la ramène en brouillon dès que son contrat change, et
+seulement alors. Dès la première exécution, la spécification est figée : ce qui a déjà servi
+devient un fait historique.
+
+---
+
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Dépendances entre tâches
-
-Dire qu'une tâche en attend une autre, et que l'ordre n'est pas qu'une préférence d'affichage.
-
-### 2.2 Modification des tâches futures
-
-Une spécification ne se modifie pas après création. Tant que le plan est vivant, cette
-contrainte devient bloquante : replanifier suppose de pouvoir réécrire ce qui n'a pas encore
-été lancé.
-
-### 2.3 Tableau de bord d'un projet
+### 2.1 Tableau de bord d'un projet
 
 Une vue qui répond « où en est ce projet » sans ouvrir chaque tâche.
 
-### 2.4 File d'exécution
+### 2.2 File d'exécution
 
 Enchaîner plusieurs tâches prêtes, sans qu'un enchaînement devienne une autonomie : chaque
 départ reste décidé, et une exécution reste seule active.
 
-### 2.5 Validation intelligente
+### 2.3 Validation intelligente
 
 Distinguer ce qu'une commande peut prouver, ce qu'une relecture par l'Architecte peut établir,
 et ce qui exige réellement un test humain — pour ne solliciter l'humain que dans le troisième
 cas.
 
-### 2.6 Livraison Git contrôlée
+### 2.4 Livraison Git contrôlée
 
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.

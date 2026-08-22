@@ -45,8 +45,8 @@ sans clic.
 | Migrations appliquées | 16 |
 | Routes du runner | 17, dont une seule publique (`GET /health`) |
 | Pages de l'application web | 30 |
-| Tests automatisés | 3 233, dont 5 ignorés sous Windows |
-| Décisions consignées | 298 |
+| Tests automatisés | 3 382, dont 5 ignorés sous Windows |
+| Décisions consignées | 306 |
 
 ---
 

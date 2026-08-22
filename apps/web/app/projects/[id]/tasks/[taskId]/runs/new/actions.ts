@@ -3,6 +3,7 @@
 import {
   cancelTaskExecution,
   createRun,
+  listTaskDependencies,
   failRun,
   getDatabaseClient,
   getProjectById,
@@ -15,6 +16,7 @@ import {
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_STATUS,
   buildClaudeToolPolicy,
+  summarizeTaskDependencies,
 } from "@nox/shared";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
@@ -23,6 +25,7 @@ import { redirect } from "next/navigation";
 import { runUrl } from "@/lib/run-display";
 import { buildExecutionPrompt } from "@/lib/run-prompt";
 import { snapshotRunValidations } from "@/lib/run-review";
+import { unresolvedDependenciesMessage } from "@/lib/task-dependencies";
 import { startClaudeRun } from "@/lib/runner/client";
 import { describeRunnerFailure } from "@/lib/runner/errors";
 
@@ -103,6 +106,18 @@ export async function startRunAction(
       return { error: NO_CRITERIA_MESSAGE };
     }
 
+    // Les dependances sont revalidees **ici**, avant la politique d'outils,
+    // avant le prompt, avant la creation du run et avant tout appel au runner.
+    // Une tache qui attend ne doit consommer ni inspection, ni ligne en base :
+    // le refus est gratuit, et il le reste.
+    //
+    // L'affichage a pu dire le contraire une seconde plus tot ; c'est sans
+    // importance, puisque la decision se prend a partir de la base, maintenant.
+    const dependencies = summarizeTaskDependencies(await listTaskDependencies(db, taskId));
+    if (!dependencies.allSatisfied) {
+      return { error: unresolvedDependenciesMessage(dependencies.waiting) };
+    }
+
     // Les commandes sont verifiees ici pour produire un message precis ; le
     // runner les revalidera de toute facon avant d'en faire des permissions.
     const policy = buildClaudeToolPolicy(task.validationCommands, task.kind);
@@ -119,7 +134,7 @@ export async function startRunAction(
 
     // Le prompt est regenere maintenant, a partir de la base : ce n'est pas
     // celui qu'affichait la page qui est envoye, meme s'il lui est identique.
-    const { prompt, sha256 } = buildExecutionPrompt(task);
+    const { prompt, sha256 } = buildExecutionPrompt(task, dependencies.dependsOn);
 
     const runnerRunId = randomUUID();
     const run = await createRun(db, { taskId, prompt, promptSha256: sha256, runnerRunId });

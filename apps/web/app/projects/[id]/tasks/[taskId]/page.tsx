@@ -2,6 +2,7 @@ import {
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_STATUS,
   allowedTaskStatusTransitions,
+  checkTaskEditable,
   type DevelopmentRunSummary,
   type DevelopmentTaskDetail,
 } from "@nox/shared";
@@ -9,6 +10,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { GuidedWorkflow } from "@/components/GuidedWorkflow";
+import { TaskDependencies } from "@/components/TaskDependencies";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
@@ -25,6 +27,7 @@ import { loadProject } from "@/lib/projects";
 import { formatDuration, newRunUrl, runStatusTone, runUrl } from "@/lib/run-display";
 import { loadTaskRuns } from "@/lib/runs";
 import { taskStatusTone, taskUrl } from "@/lib/task-display";
+import { taskEditUrl } from "@/lib/task-display";
 import { loadTask } from "@/lib/tasks";
 
 import { retryTaskDocumentAction } from "./actions";
@@ -287,6 +290,10 @@ export default async function TaskDetailPage({
   }
 
   const runs = await loadTaskRuns(task.id);
+  // Deux etats derives, jamais stockes : la tache est-elle encore modifiable, et
+  // qu'attend-elle ? Le premier decide de ce qui est **propose** ; l'editeur et
+  // la Server Action decident de ce qui est permis.
+  const editable = checkTaskEditable({ status: task.status, runCount: runs.length }).ok;
   // Une projection, pas une machine d'etat : elle se recalcule entierement a
   // chaque rendu, et ne declenche ni appel IA, ni execution, ni transition.
   const workflow = await loadGuidedWorkflow({ project, task });
@@ -329,11 +336,29 @@ export default async function TaskDetailPage({
         />
 
         <p className="rounded-lg border-l-2 border-zinc-700 bg-zinc-950/40 py-3 pl-4 pr-4 text-xs leading-relaxed text-zinc-500">
-          Les informations structurees de cette page sont actuellement la source de verite. La
-          modification directe du fichier Markdown ne met pas encore a jour la tache NOX.
+          Les informations structurees de cette page sont la source de verite. La modification
+          directe du fichier Markdown ne met pas a jour la tache NOX.
         </p>
 
-        <SectionCard title="Objectif">
+        <TaskDependencies
+          projectId={project.id}
+          dependencies={workflow.dependencies}
+          editHref={editable ? taskEditUrl(project.id, task.id) : null}
+        />
+
+        <SectionCard
+          title="Objectif"
+          action={
+            editable ? (
+              <Link
+                href={taskEditUrl(project.id, task.id)}
+                className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-zinc-100"
+              >
+                Edit task
+              </Link>
+            ) : null
+          }
+        >
           <TextBlock>{task.objective}</TextBlock>
         </SectionCard>
 

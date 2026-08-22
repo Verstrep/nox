@@ -139,14 +139,22 @@ mémoire, du backlog appliqué et d'une inspection en lecture seule du repositor
 appel à une IA. Le numéro `0` lui est réservé, un projet n'en porte qu'une, et sa création ne
 consomme aucun numéro de tâche ordinaire.
 
-### `TASK-024` — Dépendances entre tâches et modification des tâches futures — **suivante**
+### `TASK-024` — Dépendances entre tâches et modification des tâches futures — terminée
 
-Un plan vivant suppose de pouvoir réécrire ce qui n'a pas encore été lancé, et de dire qu'une
-tâche en attend une autre.
+Une tâche peut en attendre d'autres, explicitement. Le graphe est acyclique et local au projet,
+la satisfaction se dérive du statut courant — seule une tâche terminée compte —, et le lancement
+est revalidé côté serveur. Une tâche jamais exécutée reste modifiable ; dès sa première
+exécution, sa spécification est figée.
 
-### `TASK-025` — Refonte du tableau de bord d'un projet
+### `TASK-025` — Tableau de bord et cycle de vie d'un projet — **suivante**
 
-Répondre à « où en est ce projet » sans ouvrir chaque tâche.
+Répondre à « où en est ce projet » sans ouvrir chaque tâche, et savoir en sortir. Cette étape
+regroupe ce qui a été reporté depuis plusieurs tâches : nettoyer la page d'accueil des textes de
+développement devenus obsolètes, une présentation réellement centrée projet, un vocabulaire et
+une navigation revus, les métadonnées techniques derrière une inspection plutôt qu'en surface,
+la suppression d'un projet **de NOX** avec sa Danger Zone, et la gestion des documents
+`tasks/TASK-xxx.md` laissés dans le repository — pour qu'un même dépôt puisse être réajouté
+comme nouveau projet. Le code applicatif, le repository et son `.git` ne sont jamais supprimés.
 
 ### `TASK-026` — File d'exécution
 
@@ -168,9 +176,10 @@ tourner seule.
 Commit et push depuis NOX, sur décision explicite, avec un message relu. La règle « aucun push
 automatique » ne change pas : c'est le geste qui entre dans l'outil, pas la décision.
 
-### `TASK-030` — Tableau de bord multi-projets
+### `TASK-030` — Vue d'ensemble multi-projets
 
-Une vue d'ensemble, une fois qu'un projet unique est correctement tenu.
+Une vue d'ensemble, une fois qu'un projet unique est correctement tenu. À réconcilier avec
+`TASK-025` le moment venu : deux tableaux de bord vaudraient moins qu'un seul.
 
 ### `TASK-031` — Runner multi-projets
 

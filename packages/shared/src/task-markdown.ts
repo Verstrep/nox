@@ -91,6 +91,13 @@ function usableEntries(entries: readonly string[]): string[] {
 type Section = { heading: string; body: string };
 
 /**
+ * Une dependance, telle que le document la nomme.
+ *
+ * Le code et le titre suffisent : le document decrit un contrat, pas un etat.
+ */
+export type TaskMarkdownDependency = { code: string; title: string };
+
+/**
  * Rappel adresse a l'agent qui lira ce fichier.
  *
  * Il est constant et fait partie du format : un document de tache sans regles
@@ -110,7 +117,10 @@ const EXECUTION_RULES = [
  * qui annonce « Contexte » puis ne dit rien fait perdre du temps a chaque
  * lecture.
  */
-export function renderTaskMarkdown(task: TaskSpecification): string {
+export function renderTaskMarkdown(
+  task: TaskSpecification,
+  dependencies: readonly TaskMarkdownDependency[] = [],
+): string {
   const sections: Section[] = [];
 
   const objective = normalizeBlock(task.objective);
@@ -152,6 +162,25 @@ export function renderTaskMarkdown(task: TaskSpecification): string {
   const outOfScope = task.outOfScope === null ? "" : normalizeBlock(task.outOfScope);
   if (outOfScope !== "") {
     sections.push({ heading: "Hors périmètre", body: outOfScope });
+  }
+
+  // Meme convention que partout ailleurs dans ce document : une section vide
+  // n'est pas ecrite. Un « ## Dépendances / Aucune » sur la quasi-totalite des
+  // taches ajouterait deux lignes de bruit a chaque fichier pour ne rien dire.
+  //
+  // Le **statut** des dependances n'y figure pas, pour la meme raison que le
+  // statut de la tache elle-meme : il change sans que la specification change,
+  // et l'inscrire obligerait a reecrire le fichier a chaque transition.
+  if (dependencies.length > 0) {
+    sections.push({
+      heading: "Dépendances",
+      body: dependencies
+        .map((entry) => {
+          const title = toSingleLine(entry.title);
+          return title === "" ? `- ${entry.code}` : `- ${entry.code} — ${title}`;
+        })
+        .join("\n"),
+    });
   }
 
   sections.push({ heading: "Règles d'exécution", body: EXECUTION_RULES });

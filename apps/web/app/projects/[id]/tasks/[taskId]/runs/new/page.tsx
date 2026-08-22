@@ -15,7 +15,8 @@ import { shortSha } from "@/lib/run-display";
 import { buildExecutionPrompt } from "@/lib/run-prompt";
 import { loadPreflight } from "@/lib/runs";
 import { taskStatusTone } from "@/lib/task-display";
-import { loadTask } from "@/lib/tasks";
+import { describeWaitingDependencies } from "@/lib/task-dependencies";
+import { loadTask, loadTaskDependencies } from "@/lib/tasks";
 
 import { StartRunForm } from "./StartRunForm";
 
@@ -46,16 +47,23 @@ export default async function NewRunPage({
     notFound();
   }
 
-  // Le prompt affiche est produit par la meme fonction que celle de la Server
-  // Action : ce qui est montre est exactement ce qui sera envoye.
-  const { prompt, sha256 } = buildExecutionPrompt(task);
+  // Les dependances entrent dans le prompt : ce qui est affiche ici est donc
+  // exactement ce que la Server Action reconstruira, empreinte comprise.
+  const dependencies = await loadTaskDependencies(task.id);
+  const { prompt, sha256 } = buildExecutionPrompt(task, dependencies.dependsOn);
   const policy = buildClaudeToolPolicy(task.validationCommands, task.kind);
   const preflight = await loadPreflight(project.repositoryPath);
 
   const isReady = task.status === TASK_STATUS.READY;
   const isSynced = task.documentSyncStatus === TASK_DOCUMENT_SYNC_STATUS.SYNCED;
   const hasCriteria = task.acceptanceCriteria.length > 0;
-  const canLaunch = isReady && isSynced && hasCriteria && policy.ok && preflight.ok;
+  const canLaunch =
+    isReady &&
+    isSynced &&
+    hasCriteria &&
+    dependencies.allSatisfied &&
+    policy.ok &&
+    preflight.ok;
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
@@ -105,6 +113,13 @@ export default async function NewRunPage({
             </Requirement>
             <Requirement met={hasCriteria}>
               Elle possede au moins un critere d&apos;acceptation.
+            </Requirement>
+            <Requirement met={dependencies.allSatisfied}>
+              {dependencies.allSatisfied
+                ? dependencies.total === 0
+                  ? "Elle ne depend d'aucune autre tache."
+                  : `Ses ${String(dependencies.total)} dependance(s) sont terminees.`
+                : `Elle attend : ${describeWaitingDependencies(dependencies.waiting)}.`}
             </Requirement>
             <Requirement met={policy.ok}>
               {policy.ok

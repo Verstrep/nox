@@ -23,6 +23,7 @@
  */
 
 import { boundText, RUN_LIMITS } from "./runs.js";
+import type { TaskDependencyRef } from "./task-dependencies.js";
 import { TASK_KIND, type TaskKind, type TaskSpecification } from "./tasks.js";
 
 /** Ramene une valeur a une seule ligne, sans marges. */
@@ -192,8 +193,38 @@ function finalValidationStep(kind: TaskKind, commands: readonly string[]): strin
  * `documentPath` est le chemin **relatif** du document de tache : le prompt ne
  * doit contenir aucun chemin absolu.
  */
+/**
+ * Dependances revalidees juste avant ce lancement.
+ *
+ * Elles sont **toutes** terminees : le serveur refuse le lancement sinon. Le
+ * bloc n'existe donc pas pour informer d'une attente, mais pour rendre le
+ * prompt historique explicite — dans six mois, il dira sur quoi cette execution
+ * s'appuyait.
+ *
+ * Codes et titres seulement. Recopier leurs specifications completes ferait
+ * grossir le prompt sans rien apprendre : l'agent sait lire `tasks/TASK-xxx.md`
+ * s'il en a besoin.
+ */
+function dependencyBlock(dependencies: readonly TaskDependencyRef[]): string | null {
+  if (dependencies.length === 0) {
+    return null;
+  }
+  const lines = dependencies.map((entry) => {
+    const title = toSingleLine(entry.title);
+    return title === "" ? `- ${entry.code}` : `- ${entry.code} — ${title}`;
+  });
+  return [
+    "Dépendances satisfaites avant cette exécution :",
+    ...lines,
+    "",
+    "Leur travail est déjà en place dans le repository : appuie-toi dessus plutôt que",
+    "de le refaire.",
+  ].join("\n");
+}
+
 export function renderClaudeExecutionPrompt(
   task: TaskSpecification & { documentPath: string; kind: TaskKind },
+  dependencies: readonly TaskDependencyRef[] = [],
 ): string {
   const code = task.code;
   const title = toSingleLine(task.title);
@@ -237,6 +268,11 @@ export function renderClaudeExecutionPrompt(
   const outOfScope = task.outOfScope === null ? "" : normalizeBlock(task.outOfScope);
   if (outOfScope !== "") {
     blocks.push(`Hors périmètre :\n${outOfScope}`);
+  }
+
+  const dependencyLines = dependencyBlock(dependencies);
+  if (dependencyLines !== null) {
+    blocks.push(dependencyLines);
   }
 
   blocks.push(`Règles :\n${executionRules(code, task.kind)}`);

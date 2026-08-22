@@ -196,9 +196,15 @@ export async function listTasksByProject(
   return rows.map(toSummary).sort(compareBacklog);
 }
 
-/** Retourne une tache complete, ou `null` si elle n'existe pas. */
+/**
+ * Retourne une tache complete, ou `null` si elle n'existe pas.
+ *
+ * Accepte un client transactionnel : relire une tache **dans** la transaction
+ * qui vient de l'ecrire evite de rendre un etat deja perime, et evite surtout
+ * une seconde facon de construire un `DevelopmentTaskDetail`.
+ */
 export async function getTaskById(
-  db: DatabaseClient,
+  db: Pick<DatabaseClient, "task">,
   taskId: string,
 ): Promise<DevelopmentTaskDetail | null> {
   const row = await db.task.findUnique({ where: { id: taskId }, include: DETAIL_INCLUDE });
@@ -440,7 +446,13 @@ export async function updateTaskStatus(
   });
 }
 
-export type DeleteTaskResult = { ok: true } | { ok: false; reason: "not_found" | "has_runs" };
+/** Une tache qui en attend une autre, nommee dans un refus de suppression. */
+export type BlockingDependent = { code: string; title: string };
+
+export type DeleteTaskResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "has_runs" }
+  | { ok: false; reason: "has_dependents"; dependents: readonly BlockingDependent[] };
 
 /**
  * Supprime une tache **sans aucune execution**, avec ses trois listes enfant.
@@ -493,6 +505,29 @@ export async function deleteTaskWithoutRuns(
     const runs = await tx.run.count({ where: { taskId } });
     if (runs > 0) {
       return { ok: false, reason: "has_runs" };
+    }
+
+    // Des taches attendent-elles celle-ci ? Retirer l'arete au passage aurait
+    // modifie un plan humain sans le dire. Le refus nomme les taches concernees ;
+    // c'est a l'utilisateur de decider si la dependance n'a plus lieu d'etre.
+    //
+    // La contrainte `Restrict` du schema refuserait de toute facon la
+    // suppression, mais avec une erreur de base. Ce controle-la existe pour
+    // produire un message, pas pour tenir la garantie.
+    const dependents = await tx.taskDependency.findMany({
+      where: { dependsOnTaskId: taskId },
+      select: { task: { select: { sequence: true, title: true } } },
+      orderBy: { task: { sequence: "asc" } },
+    });
+    if (dependents.length > 0) {
+      return {
+        ok: false,
+        reason: "has_dependents",
+        dependents: dependents.map((entry) => ({
+          code: formatTaskCode(entry.task.sequence),
+          title: entry.task.title,
+        })),
+      };
     }
 
     await tx.taskAcceptanceCriterion.deleteMany({ where: { taskId } });

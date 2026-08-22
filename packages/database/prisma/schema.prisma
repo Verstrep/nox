@@ -537,6 +537,12 @@ model Task {
 
   backlogProposal ArchitectBacklogProposal? @relation(fields: [backlogProposalId], references: [id], onDelete: Restrict)
 
+  /// Dependances sortantes : les taches que celle-ci attend.
+  dependencies TaskDependency[] @relation("TaskDependencyFrom")
+
+  /// Dependances entrantes : les taches qui attendent celle-ci.
+  dependents TaskDependency[] @relation("TaskDependencyTo")
+
   @@unique([projectId, sequence])
   @@index([projectId, status])
   @@index([backlogProposalId, backlogItemPosition])
@@ -1302,4 +1308,58 @@ model ArchitectGeneration {
   @@unique([sessionId, sequence])
   @@unique([appliedTaskId])
   @@index([sessionId, sequence])
+}
+
+
+/// Une dependance explicite entre deux taches du meme projet.
+///
+/// ## La convention, une fois pour toutes
+///
+/// `taskId` **attend** `dependsOnTaskId`. La premiere ne peut pas demarrer une
+/// nouvelle execution tant que la seconde n'est pas terminee. Les noms des deux
+/// relations le redisent : `task` est celle qui attend, `dependsOn` celle qui
+/// est attendue.
+///
+/// ## Pourquoi une table plutot que deux colonnes
+///
+/// Une tache attend zero, une ou plusieurs taches. C'est une vraie relation
+/// plusieurs-a-plusieurs, contrairement a la provenance d'un backlog, ou une
+/// tache vient d'au plus une proposition.
+///
+/// ## Les deux actions de suppression, et pourquoi elles different
+///
+/// `Cascade` cote `task` : supprimer une tache emporte ce qu'elle attendait.
+/// L'arete n'a plus de sujet, et personne ne la regrettera.
+///
+/// `Restrict` cote `dependsOn` : supprimer une tache **attendue par une autre**
+/// est refuse. C'est la meme regle que la provenance de backlog — retracer un
+/// plan humain vaut mieux qu'une suppression silencieuse. Le refus est aussi
+/// verifie dans la transaction applicative ; cette contrainte le double, et c'est
+/// voulu : une garantie structurelle ne depend pas de la discipline de
+/// l'appelant.
+///
+/// Consequence assumee pour la suite : une suppression de projet devra retirer
+/// ces lignes **avant** les taches, en une operation explicite. C'est un
+/// `deleteMany` de plus, pas un obstacle.
+model TaskDependency {
+  id String @id @default(cuid())
+
+  /// La tache qui attend.
+  taskId String
+
+  /// La tache attendue.
+  dependsOnTaskId String
+
+  createdAt DateTime @default(now())
+
+  task      Task @relation("TaskDependencyFrom", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task @relation("TaskDependencyTo", fields: [dependsOnTaskId], references: [id], onDelete: Restrict)
+
+  /// Une arete au plus entre deux taches donnees.
+  ///
+  /// Ajouter deux fois la meme dependance n'est pas une erreur metier : c'est un
+  /// double-clic. La contrainte rend l'operation idempotente sans qu'aucun code
+  /// n'ait a lire avant d'ecrire.
+  @@unique([taskId, dependsOnTaskId])
+  @@index([dependsOnTaskId])
 }

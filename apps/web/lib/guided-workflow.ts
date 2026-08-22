@@ -39,6 +39,7 @@ import {
   getDatabaseClient,
   getRunResumeContext,
   listFeedbacksForSourceRun,
+  listTaskDependencies,
   listTaskRunFacts,
   type ArchitectReviewSummary,
   type TaskRunFact,
@@ -52,6 +53,7 @@ import {
   deriveGuidedWorkflowState,
   isRunKind,
   selectGuidedCurrentRun,
+  summarizeTaskDependencies,
   type DevelopmentTaskDetail,
   type GuidedArchitectFact,
   type GuidedCorrectionFact,
@@ -59,6 +61,7 @@ import {
   type GuidedLaunchReadiness,
   type GuidedRunFact,
   type GuidedWorkflowState,
+  type TaskDependencySummary,
 } from "@nox/shared";
 import { connection } from "next/server";
 
@@ -70,6 +73,13 @@ import { describeRunnerFailure, type RunnerFailure } from "./runner/errors.ts";
 /** Ce que la page de la tache affiche en plus de l'etat derive. */
 export type GuidedWorkflowView = {
   state: GuidedWorkflowState;
+  /**
+   * Les deux sens du graphe de dependances, derives a ce rendu.
+   *
+   * La page les affiche telles quelles. Rien n'est stocke : rouvrir une tache
+   * terminee change ce resume au rendu suivant, sans qu'aucune ligne ne bouge.
+   */
+  dependencies: TaskDependencySummary;
   /** D'ou vient la tache, lorsqu'un architecte l'a proposee. */
   architectSession: ArchitectTaskOrigin | null;
   /** Extrait du feedback en attente, pour l'afficher sans le tronquer en base. */
@@ -181,10 +191,13 @@ export async function loadGuidedWorkflow(input: {
   const db = getDatabaseClient();
   const task = input.task;
 
-  const [rows, architectSession] = await Promise.all([
+  const [rows, architectSession, dependencyRows] = await Promise.all([
     listTaskRunFacts(db, task.id),
     findArchitectSessionForTask(db, task.id),
+    listTaskDependencies(db, task.id),
   ]);
+
+  const dependencies = summarizeTaskDependencies(dependencyRows);
 
   const current = selectGuidedCurrentRun(rows);
   const hasActiveRun = rows.some((row) => ACTIVE_RUN_STATUSES.includes(row.status));
@@ -197,7 +210,13 @@ export async function loadGuidedWorkflow(input: {
   const architectSummary =
     current === null || !current.hasReview ? null : await getArchitectReviewSummary(db, current.id);
 
-  const launch = await probeLaunch(input.project.repositoryPath, task, hasActiveRun);
+  // Une tache qui attend une autre tache n'a rien a lancer : sonder le runner y
+  // serait un aller-retour pour rien, et une panne du runner y afficherait un
+  // blocage sans objet. Le refus, lui, ne depend pas de cette sonde — il est
+  // reverifie cote serveur au lancement.
+  const launch = dependencies.allSatisfied
+    ? await probeLaunch(input.project.repositoryPath, task, hasActiveRun)
+    : ({ state: "unknown" } as const);
   const correction = await probeCorrection(
     db,
     input.project.repositoryPath,
@@ -208,6 +227,7 @@ export async function loadGuidedWorkflow(input: {
 
   const state = deriveGuidedWorkflowState({
     taskStatus: task.status,
+    unresolvedDependencies: dependencies.waiting,
     documentSyncStatus: task.documentSyncStatus,
     hasAcceptanceCriteria: task.acceptanceCriteria.length > 0,
     designedWithArchitect: architectSession !== null,
@@ -219,6 +239,7 @@ export async function loadGuidedWorkflow(input: {
 
   return {
     state,
+    dependencies,
     architectSession,
     pendingFeedbackExcerpt: correction?.excerpt ?? null,
   };

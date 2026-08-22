@@ -9,11 +9,17 @@ import {
   getRunResumeContext,
   getTaskById,
   hasActiveRun,
+  listTaskDependencies,
   markRunRunning,
   startCorrectionFromFeedback,
   startTaskCorrection,
 } from "@nox/database";
-import { RUNNER_ERROR, buildClaudeToolPolicy, checkResumeCandidate } from "@nox/shared";
+import {
+  RUNNER_ERROR,
+  buildClaudeToolPolicy,
+  checkResumeCandidate,
+  summarizeTaskDependencies,
+} from "@nox/shared";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -24,6 +30,7 @@ import { buildCorrectionPrompt } from "@/lib/run-prompt";
 import { snapshotRunValidations } from "@/lib/run-review";
 import { claudeCorrectionPreflight, startClaudeRun } from "@/lib/runner/client";
 import { describeRunnerFailure } from "@/lib/runner/errors";
+import { unresolvedDependenciesMessage } from "@/lib/task-dependencies";
 
 import type { StartCorrectionState } from "./form-state";
 
@@ -128,6 +135,15 @@ export async function startCorrectionAction(
     const head = context.gitHeadAfter;
     if (sessionId === null || fingerprint === null || branch === null || head === null) {
       return { error: resumeRefusalMessage("FINGERPRINT_MISSING") };
+    }
+
+    // Une correction est une **nouvelle execution** : nouveau run, nouveau prompt,
+    // nouvelle timeline. La regle « B doit etre terminee avant qu'une nouvelle
+    // execution de A puisse demarrer » vaut donc ici aussi. Une dependance
+    // rouverte entre-temps arrete la reprise, comme elle arreterait un lancement.
+    const dependencies = summarizeTaskDependencies(await listTaskDependencies(db, taskId));
+    if (!dependencies.allSatisfied) {
+      return { error: unresolvedDependenciesMessage(dependencies.waiting) };
     }
 
     // Les commandes sont revalidees pour produire un message precis ; le runner
