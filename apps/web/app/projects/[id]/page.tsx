@@ -26,8 +26,10 @@ import {
   planUrl,
 } from "@/lib/plan-display";
 import { loadStructuredState } from "@/lib/project-plan";
-import { loadProject } from "@/lib/projects";
+import { loadProject, loadQueue } from "@/lib/projects";
 import { countTasksByStatus } from "@/lib/task-display";
+
+import { queueStateLabel, queueUrl } from "@/lib/queue-display";
 import { loadProjectTasks } from "@/lib/tasks";
 
 function TaskCount({ label, value }: { label: string; value: number }) {
@@ -97,6 +99,10 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // L'amorcage vient de SQLite : `null` signifie « pas encore preparee », et la
   // page ne sonde pas le repository pour le savoir.
   const bootstrapTask = await loadProjectBootstrapTask(project.id);
+
+  // La file vient de SQLite : aucune sonde du repository ici. Cette page dit
+  // combien de taches attendent, pas si elles pourraient partir.
+  const queue = await loadQueue(project.id);
 
   const backlog = await loadProjectBacklogView(project.id);
   const backlogState: BacklogSurfaceState =
@@ -312,6 +318,41 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               value={taskCounts[TASK_STATUS.BLOCKED]}
             />
           </dl>
+        </SectionCard>
+
+        <SectionCard
+          title="Execution queue"
+          description="Les tâches inscrites, et l'ordre dans lequel NOX les prendra."
+          action={
+            <Link
+              href={queueUrl(project.id)}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Open queue
+            </Link>
+          }
+        >
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Queued</dt>
+              <dd className="mt-1 text-sm text-zinc-300">
+                {queue.queuedCount === 0
+                  ? "Aucune tâche inscrite"
+                  : `${String(queue.queuedCount)} queued`}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">État</dt>
+              <dd className="mt-1 text-sm text-zinc-300">
+                {queue.active ? "Active" : "Paused"} · {queueStateLabel(queue.state)}
+              </dd>
+            </div>
+          </dl>
+
+          <p className="mt-5 max-w-prose text-sm leading-relaxed text-zinc-400">
+            Inscrire une tâche ne lance rien. Démarrer la file ouvre une autorisation permanente,
+            qui reste soumise aux dépendances, à la review et aux préconditions du repository.
+          </p>
         </SectionCard>
 
         <SectionCard

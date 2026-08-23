@@ -184,6 +184,17 @@ export async function updateFutureTask(
         return { ok: false, reason: "edit", code: gate.code };
       }
 
+      // Une tache inscrite dans la file autorise l'execution de **son contrat
+      // actuel**. Le reecrire lancerait autre chose que ce qui a ete autorise ;
+      // le retrait de la file reste un geste humain, distinct de l'edition.
+      const queued = await tx.taskQueueEntry.findUnique({
+        where: { taskId: input.taskId },
+        select: { id: true },
+      });
+      if (queued !== null) {
+        return { ok: false, reason: "edit", code: TASK_EDIT_ERROR.QUEUED };
+      }
+
       const current = await getTaskById(tx, input.taskId);
       if (current === null) {
         return { ok: false, reason: "edit", code: TASK_EDIT_ERROR.UNKNOWN_TASK };

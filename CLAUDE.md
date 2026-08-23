@@ -685,3 +685,51 @@ doit le dire explicitement et la justifier.
 - **Les empreintes, révisions et métadonnées de fournisseur vivent derrière Inspect** dès
   qu'elles ne servent pas au workflow. Elles sont **déplacées**, jamais supprimées : ce qui
   servait au débogage reste à un clic.
+### 8.16 File d'exécution
+
+- **L'appartenance à la file est persistée séparément de `Task.status`.** Une tâche inscrite reste
+  `READY` ; il n'existe aucun statut `QUEUED`. Comme pour les dépendances, un statut qui changerait
+  sans geste humain se mettrait à mentir.
+- **Seule une tâche `READY` de nature `NORMAL` peut être inscrite.** Une tâche d'amorçage ne l'est
+  jamais : elle reçoit des permissions d'installation élargies et se lance depuis sa propre page.
+- **Inscrire dans une file en pause ne lance jamais Claude.** Démarrer la file est un geste humain
+  distinct, qui ouvre une **autorisation permanente** portant sur les tâches déjà inscrites.
+- **Une file qui se vide referme son autorisation.** Aucune permission dormante ne doit pouvoir
+  s'appliquer à une tâche inscrite plus tard.
+- **Redémarrer NOX ne déclenche jamais rien.** `ACTIVE` autorise un ordonnancement, pas un
+  démarrage au boot : l'avancement vient d'un événement applicatif, jamais du seul redémarrage.
+- **L'ordonnancement est déterministe et sans modèle.** Aucun appel à un fournisseur ne choisit
+  quoi lancer.
+- **Les dépendances restent autoritaires, et la première entrée éligible peut en sauter de plus
+  anciennes.** Une entrée qui attend garde sa place ; une file ne se fige pas sur son premier
+  élément bloqué.
+- **Une inscription qui a démarré reste la barrière de sa file jusqu'à ce que la tâche soit
+  `COMPLETED` ou que l'entrée soit explicitement retirée — y compris après un `Reopen` qui ramène
+  la tâche à `READY`.** Une exécution `COMPLETED` mène à `REVIEW`, ce qui n'est pas une
+  acceptation : la review n'est jamais la fin d'un élément de file.
+- **Le départ d'une inscription est persisté, parce qu'aucun statut ne le porte.** Une tâche
+  rouverte est `READY`, exactement comme une tâche jamais lancée ; `TaskQueueEntry.startedAt` est
+  la seule chose qui les distingue, et un redémarrage ne doit pas l'effacer. Il est posé dans la
+  transaction qui crée l'exécution, n'est jamais remis à zéro, et une réinscription crée une entrée
+  neuve.
+- **La file ne relance jamais d'elle-même un travail refusé.** Une tâche rouverte repart depuis sa
+  propre page, sur un geste humain. Le refus du lancement manuel épargne cette tâche-là, et elle
+  seule : il vise ce qui doublerait un ordre préparé, pas ce que la file attend.
+- **Un échec ou une annulation met la file en pause**, et l'entrée reste en place. NOX ne passe
+  jamais automatiquement à la suivante après un incident.
+- **Mettre en pause n'annule aucune exécution.** La pause ne concerne que les démarrages suivants.
+- **Une tâche inscrite ne se modifie pas, ne se supprime pas, et ne se remet ni en brouillon ni de
+  côté par une action humaine** tant qu'elle n'a pas été retirée de la file.
+- **Un lancement manuel initial ne contourne pas une file en attente.** Les corrections, elles,
+  restent celles du workflow existant : elles terminent un travail déjà commencé.
+- **La file utilise toujours le pipeline d'exécution existant.** Il n'existe pas de second moteur
+  Claude, et il ne doit pas en exister : le dispatcher choisit, le moteur exécute.
+- **La file ne contourne ni le préflight Git, ni la review humaine.** Un repository qui porte des
+  modifications non commitées arrête la progression ; NOX ne commite rien à sa place.
+- **Au plus une exécution Claude active par repository**, garantie par une transaction
+  persistante — jamais par un verrou en mémoire, qui ne survivrait ni à un redémarrage, ni à deux
+  processus. L'unicité globale reste celle du runner.
+- **Un avancement démarre au plus une exécution.** Aucune boucle ne vide la file d'un coup.
+- **Les actions de file autres que l'avancement n'appellent ni OpenAI, ni Claude Code**, et
+  n'écrivent rien dans le repository — pas même dans `tasks/TASK-xxx.md`, qui ne porte aucune
+  position de file.

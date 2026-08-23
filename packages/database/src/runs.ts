@@ -33,9 +33,12 @@ import {
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
+import { markQueueEntryStarted } from "./task-queue.js";
 
 /** Donnees necessaires a la creation d'une execution. */
 export type CreateRunInput = {
+  /** Relu dans la transaction : une tache d'un autre projet est introuvable. */
+  projectId: string;
   taskId: string;
   prompt: string;
   promptSha256: string;
@@ -369,35 +372,104 @@ export async function getRunById(
  *
  * Retourne `null` si la tache n'existe pas.
  */
+export type CreateRunResult =
+  | { ok: true; run: DevelopmentRunDetail }
+  | { ok: false; reason: "not_found" | "active_run" };
+
+/**
+ * Levee pour annuler la transaction quand une autre execution a gagne.
+ *
+ * Un simple retour en echec **validerait** la transaction, et laisserait la
+ * ligne d'execution qu'on vient d'ecrire. Seule une exception la fait annuler.
+ * C'est laid, et c'est le seul moyen — la meme mecanique qu'en TASK-024 pour
+ * les cycles de dependances, pour la meme raison.
+ */
+class ConcurrentRunError extends Error {}
+
+/** Levee pour annuler quand la tache n'existe pas sous le verrou. */
+class RunPreconditionError extends Error {
+  constructor(readonly reason: "not_found") {
+    super(reason);
+  }
+}
+
 export async function createRun(
   db: DatabaseClient,
   input: CreateRunInput,
-): Promise<DevelopmentRunDetail | null> {
-  const row = await db.$transaction(async (tx) => {
-    const task = await tx.task.findUnique({ where: { id: input.taskId }, select: { id: true } });
-    if (task === null) {
-      return null;
-    }
+): Promise<CreateRunResult> {
+  return db
+    .$transaction(async (tx): Promise<CreateRunResult> => {
+      // `projectId` fait partie du filtre : une tache d'un autre projet est
+      // introuvable, exactement comme une tache inexistante. Le statut, lui,
+      // n'est pas verifie ici : c'est une precondition de workflow, et elle
+      // appartient au lanceur. Cette transaction ne garantit qu'une chose, mais
+      // elle la garantit vraiment — une seule execution active par repository.
+      const task = await tx.task.findFirst({
+        where: { id: input.taskId, projectId: input.projectId },
+        select: { id: true },
+      });
+      if (task === null) {
+        throw new RunPreconditionError("not_found");
+      }
 
-    const reserved = await tx.task.update({
-      where: { id: input.taskId },
-      data: { nextRunSequence: { increment: 1 } },
-      select: { nextRunSequence: true },
+      // L'ecriture d'abord, la verification ensuite. Verifier puis ecrire est
+      // faux sous concurrence : deux appels liraient chacun « aucune execution
+      // active », et en creeraient deux. En reservant le numero puis en ecrivant
+      // la ligne, on prend le verrou d'ecriture de SQLite ; le perdant relit
+      // alors une base qui contient deja l'execution du gagnant.
+      const reserved = await tx.task.update({
+        where: { id: input.taskId },
+        data: { nextRunSequence: { increment: 1 } },
+        select: { nextRunSequence: true },
+      });
+
+      const row = await tx.run.create({
+        data: {
+          taskId: input.taskId,
+          sequence: reserved.nextRunSequence - 1,
+          status: RUN_STATUS.QUEUED,
+          prompt: input.prompt,
+          promptSha256: input.promptSha256,
+          runnerRunId: input.runnerRunId,
+        },
+      });
+
+      // Une seule execution active par repository. C'est le point de
+      // serialisation persistant de la file : deux avancements simultanes
+      // passent tous les deux les preconditions, mais un seul ressort d'ici avec
+      // une execution. Un verrou en memoire ne tiendrait pas un redemarrage, ni
+      // deux processus.
+      //
+      // La limite globale — une execution dans tout NOX — reste celle du runner,
+      // seul a voir le processus reel.
+      const others = await tx.run.count({
+        where: {
+          task: { projectId: input.projectId },
+          status: { in: [...ACTIVE_RUN_STATUSES] },
+          id: { not: row.id },
+        },
+      });
+      if (others > 0) {
+        throw new ConcurrentRunError();
+      }
+
+      // Si cette tache est inscrite dans une file, son inscription vient de
+      // commencer son cycle. Le marquage est **dans** cette transaction : une
+      // execution creee sans lui laisserait la file croire, apres une
+      // reouverture, qu'elle a affaire a une tache jamais commencee.
+      await markQueueEntryStarted(tx, input.taskId);
+
+      return { ok: true, run: toDetail(row) };
+    })
+    .catch((error: unknown): CreateRunResult => {
+      if (error instanceof ConcurrentRunError) {
+        return { ok: false, reason: "active_run" };
+      }
+      if (error instanceof RunPreconditionError) {
+        return { ok: false, reason: error.reason };
+      }
+      throw error;
     });
-
-    return tx.run.create({
-      data: {
-        taskId: input.taskId,
-        sequence: reserved.nextRunSequence - 1,
-        status: RUN_STATUS.QUEUED,
-        prompt: input.prompt,
-        promptSha256: input.promptSha256,
-        runnerRunId: input.runnerRunId,
-      },
-    });
-  });
-
-  return row === null ? null : toDetail(row);
 }
 
 /**
@@ -444,6 +516,19 @@ export async function markRunRunning(
  * tache que l'utilisateur aurait deja fait sortir de `RUNNING` n'est pas
  * ecrasee.
  */
+/**
+ * Issues d'execution qui retirent l'autorisation permanente de la file.
+ *
+ * `COMPLETED` n'y figure pas : une execution qui se termine normalement mene la
+ * tache en review, ce qui est une etape du travail et non un incident. La file
+ * attendra la decision humaine, mais elle reste autorisee.
+ */
+const PAUSING_RUN_STATUSES: readonly RunStatus[] = [
+  RUN_STATUS.FAILED,
+  RUN_STATUS.BLOCKED,
+  RUN_STATUS.CANCELLED,
+];
+
 async function finalizeRun(
   db: DatabaseClient,
   runId: string,
@@ -481,6 +566,27 @@ async function finalizeRun(
         if (canAutomateTaskStatusTransition(task.status, nextTaskStatus)) {
           await tx.task.update({ where: { id: task.id }, data: { status: nextTaskStatus } });
         }
+      }
+    }
+
+    // Une execution issue de la file qui echoue, se bloque ou est interrompue
+    // retire l'autorisation permanente. NOX ne passe **jamais** a la tache
+    // suivante apres un echec : un travail qui s'est mal termine demande un
+    // regard humain, et l'entree reste en place pour qu'on sache laquelle.
+    //
+    // Ce controle vit ici, dans la meme transaction que le statut de la tache,
+    // parce que c'est le seul endroit ou une execution devient definitivement
+    // finale — quel que soit le chemin qui l'y a menee.
+    if (PAUSING_RUN_STATUSES.includes(status)) {
+      const queued = await tx.taskQueueEntry.findUnique({
+        where: { taskId: current.taskId },
+        select: { projectId: true },
+      });
+      if (queued !== null) {
+        await tx.project.update({
+          where: { id: queued.projectId },
+          data: { executionQueueActive: false },
+        });
       }
     }
 

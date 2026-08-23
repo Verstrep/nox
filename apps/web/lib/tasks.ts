@@ -12,10 +12,13 @@
 
 import {
   countProjectDependencies,
+  countQueueEntries,
   getDatabaseClient,
   getTaskById,
   listDependencyCandidates,
   listTaskDependencies,
+  isQueueActive,
+  listQueueEntries,
   listTasksByProject,
   markTaskDocumentConflict,
   markTaskDocumentError,
@@ -23,6 +26,7 @@ import {
   type ProjectDependencyCounts,
 } from "@nox/database";
 import {
+  isQueueBarrier,
   summarizeTaskDependencies,
   type DevelopmentTaskDetail,
   type DevelopmentTaskSummary,
@@ -81,6 +85,69 @@ export async function loadProjectDependencyCounts(
 ): Promise<ProjectDependencyCounts> {
   await connection();
   return countProjectDependencies(getDatabaseClient(), projectId);
+}
+
+/**
+ * Etat de la file autour d'une tache.
+ *
+ * Entierement derive : la position vient de l'ordre des entrees, jamais d'une
+ * colonne. Aucune sonde du repository — la page d'une tache n'a pas besoin de
+ * savoir si le repository est propre pour dire qu'elle est inscrite.
+ */
+export type TaskQueueState = {
+  queued: boolean;
+  /** Position affichee, a partir de 1. `null` quand la tache n'est pas inscrite. */
+  position: number | null;
+  active: boolean;
+  queuedCount: number;
+  /**
+   * Cette tache **est** la barriere courante de la file.
+   *
+   * C'est-a-dire : son inscription a deja lance une execution, et la tache n'a
+   * pas ete acceptee. La file l'attend, et n'ira pas plus loin sans elle. Le cas
+   * qui rend ce champ necessaire est une tache rouverte : elle est `READY`, mais
+   * elle n'est pas disponible pour autant.
+   */
+  isCurrent: boolean;
+};
+
+export async function loadTaskQueueState(
+  projectId: string,
+  taskId: string,
+): Promise<TaskQueueState> {
+  await connection();
+  const db = getDatabaseClient();
+  const [entries, active] = await Promise.all([
+    listQueueEntries(db, projectId),
+    isQueueActive(db, projectId),
+  ]);
+
+  const index = entries.findIndex((entry) => entry.taskId === taskId);
+  // La barriere est la premiere entree dont le cycle a commence, ou dont la
+  // tache a quitte `READY`. Une seule implementation de cette question vit dans
+  // `@nox/shared` ; celle-ci l'appelle plutot que de la redire.
+  const barrier = entries.find(isQueueBarrier) ?? null;
+
+  return {
+    queued: index !== -1,
+    position: index === -1 ? null : index + 1,
+    active,
+    queuedCount: entries.length,
+    isCurrent: barrier !== null && barrier.taskId === taskId,
+  };
+}
+
+/** Nombre de taches inscrites dans la file d'un projet. */
+export async function loadQueuedCount(projectId: string): Promise<number> {
+  await connection();
+  return countQueueEntries(getDatabaseClient(), projectId);
+}
+
+/** Identifiants des taches inscrites, pour marquer une liste. */
+export async function loadQueuedTaskIds(projectId: string): Promise<Map<string, number>> {
+  await connection();
+  const entries = await listQueueEntries(getDatabaseClient(), projectId);
+  return new Map(entries.map((entry, index) => [entry.taskId, index + 1]));
 }
 
 /** Acces reels au runner ; remplaces par des doublures dans les tests. */

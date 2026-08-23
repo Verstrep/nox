@@ -8,7 +8,7 @@ import { TaskRow } from "@/components/TaskRow";
 import { taskStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
 import { backlogUrl, countTasksByStatus, readStatusFilter } from "@/lib/task-display";
-import { loadProjectDependencyCounts, loadProjectTasks } from "@/lib/tasks";
+import { loadProjectDependencyCounts, loadProjectTasks, loadQueuedTaskIds } from "@/lib/tasks";
 
 /**
  * Statuts proposes comme filtres.
@@ -74,6 +74,9 @@ export default async function ProjectTasksPage({
   // Une requete pour toute la liste, jamais une par ligne. Rien n'est persiste :
   // ces compteurs se recalculent a chaque rendu, a partir des statuts courants.
   const dependencyCounts = await loadProjectDependencyCounts(project.id);
+  // Une requete pour toute la liste : la position en file se lit dans l'ordre
+  // des entrees, jamais dans une colonne.
+  const queuePositions = await loadQueuedTaskIds(project.id);
   const counts = countTasksByStatus(tasks);
   const visible = statusFilter === null ? tasks : tasks.filter((task) => task.status === statusFilter);
 
@@ -138,6 +141,7 @@ export default async function ProjectTasksPage({
                   projectId={project.id}
                   task={task}
                   dependencies={dependencyCounts.get(task.id)}
+                  queuePosition={queuePositions.get(task.id)}
                 />
               </li>
             ))}

@@ -4,7 +4,9 @@ import {
   getDatabaseClient,
   getRunById,
   getTaskById,
+  isTaskQueued,
   markRunCancelling,
+  setQueueActive,
 } from "@nox/database";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -49,6 +51,14 @@ function readField(formData: FormData, field: string): string {
  * Elle ne restaure rien non plus. Ni `git reset`, ni `git restore`, ni
  * suppression de fichier : les modifications partielles laissees par Claude Code
  * sont exactement ce que l'utilisateur doit pouvoir relire.
+ *
+ * ## Ce qu'elle fait a la file d'execution
+ *
+ * Elle referme son autorisation, si la tache y est inscrite. Une annulation est
+ * un signal explicite d'interrompre le travail : enchainer aussitot sur la tache
+ * suivante ferait exactement le contraire de ce qui vient d'etre demande.
+ * L'inscription, elle, **reste** — c'est a l'utilisateur de decider ensuite s'il
+ * reprend cette tache ou la retire de la file.
  */
 export async function cancelRunAction(
   _previousState: CancelRunState,
@@ -91,8 +101,13 @@ export async function cancelRunAction(
     // alors que rien n'aurait ete demande a personne.
     await markRunCancelling(db, run.id, new Date(cancelled.value.cancellationRequestedAt));
 
+    if (await isTaskQueued(db, taskId)) {
+      await setQueueActive(db, projectId, false);
+    }
+
     revalidatePath(runUrl(projectId, taskId, runId));
     revalidatePath(`/projects/${projectId}/tasks/${taskId}`);
+    revalidatePath(`/projects/${projectId}/queue`);
   } catch (error) {
     console.error("[nox] Echec d'une demande d'annulation :", error);
     return { error: UNEXPECTED_ERROR_MESSAGE };

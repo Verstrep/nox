@@ -85,15 +85,29 @@ async function newTask(): Promise<{ projectId: string; taskId: string }> {
 
 let runIdCounter = 0;
 
-function runInput(taskId: string) {
+function runInput(projectId: string, taskId: string) {
   runIdCounter += 1;
   const suffix = String(runIdCounter).padStart(12, "0");
   return {
+    projectId,
     taskId,
     prompt: "Prompt d'execution.",
     promptSha256: "a".repeat(64),
     runnerRunId: `3f2504e0-4f89-41d3-9a0c-${suffix}`,
   };
+}
+
+/**
+ * Cree une execution, ou rend `null` si la creation a ete refusee.
+ *
+ * Le projet est relu a partir de la tache : les tests ne parlent que de taches,
+ * et `createRun` a besoin du projet pour verifier qu'aucune autre execution n'y
+ * est active.
+ */
+async function newRun(taskId: string) {
+  const task = await db.task.findUnique({ where: { id: taskId }, select: { projectId: true } });
+  const created = await createRun(db, runInput(task?.projectId ?? "projet-inconnu", taskId));
+  return created.ok ? created.run : null;
 }
 
 before(async () => {
@@ -113,7 +127,7 @@ after(async () => {
 describe("allocation des numeros d'execution", () => {
   it("attribue RUN-001 a la premiere execution d'une tache", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
 
     assert.equal(run?.code, "RUN-001");
     assert.equal(run?.status, "QUEUED");
@@ -122,44 +136,60 @@ describe("allocation des numeros d'execution", () => {
   it("incremente le numero a chaque execution", async () => {
     const { taskId } = await newTask();
 
-    const first = await createRun(db, runInput(taskId));
-    const second = await createRun(db, runInput(taskId));
-    const third = await createRun(db, runInput(taskId));
+    // Chaque execution est conclue avant la suivante : deux executions actives
+    // sur le meme repository n'existent pas, et le fixture ne doit pas pretendre
+    // le contraire.
+    const first = await newRun(taskId);
+    await completeRun(db, first?.id ?? "");
+    const second = await newRun(taskId);
+    await completeRun(db, second?.id ?? "");
+    const third = await newRun(taskId);
 
     assert.deepEqual([first?.code, second?.code, third?.code], ["RUN-001", "RUN-002", "RUN-003"]);
   });
 
-  it("n'attribue jamais deux fois le meme numero, meme en creation concurrente", async () => {
-    const { taskId } = await newTask();
+  it("ne cree qu'une seule execution, meme sous douze appels simultanes", async () => {
+    const { projectId, taskId } = await newTask();
 
-    const created = await Promise.all(
-      Array.from({ length: 12 }, () => createRun(db, runInput(taskId))),
-    );
+    const created = await Promise.all(Array.from({ length: 12 }, () => newRun(taskId)));
 
-    const codes = created.map((run) => run?.code);
-    assert.equal(new Set(codes).size, codes.length, `codes en double : ${codes.join(", ")}`);
+    // Le point de serialisation persistant de la file : douze appels, une
+    // execution. Un verrou en memoire ne tiendrait ni un redemarrage, ni deux
+    // processus ; l'ecriture puis la relecture dans la transaction, si.
+    const runs = created.filter((run) => run !== null);
+    assert.equal(runs.length, 1, `executions creees : ${String(runs.length)}`);
+    assert.equal(runs[0]?.code, "RUN-001");
+    assert.equal(await db.run.count({ where: { task: { projectId } } }), 1);
   });
 
   it("garde un compteur independant par tache", async () => {
     const first = await newTask();
     const second = await newTask();
 
-    await createRun(db, runInput(first.taskId));
-    await createRun(db, runInput(first.taskId));
-    const other = await createRun(db, runInput(second.taskId));
+    const initial = await newRun(first.taskId);
+    await completeRun(db, initial?.id ?? "");
+    const again = await newRun(first.taskId);
+    await completeRun(db, again?.id ?? "");
+    // Un autre projet : son compteur repart de un, et son execution n'est pas
+    // genee par celles du premier.
+    const other = await newRun(second.taskId);
 
     assert.equal(other?.code, "RUN-001");
   });
 
   it("refuse une tache inconnue sans lever", async () => {
-    assert.equal(await createRun(db, runInput("tache-inexistante")), null);
+    const refused = await createRun(db, runInput("projet-inexistant", "tache-inexistante"));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.ok === false && refused.reason, "not_found");
   });
 
   it("liste les executions de la plus recente a la plus ancienne", async () => {
     const { taskId } = await newTask();
-    await createRun(db, runInput(taskId));
-    await createRun(db, runInput(taskId));
-    await createRun(db, runInput(taskId));
+    const first = await newRun(taskId);
+    await completeRun(db, first?.id ?? "");
+    const second = await newRun(taskId);
+    await completeRun(db, second?.id ?? "");
+    await newRun(taskId);
 
     const runs = await listRunsByTask(db, taskId);
     assert.deepEqual(
@@ -172,7 +202,7 @@ describe("allocation des numeros d'execution", () => {
 describe("cycle de vie d'une execution", () => {
   it("passe de QUEUED a RUNNING", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     const started = await markRunRunning(db, run.id, new Date("2026-08-06T10:00:00.000Z"));
@@ -183,7 +213,7 @@ describe("cycle de vie d'une execution", () => {
 
   it("conserve la premiere heure de demarrage", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     await markRunRunning(db, run.id, new Date("2026-08-06T10:00:00.000Z"));
@@ -194,7 +224,7 @@ describe("cycle de vie d'une execution", () => {
 
   it("enregistre un resultat complet a la reussite", async () => {
     const { projectId, taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     await updateTaskStatus(db, taskId, projectId, "READY");
@@ -233,7 +263,7 @@ describe("cycle de vie d'une execution", () => {
 
   it("fait passer la tache en echec apres un run echoue", async () => {
     const { projectId, taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     await updateTaskStatus(db, taskId, projectId, "READY");
@@ -246,7 +276,7 @@ describe("cycle de vie d'une execution", () => {
 
   it("fait passer la tache en bloquee apres un run bloque", async () => {
     const { projectId, taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     await updateTaskStatus(db, taskId, projectId, "READY");
@@ -259,7 +289,7 @@ describe("cycle de vie d'une execution", () => {
 
   it("ne fait jamais revenir un etat final vers un etat actif", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     await completeRun(db, run.id, { resultText: "Premier resultat." });
@@ -277,7 +307,7 @@ describe("cycle de vie d'une execution", () => {
 
   it("ne modifie pas la tache si elle a deja quitte RUNNING", async () => {
     const { projectId, taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     await updateTaskStatus(db, taskId, projectId, "READY");
@@ -289,7 +319,7 @@ describe("cycle de vie d'une execution", () => {
 
   it("est idempotent applique deux fois", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     const report = { status: "COMPLETED" as const, resultText: "Resultat.", exitCode: 0 };
@@ -311,7 +341,7 @@ describe("cycle de vie d'une execution", () => {
 describe("bornes appliquees a l'ecriture", () => {
   it("borne un compte rendu demesure", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     const finished = await completeRun(db, run.id, { resultText: "a".repeat(500_000) });
@@ -322,7 +352,7 @@ describe("bornes appliquees a l'ecriture", () => {
 
   it("borne la sortie d'erreur en conservant sa fin", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     const finished = await failRun(db, run.id, {
@@ -335,7 +365,7 @@ describe("bornes appliquees a l'ecriture", () => {
 
   it("borne le message d'erreur affiche", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     const finished = await failRun(db, run.id, { errorMessage: "b".repeat(10_000) });
@@ -345,7 +375,7 @@ describe("bornes appliquees a l'ecriture", () => {
 
   it("borne la liste des fichiers modifies", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     const many = Array.from({ length: 900 }, (_, index) => `src/file-${String(index)}.ts`);
@@ -391,7 +421,7 @@ describe("transitions de tache liees a l'execution", () => {
     const { taskId } = await newTask();
     assert.equal(await hasActiveRun(db, taskId), false);
 
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
     assert.equal(await hasActiveRun(db, taskId), true);
 
@@ -412,7 +442,7 @@ describe("validation des lignes lues en base", () => {
 
   it("refuse un statut inconnu", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     corrupt(run.id, "status", "PARTI");
@@ -422,7 +452,7 @@ describe("validation des lignes lues en base", () => {
 
   it("refuse un numero d'execution impossible", async () => {
     const { taskId } = await newTask();
-    const run = await createRun(db, runInput(taskId));
+    const run = await newRun(taskId);
     assert.ok(run !== null);
 
     corrupt(run.id, "sequence", "0");

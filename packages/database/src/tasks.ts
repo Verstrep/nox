@@ -20,6 +20,7 @@ import {
   isTaskDocumentSyncStatus,
   isTaskKind,
   isTaskPriority,
+  isQueueLockedStatusChange,
   isTaskStatus,
   taskDocumentPath,
   taskPriorityRank,
@@ -401,8 +402,8 @@ export async function writeTaskRow(
 }
 
 export type UpdateTaskStatusResult =
-  | { ok: true; task: DevelopmentTaskDetail }
-  | { ok: false; reason: "not_found" | "forbidden_transition" };
+  | { ok: true; task: DevelopmentTaskDetail; dequeued: boolean }
+  | { ok: false; reason: "not_found" | "forbidden_transition" | "queued" };
 
 /**
  * Change le statut d'une tache, si la transition est autorisee.
@@ -436,13 +437,46 @@ export async function updateTaskStatus(
       return { ok: false, reason: "forbidden_transition" };
     }
 
+    const queued = await tx.taskQueueEntry.findUnique({
+      where: { taskId },
+      select: { id: true },
+    });
+
+    // Une tache inscrite dans la file ne se met pas de cote a la main. `DRAFT`
+    // et `BLOCKED` sont les deux facons de la retirer du jeu ; les poser sans
+    // sortir de la file contredirait l'autorisation d'executer sans la lever.
+    // Les autres transitions restent ouvertes : `Approve`, `Reopen` et `Retry`
+    // font partie du travail que la file attend.
+    if (queued !== null && isQueueLockedStatusChange(status)) {
+      return { ok: false, reason: "queued" };
+    }
+
     const row = await tx.task.update({
       where: { id: taskId },
       data: { status },
       include: DETAIL_INCLUDE,
     });
 
-    return { ok: true, task: toDetail(row) };
+    // Une tache acceptee quitte la file. C'est `COMPLETED` qui fait avancer la
+    // file, jamais la fin technique d'une execution : un run `COMPLETED` mene a
+    // `REVIEW`, et une review n'est pas une acceptation.
+    let dequeued = false;
+    if (queued !== null && status === TASK_STATUS.COMPLETED) {
+      await tx.taskQueueEntry.delete({ where: { id: queued.id } });
+      dequeued = true;
+
+      const remaining = await tx.taskQueueEntry.count({ where: { projectId } });
+      if (remaining === 0) {
+        // Une file vide ne conserve aucune autorisation dormante : la prochaine
+        // inscription devra passer par un nouveau `Start queue`.
+        await tx.project.update({
+          where: { id: projectId },
+          data: { executionQueueActive: false },
+        });
+      }
+    }
+
+    return { ok: true, task: toDetail(row), dequeued };
   });
 }
 
@@ -451,7 +485,7 @@ export type BlockingDependent = { code: string; title: string };
 
 export type DeleteTaskResult =
   | { ok: true }
-  | { ok: false; reason: "not_found" | "has_runs" }
+  | { ok: false; reason: "not_found" | "has_runs" | "queued" }
   | { ok: false; reason: "has_dependents"; dependents: readonly BlockingDependent[] };
 
 /**
@@ -514,6 +548,17 @@ export async function deleteTaskWithoutRuns(
     // La contrainte `Restrict` du schema refuserait de toute facon la
     // suppression, mais avec une erreur de base. Ce controle-la existe pour
     // produire un message, pas pour tenir la garantie.
+    // Une tache inscrite dans la file n'est pas supprimable : la retirer
+    // laisserait une autorisation d'executer un contrat qui n'existe plus. La
+    // sortir de la file est un geste separe, et il reste humain.
+    const queued = await tx.taskQueueEntry.findUnique({
+      where: { taskId },
+      select: { id: true },
+    });
+    if (queued !== null) {
+      return { ok: false, reason: "queued" };
+    }
+
     const dependents = await tx.taskDependency.findMany({
       where: { dependsOnTaskId: taskId },
       select: { task: { select: { sequence: true, title: true } } },

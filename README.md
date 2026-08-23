@@ -38,6 +38,7 @@ base SQLite dans le dossier du projet.
 | **Dépendances** | Dire qu'une tâche en attend une autre, et modifier une tâche tant qu'elle n'a jamais été exécutée |
 | **Tableau de bord** | Voir d'un coup d'œil quels projets existent et où en est chacun, sans ouvrir une seule tâche |
 | **Cycle de vie** | Renommer un projet, ou le supprimer de NOX — le repository, son code et son `.git` restent intacts |
+| **File d'exécution** | Inscrire plusieurs tâches prêtes, démarrer la file, et laisser NOX les lancer une à une — jamais sans autorisation explicite |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
 modèles, aucun commit, aucun push, aucun résumé silencieux, aucune estimation de coût. Les

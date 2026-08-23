@@ -50,6 +50,7 @@ export const PROJECT_DELETION_ORDER = [
   "architectRunReview",
   "reviewFeedback",
   "run",
+  "taskQueueEntry",
   "taskDependency",
   "architectProjectUpdate",
   "architectMessage",
@@ -176,6 +177,9 @@ export async function deleteProjectState(
       // les trois.
       reviewFeedback: (await tx.reviewFeedback.deleteMany({ where: byTask })).count,
       run: (await tx.run.deleteMany({ where: byTask })).count,
+      // La file avant les taches : une inscription ne survit jamais au projet,
+      // et aucune autorisation d'executer ne doit rester sans son contrat.
+      taskQueueEntry: (await tx.taskQueueEntry.deleteMany({ where: { projectId } })).count,
       // Les aretes avant les taches : `dependsOn` est en `Restrict`, et c'est
       // exactement la contrainte que TASK-024 a posee volontairement.
       taskDependency: (await tx.taskDependency.deleteMany({ where: byTask })).count,

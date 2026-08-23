@@ -464,14 +464,15 @@ describe("validation des lignes lues en base", () => {
 
 describe("deleteTaskWithoutRuns", () => {
   /** Cree une execution minimale, suffisante pour bloquer une suppression. */
-  async function addRun(taskId: string): Promise<void> {
-    const run = await createRun(db, {
+  async function addRun(projectId: string, taskId: string): Promise<void> {
+    const created = await createRun(db, {
+      projectId,
       taskId,
       prompt: "# Prompt\n",
       promptSha256: "c".repeat(64),
       runnerRunId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
     });
-    assert.ok(run !== null);
+    assert.ok(created.ok);
   }
 
   it("supprime une tache sans execution", async () => {
@@ -510,7 +511,7 @@ describe("deleteTaskWithoutRuns", () => {
     const projectId = await newProject();
     const task = await createTask(db, specification(projectId));
     assert.ok(task !== null);
-    await addRun(task.id);
+    await addRun(projectId, task.id);
 
     const result = await deleteTaskWithoutRuns(db, projectId, task.id);
 
@@ -614,7 +615,7 @@ describe("deleteTaskWithoutRuns", () => {
     const projectId = await newProject();
     const task = await createTask(db, specification(projectId));
     assert.ok(task !== null);
-    await addRun(task.id);
+    await addRun(projectId, task.id);
 
     // Contournement volontaire de la regle metier : la relation `Restrict`
     // doit tenir meme si quelqu'un appelle Prisma directement.
@@ -637,7 +638,7 @@ describe("deleteTaskWithoutRuns", () => {
 
     // Une execution creee apres la lecture de l'appelant : la verification
     // refaite dans la transaction la voit, et rien n'est supprime.
-    await addRun(task.id);
+    await addRun(projectId, task.id);
     const result = await deleteTaskWithoutRuns(db, projectId, task.id);
 
     assert.deepEqual(result, { ok: false, reason: "has_runs" });

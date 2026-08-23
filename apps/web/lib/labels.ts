@@ -463,6 +463,7 @@ const GUIDED_ACTION_LABELS: Record<GuidedActionKind, string> = {
   [GUIDED_ACTION.BACK_TO_DRAFT]: "Back to draft",
   [GUIDED_ACTION.RETRY]: "Retry",
   [GUIDED_ACTION.RUN_CLAUDE]: "Run Claude Code",
+  [GUIDED_ACTION.OPEN_QUEUE]: "Open queue",
   [GUIDED_ACTION.OPEN_RUN]: "Open run",
   [GUIDED_ACTION.OPEN_RUN_HISTORY]: "Open run history",
   [GUIDED_ACTION.OPEN_REVIEW]: "Review changes",
@@ -491,6 +492,9 @@ const GUIDED_BLOCKER_LABELS: Record<GuidedBlockerCode, string> = {
     "Le document Markdown de cette tache n'est pas synchronise avec sa specification. Le lancement d'une execution l'exige.",
   [GUIDED_BLOCKER.ACCEPTANCE_CRITERIA_MISSING]:
     "Cette tache ne porte aucun critere d'acceptation : rien ne permettrait de dire « c'est fait ».",
+  [GUIDED_BLOCKER.EXECUTION_QUEUE_PENDING]:
+    "Ce projet possede une file d'execution en attente. Le lancement direct est refuse tant " +
+    "qu'elle contient des taches : demarrez la file, ou retirez-en cette tache.",
   [GUIDED_BLOCKER.DEPENDENCIES_UNRESOLVED]:
     "Cette tache attend une ou plusieurs taches qui ne sont pas terminees. Son statut ne change pas pour autant : c'est le lancement qui est refuse, pas la tache qui est bloquee.",
   [GUIDED_BLOCKER.RUNNER_UNAVAILABLE]:

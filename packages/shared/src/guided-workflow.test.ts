@@ -61,6 +61,7 @@ function facts(overrides: Partial<GuidedWorkflowFacts> = {}): GuidedWorkflowFact
     designedWithArchitect: false,
     runs: [],
     launch: { state: "unknown" },
+    queue: { queued: false, pendingEntries: 0, isCurrent: false },
     architect: {
       configured: true,
       latestCompleted: null,
@@ -153,6 +154,51 @@ const SCENARIOS: Scenario[] = [
     stage: GUIDED_STAGE.READY_TO_RUN,
     recommended: GUIDED_ACTION.RUN_CLAUDE,
     includes: [GUIDED_ACTION.BACK_TO_DRAFT],
+    blockers: [],
+  },
+  {
+    // Une file en attente passe avant le lancement direct : proposer les deux
+    // cote a cote inviterait a contourner l'ordre qu'on vient de preparer, et la
+    // Server Action refuserait de toute facon.
+    label: "Ready, mais une file d'execution attend",
+    facts: facts({
+      taskStatus: TASK_STATUS.READY,
+      launch: { state: "ready" },
+      queue: { queued: false, pendingEntries: 2, isCurrent: false },
+    }),
+    stage: GUIDED_STAGE.READY_TO_RUN,
+    recommended: GUIDED_ACTION.OPEN_QUEUE,
+    includes: [GUIDED_ACTION.BACK_TO_DRAFT],
+    blockers: [GUIDED_BLOCKER.EXECUTION_QUEUE_PENDING],
+  },
+  {
+    // Une tache inscrite ne propose meme pas le retour en brouillon : son
+    // contrat est gele tant qu'elle figure dans la file.
+    label: "Ready et inscrite dans la file",
+    facts: facts({
+      taskStatus: TASK_STATUS.READY,
+      launch: { state: "ready" },
+      queue: { queued: true, pendingEntries: 1, isCurrent: false },
+    }),
+    stage: GUIDED_STAGE.READY_TO_RUN,
+    recommended: GUIDED_ACTION.OPEN_QUEUE,
+    includes: [],
+    blockers: [GUIDED_BLOCKER.EXECUTION_QUEUE_PENDING],
+  },
+  {
+    // La barriere courante d'une file, rouverte apres une relecture. La file
+    // l'attend et ne la relancera pas d'elle-meme : renvoyer vers la file serait
+    // un aller-retour sans issue, et le depart se decide donc ici.
+    label: "Ready, inscrite, et tache courante de la file",
+    facts: facts({
+      taskStatus: TASK_STATUS.READY,
+      launch: { state: "ready" },
+      queue: { queued: true, pendingEntries: 3, isCurrent: true },
+    }),
+    stage: GUIDED_STAGE.READY_TO_RUN,
+    recommended: GUIDED_ACTION.RUN_CLAUDE,
+    // Pas de `Back to draft` : son contrat reste gele tant qu'elle est inscrite.
+    includes: [GUIDED_ACTION.OPEN_QUEUE],
     blockers: [],
   },
   {

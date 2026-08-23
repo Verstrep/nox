@@ -416,6 +416,7 @@ describe("gel apres la premiere execution", () => {
     const projectId = await newProject();
     const taskId = await newTask(projectId, "A");
     await createRun(db, {
+      projectId,
       taskId,
       prompt: "Prompt.",
       promptSha256: "a".repeat(64),
@@ -444,6 +445,7 @@ describe("gel apres la premiere execution", () => {
     const projectId = await newProject();
     const taskId = await newTask(projectId, "A");
     await createRun(db, {
+      projectId,
       taskId,
       prompt: "Prompt.",
       promptSha256: "b".repeat(64),
@@ -472,6 +474,7 @@ describe("gel apres la premiere execution", () => {
     const taskId = await newTask(projectId, "A");
     const other = await newTask(projectId, "B");
     await createRun(db, {
+      projectId,
       taskId,
       prompt: "Prompt.",
       promptSha256: "c".repeat(64),
@@ -694,6 +697,7 @@ describe("atomicite", () => {
     const projectId = await newProject();
     const a = await newTask(projectId, "A");
     await createRun(db, {
+      projectId,
       taskId: a,
       prompt: "Prompt.",
       promptSha256: "d".repeat(64),

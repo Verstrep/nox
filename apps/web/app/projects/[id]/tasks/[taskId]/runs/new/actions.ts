@@ -1,47 +1,15 @@
 "use server";
 
-import {
-  cancelTaskExecution,
-  createRun,
-  listTaskDependencies,
-  failRun,
-  getDatabaseClient,
-  getProjectById,
-  getTaskById,
-  markRunRunning,
-  startTaskExecution,
-} from "@nox/database";
-import {
-  RUNNER_ERROR,
-  TASK_DOCUMENT_SYNC_STATUS,
-  TASK_STATUS,
-  buildClaudeToolPolicy,
-  summarizeTaskDependencies,
-} from "@nox/shared";
-import { randomUUID } from "node:crypto";
+import { getDatabaseClient, listQueueEntries } from "@nox/database";
+import { isQueueBarrier } from "@nox/shared";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { QUEUE_PENDING_MESSAGE } from "@/lib/queue-display";
 import { runUrl } from "@/lib/run-display";
-import { buildExecutionPrompt } from "@/lib/run-prompt";
-import { snapshotRunValidations } from "@/lib/run-review";
-import { unresolvedDependenciesMessage } from "@/lib/task-dependencies";
-import { startClaudeRun } from "@/lib/runner/client";
-import { describeRunnerFailure } from "@/lib/runner/errors";
+import { launchTaskRun } from "@/lib/run-launch";
 
 import type { StartRunState } from "./form-state";
-
-const UNKNOWN_TASK_MESSAGE =
-  "Cette tache n'existe pas dans ce projet. Revenez au backlog et rouvrez-la.";
-
-const NOT_READY_MESSAGE =
-  "Seule une tache au statut « Prete » peut etre lancee. Rechargez la page pour voir son statut actuel.";
-
-const NOT_SYNCED_MESSAGE =
-  "Le document Markdown de cette tache n'est pas synchronise. Claude Code doit pouvoir le lire : creez-le avant de lancer.";
-
-const NO_CRITERIA_MESSAGE =
-  "Cette tache n'a aucun critere d'acceptation. Sans critere, personne ne pourra dire si l'execution a reussi.";
 
 const UNEXPECTED_ERROR_MESSAGE =
   "Une erreur inattendue est survenue avant le lancement. Aucune execution n'a demarre ; " +
@@ -53,22 +21,42 @@ function readField(formData: FormData, field: string): string {
 }
 
 /**
- * Lance une execution Claude Code sur une tache.
+ * Lance une execution Claude Code sur une tache, a la main.
  *
  * ## Ce que le navigateur envoie, et ce qu'il n'envoie pas
  *
  * Il envoie trois valeurs : l'identifiant du projet, celui de la tache, et le
  * `HEAD` attendu — obtenu du preflight, et de toute facon revalide par le
  * runner. Il n'envoie **ni** chemin de repository, **ni** prompt, **ni** liste
- * d'outils, **ni** commande. Le prompt est regenere ici a partir de la tache en
- * base, et les commandes sont relues de la meme facon : un formulaire altere ne
- * peut donc pas elargir ce que l'agent aura le droit de faire.
+ * d'outils, **ni** commande.
  *
- * ## L'ordre des ecritures
+ * ## La file d'execution passe avant
  *
- * Le run est cree avant l'appel au runner, et la tache ne passe en `RUNNING`
- * qu'apres acceptation. Un refus laisse donc une trace consultable — le run
- * porte son echec — sans jamais afficher un travail en cours qui n'existe pas.
+ * Si le projet possede au moins une inscription, ce lancement **initial** est
+ * refuse. La raison est l'ordre : l'utilisateur a prepare une file, et un
+ * lancement direct la doublerait sans que rien ne le dise. Il lui reste deux
+ * chemins evidents — demarrer la file, ou en retirer cette tache.
+ *
+ * ## Une exception, et une seule : la barriere courante
+ *
+ * Une tache rouverte apres une relecture reste la barriere de sa file : la file
+ * l'attend, et ne la relancera pas d'elle-meme. C'est donc ici qu'elle repart,
+ * et refuser ce lancement-la n'empecherait aucun contournement — il rendrait
+ * simplement la tache injoignable jusqu'a son retrait de la file. Le refus vise
+ * ce qui **double** un ordre prepare ; relancer la tache que la file attend
+ * n'est pas ce cas.
+ *
+ * Ce refus ne concerne **que** le premier lancement d'une tache. Une correction
+ * termine un travail deja commence : elle n'est pas un nouvel element de
+ * planification, et elle passe par sa propre Server Action, que ce guard ne
+ * touche pas.
+ *
+ * ## Tout le reste appartient au moteur commun
+ *
+ * `launchTaskRun` revalide le statut, la synchronisation, les criteres, les
+ * dependances, les permissions et l'unicite de l'execution active — puis cree le
+ * run, appelle le runner et met la tache en `RUNNING`. C'est exactement ce que
+ * la file appelle : il n'existe pas de second moteur Claude.
  */
 export async function startRunAction(
   _previousState: StartRunState,
@@ -86,103 +74,23 @@ export async function startRunAction(
   let destination: string;
 
   try {
-    const task = await getTaskById(db, taskId);
-    // Le projet fait partie du filtre, pas d'une verification apres coup : une
-    // tache d'un autre projet est introuvable, exactement comme une tache
-    // inexistante.
-    if (task === null || task.projectId !== projectId) {
-      return { error: UNKNOWN_TASK_MESSAGE };
+    // Relu en base, jamais recu du navigateur : la barriere se derive des
+    // entrees et du statut des taches, au moment d'agir.
+    const entries = await listQueueEntries(db, projectId);
+    const barrier = entries.find(isQueueBarrier) ?? null;
+    if (entries.length > 0 && barrier?.taskId !== taskId) {
+      return { error: QUEUE_PENDING_MESSAGE };
     }
 
-    if (task.status !== TASK_STATUS.READY) {
-      return { error: NOT_READY_MESSAGE };
-    }
-
-    if (task.documentSyncStatus !== TASK_DOCUMENT_SYNC_STATUS.SYNCED) {
-      return { error: NOT_SYNCED_MESSAGE };
-    }
-
-    if (task.acceptanceCriteria.length === 0) {
-      return { error: NO_CRITERIA_MESSAGE };
-    }
-
-    // Les dependances sont revalidees **ici**, avant la politique d'outils,
-    // avant le prompt, avant la creation du run et avant tout appel au runner.
-    // Une tache qui attend ne doit consommer ni inspection, ni ligne en base :
-    // le refus est gratuit, et il le reste.
-    //
-    // L'affichage a pu dire le contraire une seconde plus tot ; c'est sans
-    // importance, puisque la decision se prend a partir de la base, maintenant.
-    const dependencies = summarizeTaskDependencies(await listTaskDependencies(db, taskId));
-    if (!dependencies.allSatisfied) {
-      return { error: unresolvedDependenciesMessage(dependencies.waiting) };
-    }
-
-    // Les commandes sont verifiees ici pour produire un message precis ; le
-    // runner les revalidera de toute facon avant d'en faire des permissions.
-    const policy = buildClaudeToolPolicy(task.validationCommands, task.kind);
-    if (!policy.ok) {
-      return {
-        error: `La commande « ${policy.refusal.command} » ne peut pas etre autorisee : ${policy.refusal.reason}`,
-      };
-    }
-
-    const project = await getProjectById(db, projectId);
-    if (project === null) {
-      return { error: UNKNOWN_TASK_MESSAGE };
-    }
-
-    // Le prompt est regenere maintenant, a partir de la base : ce n'est pas
-    // celui qu'affichait la page qui est envoye, meme s'il lui est identique.
-    const { prompt, sha256 } = buildExecutionPrompt(task, dependencies.dependsOn);
-
-    const runnerRunId = randomUUID();
-    const run = await createRun(db, { taskId, prompt, promptSha256: sha256, runnerRunId });
-    if (run === null) {
-      return { error: UNKNOWN_TASK_MESSAGE };
-    }
-
-    // Les commandes attendues sont recopiees maintenant, avec le prompt : la
-    // review de cette execution doit rester lisible meme si la specification de
-    // la tache change ensuite. Une commande que Claude Code ne lancera jamais
-    // apparaitra « Not run », ce qui est une information — et elle ne le
-    // pourrait pas si la table se remplissait au fil de l'execution.
-    await snapshotRunValidations(run.id, task.validationCommands);
-
-    const started = await startClaudeRun({
-      runId: runnerRunId,
-      repositoryPath: project.repositoryPath,
-      prompt,
-      expectedGitHead,
-      validationCommands: [...task.validationCommands],
-      // La nature vient de la base, jamais du formulaire : c'est elle qui decide
-      // si l'execution recoit les programmes d'amorcage.
-      taskKind: task.kind,
-    });
-
-    if (!started.ok) {
-      // L'execution n'a jamais demarre : le run garde la trace de l'echec, et
-      // la tache reste disponible pour un nouvel essai.
-      await failRun(db, run.id, {
-        errorCode:
-          started.failure.kind === "runner_error"
-            ? started.failure.code
-            : RUNNER_ERROR.CLAUDE_START_FAILED,
-        errorMessage: describeRunnerFailure(started.failure),
-        finishedAt: new Date(),
-      });
-      await cancelTaskExecution(db, taskId);
-
-      revalidatePath(`/projects/${projectId}/tasks/${taskId}`);
-      return { error: describeRunnerFailure(started.failure) };
-    }
-
-    await markRunRunning(db, run.id, new Date(started.value.startedAt));
-    await startTaskExecution(db, taskId);
+    const launched = await launchTaskRun(db, { projectId, taskId, expectedGitHead });
 
     revalidatePath(`/projects/${projectId}/tasks/${taskId}`);
+    if (!launched.ok) {
+      return { error: launched.message };
+    }
+
     revalidatePath(`/projects/${projectId}/tasks`);
-    destination = runUrl(projectId, taskId, run.id);
+    destination = runUrl(projectId, taskId, launched.runId);
   } catch (error) {
     console.error("[nox] Echec du lancement d'une execution :", error);
     return { error: UNEXPECTED_ERROR_MESSAGE };

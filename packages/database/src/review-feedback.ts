@@ -35,6 +35,7 @@ import {
 
 import type { DatabaseClient } from "./client.js";
 import { getRunById } from "./runs.js";
+import { markQueueEntryStarted } from "./task-queue.js";
 
 /** Un feedback de review, tel que l'interface le relit. */
 export type ReviewFeedbackView = {
@@ -304,6 +305,13 @@ export async function startCorrectionFromFeedback(
     if (claimed.count !== 1) {
       throw new FeedbackAlreadyUsedError(input.feedbackId);
     }
+
+    // Meme marquage que pour un lancement initial, et pour la meme raison : une
+    // correction est une execution nee d'une tache qui peut etre inscrite. Sans
+    // lui, une tache corrigee puis rouverte redeviendrait, aux yeux de la file,
+    // une entree jamais commencee. `startedAt` ne bouge plus une fois pose : le
+    // premier depart date l'inscription, pas le dernier.
+    await markQueueEntryStarted(tx, input.taskId);
 
     return { ok: true, runId: run.id } as const;
   }).catch((error: unknown) => {

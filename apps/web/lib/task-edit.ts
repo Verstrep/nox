@@ -35,6 +35,7 @@ import {
 } from "@nox/shared";
 import { createHash } from "node:crypto";
 
+import { TASK_QUEUED_MESSAGE } from "./queue-display.ts";
 import { readTaskSubmission, type TaskFormValues, type TaskInputResult } from "./task-input.ts";
 
 /** Version de l'empreinte, pour qu'un changement de forme ne passe pas inapercu. */
@@ -173,5 +174,7 @@ export function taskEditRefusalMessage(code: TaskEditErrorCode): string {
         "Cette tache a change depuis l'ouverture du formulaire. Rechargez la page avant " +
         "d'enregistrer : NOX n'ecrase pas une modification qu'il n'a pas su vous montrer."
       );
+    case TASK_EDIT_ERROR.QUEUED:
+      return TASK_QUEUED_MESSAGE;
   }
 }

@@ -43,6 +43,7 @@ vide à une exécution relue.
 | 23 | Amorçage d'un projet | `TASK-000` déterministe, construite sans appel à une IA |
 | 24 | Dépendances et tâches futures | Graphe acyclique explicite, édition avant première exécution |
 | 25 | Tableau de bord et cycle de vie | Accueil centrée projets, suppression d'un projet de NOX, repository préservé |
+| 26 | File d'exécution | Intention persistée, autorisation explicite, sélection déterministe |
 
 **Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
 automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
@@ -163,16 +164,23 @@ du repository sont préservés, aucune opération Git n'a lieu, et le même doss
 réenregistré comme un projet réellement neuf. Un projet se renomme aussi, sans que rien du
 repository ne bouge.
 
-### `TASK-026` — File d'exécution — **suivante**
+### `TASK-026` — File d'exécution — terminée
 
-Enchaîner plusieurs tâches prêtes, en respectant les dépendances posées en `TASK-024`, et en
-garantissant au plus une exécution Claude active par repository. Enchaîner n'est pas
-s'autonomiser : chaque départ reste décidé.
+Plusieurs tâches prêtes s'inscrivent dans la file d'un projet, et NOX les lance une à une. Deux
+gestes humains, pas un : inscrire ne lance rien, démarrer la file ouvre une autorisation
+permanente. La sélection est déterministe, sans appel à un modèle, et saute les entrées qui
+attendent une dépendance — elles gardent leur place.
 
-### `TASK-027` — Validation autonome et classification des tests humains
+Ce que la file **ne fait pas** compte autant : elle ne contourne ni le préflight Git, ni la review
+humaine, ni l'unicité de l'exécution active, et un redémarrage du serveur ne lance jamais rien. Une
+entrée reste en place jusqu'à ce que la tâche soit acceptée — une exécution terminée n'est pas un
+travail accepté.
 
-Distinguer ce qu'une commande prouve, ce que l'Architecte peut établir, et ce qui exige
-réellement un test humain.
+### `TASK-027` — Validation autonome et classification des tests humains — **suivante**
+
+Distinguer ce qu'une commande prouve, ce que l'Architecte peut établir, et ce qui exige réellement
+un test humain — pour ne solliciter l'humain que dans le troisième cas. C'est la suite naturelle de
+la file : aujourd'hui, chaque tâche exécutée l'interrompt.
 
 ### `TASK-028` — Boucle bornée de correction et de re-review
 

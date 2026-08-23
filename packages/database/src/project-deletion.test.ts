@@ -50,11 +50,14 @@ import {
   createProject,
   createTask,
   deleteProjectState,
+  enqueueTask,
   findProjectByRepositoryPath,
   listOwnedTaskArtifacts,
   markTaskDocumentSynced,
   projectHasActiveRun,
+  updateTaskStatus,
   renameProject,
+  setQueueActive,
   toDatabaseFilePath,
   toSqliteUrl,
   writeTaskRow,
@@ -305,6 +308,16 @@ async function populate(projectId: string): Promise<{ taskId: string; bootstrapI
     data: { taskId, sourceRunId: run.id, text: "A revoir." },
   });
 
+  // Une file d'execution active, avec une inscription : sans elle, le test qui
+  // verifie que **toutes** les tables sont videes passerait sans rien prouver
+  // sur celle-ci.
+  const ready = await updateTaskStatus(db, secondId, projectId, TASK_STATUS.READY);
+  assert.ok(ready.ok);
+  const queued = await enqueueTask(db, { projectId, taskId: secondId });
+  assert.ok(queued.ok);
+  const activated = await setQueueActive(db, projectId, true);
+  assert.ok(activated.ok);
+
   return { taskId, bootstrapId: bootstrap.id };
 }
 
@@ -320,6 +333,7 @@ async function countAll(projectId: string): Promise<Record<string, number>> {
     architectRunReview: await db.architectRunReview.count({ where: byRun }),
     reviewFeedback: await db.reviewFeedback.count({ where: byTask }),
     run: await db.run.count({ where: byTask }),
+    taskQueueEntry: await db.taskQueueEntry.count({ where: { projectId } }),
     taskDependency: await db.taskDependency.count({ where: byTask }),
     architectProjectUpdate: await db.architectProjectUpdate.count({ where: { projectId } }),
     architectMessage: await db.architectMessage.count({ where: { session: { projectId } } }),
@@ -383,6 +397,7 @@ describe("deleteProjectState", () => {
         architectRunReview: 0,
         reviewFeedback: 0,
         run: 0,
+        taskQueueEntry: 0,
         taskDependency: 0,
         architectProjectUpdate: 0,
         architectMessage: 0,
@@ -497,6 +512,7 @@ describe("deleteProjectState", () => {
       architectRunReview: 0,
       reviewFeedback: 0,
       run: 0,
+      taskQueueEntry: 0,
       taskDependency: 0,
       architectProjectUpdate: 0,
       architectMessage: 0,

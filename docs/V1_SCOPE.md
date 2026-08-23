@@ -132,24 +132,29 @@ le `.git` et la documentation applicative sont préservés, aucune opération Gi
 même dossier peut ensuite être réenregistré comme un projet réellement neuf — rien n'est
 reconstruit depuis le disque.
 
+### 1.15 File d'exécution
+
+Plusieurs tâches prêtes s'inscrivent dans la file d'un projet, dans l'ordre choisi. Démarrer la
+file est une autorisation permanente, explicite : NOX peut ensuite lancer les tâches **déjà
+inscrites** quand elles deviennent éligibles, une à la fois.
+
+Enchaîner n'est pas s'autonomiser. La sélection est déterministe et sans modèle ; les dépendances
+restent autoritaires ; la review humaine reste une barrière ; le préflight Git aussi. Un échec ou
+une annulation met la file en pause. Un redémarrage du serveur ne lance jamais rien.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 File d'exécution
-
-Enchaîner plusieurs tâches prêtes, sans qu'un enchaînement devienne une autonomie : chaque
-départ reste décidé, et une exécution reste seule active.
-
-### 2.2 Validation intelligente
+### 2.1 Validation intelligente
 
 Distinguer ce qu'une commande peut prouver, ce qu'une relecture par l'Architecte peut établir,
 et ce qui exige réellement un test humain — pour ne solliciter l'humain que dans le troisième
 cas.
 
-### 2.3 Livraison Git contrôlée
+### 2.2 Livraison Git contrôlée
 
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.

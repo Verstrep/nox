@@ -101,15 +101,16 @@ async function newSourceRun(): Promise<{
   });
   assert.ok(task !== null);
 
-  const run = await createRun(db, {
+  const created = await createRun(db, {
+    projectId: project.id,
     taskId: task.id,
     prompt: "Prompt.",
     promptSha256: "a".repeat(64),
     runnerRunId: runnerRunId(),
   });
-  assert.ok(run !== null);
+  assert.ok(created.ok);
 
-  return { projectId: project.id, taskId: task.id, runId: run.id };
+  return { projectId: project.id, taskId: task.id, runId: created.run.id };
 }
 
 /** Amene une execution a l'etat « relue et reprenable ». */

@@ -4644,3 +4644,181 @@ lignes et évite les deux problèmes.
 Ce qui pourrait encore manquer — une recherche, un filtre, une pagination — relève d'une
 évolution de la surface existante. Aucune de ces trois choses ne justifie une étape : avec une
 poignée de projets, elles rempliraient l'écran sans rien résoudre.
+---
+
+## Décisions de TASK-026 — File d'exécution
+
+### D-314 — L'appartenance à la file est séparée du statut de la tâche
+
+**Décision.** Une tâche inscrite reste `READY`. Il n'existe aucun statut `QUEUED` : l'intention
+d'exécuter vit dans une ligne `TaskQueueEntry`, pas dans `Task.status`.
+
+**Justification.** C'est exactement le raisonnement de D-302 pour les dépendances, et il vaut ici
+pour la même raison. `Task.status` répond à « où en est ce travail » ; la file répond à « est-il
+autorisé à partir ». Les confondre aurait créé un statut qui bouge sans geste humain — une tâche
+mise en file le matin changerait d'état sans que personne ne l'ait décidé, et l'inverse au retrait.
+
+Un statut `QUEUED` aurait aussi rendu impossible une distinction dont on a besoin partout : une
+tâche prête **et** inscrite n'est pas dans un autre état de travail qu'une tâche prête. Elle porte
+la même spécification, le même document, les mêmes préconditions. Ce qui change est une
+autorisation, et une autorisation n'est pas un état d'avancement.
+
+Conséquence pratique : tout ce qui lit un statut continue de fonctionner sans rien savoir de la
+file. Le backlog, le workflow guidé, les transitions, le préflight — aucun n'a eu à apprendre un
+huitième statut.
+
+### D-315 — Démarrer la file est une autorisation permanente, explicite
+
+**Décision.** Inscrire une tâche ne lance jamais Claude. Un second geste — `Start queue` — ouvre
+une autorisation qui vaut pour les tâches **déjà inscrites**, et NOX peut ensuite les lancer quand
+elles deviennent éligibles. Une file qui se vide referme cette autorisation.
+
+**Justification.** Les deux gestes ne disent pas la même chose. « Je veux que cette tâche fasse
+partie de la file » est une intention d'ordonnancement ; « lance-les » est une délégation. Les
+fondre en un seul aurait fait d'un clic sur `Queue task` un lancement déguisé, et personne n'aurait
+pu préparer une file à l'avance — ce qui est précisément l'usage visé.
+
+L'autorisation est **permanente** parce qu'une confirmation par tâche annulerait le bénéfice : si
+NOX demande à chaque fois, il n'enchaîne pas. Elle est donc annoncée une fois, en toutes lettres,
+avant le clic — et son périmètre est étroit : les tâches inscrites, une à la fois, sous toutes les
+conditions qui existaient déjà.
+
+La refermer quand la file se vide n'est pas un détail. Sans cela, une permission accordée en mars
+s'appliquerait à une tâche inscrite en juin, dans un contexte que personne n'aurait revalidé.
+
+### D-316 — Aucun démarrage au lancement du serveur
+
+**Décision.** `advanceQueue` n'est appelé que depuis une Server Action. Ni le rendu d'une page, ni
+le démarrage du serveur ne le déclenchent. Une file laissée `ACTIVE` retrouve son autorisation
+après un redémarrage, mais ne produit aucune exécution.
+
+**Justification.** Une machine qui redémarre ne doit pas transformer un vieil état en exécution
+surprise. `ACTIVE` autorise un **ordonnancement** ; il n'autorise pas un démarrage sans événement.
+
+La différence se voit dans le pire cas. Un poste rallumé après trois semaines, avec une file active
+oubliée et un repository dans un état inconnu, lancerait Claude Code sur du code que personne n'a
+regardé depuis. Le préflight refuserait probablement — mais « probablement » n'est pas une
+garantie, et la garantie doit venir du fait qu'aucun code ne s'exécute au boot.
+
+C'est aussi ce qui rend la propriété **vérifiable** : il n'y a aucun worker, aucun minuteur, aucune
+tâche de fond. Le dispatcher est une fonction, appelée par des clics et par les transitions qu'ils
+provoquent. Un futur worker explicite pourra changer ce contrat ; il devra alors le décider.
+
+### D-317 — L'amorçage n'entre jamais dans la file
+
+**Décision.** `TASK-000` ne peut pas être inscrite. Elle se lance depuis sa propre page, comme
+avant.
+
+**Justification.** Une tâche d'amorçage reçoit une liste fermée de programmes d'installation que
+`TASK-023` a délibérément accordée à elle seule. Elle est unique par projet, structurante, et
+s'exécute avant tout le reste. La faire passer par un mécanisme d'enchaînement reviendrait à ranger
+l'opération la plus exceptionnelle du produit dans le flux le plus ordinaire.
+
+Le refus est structurel plutôt que documentaire : `checkQueueCandidate` le vérifie avant toute
+autre raison, et la vérification est refaite dans la transaction d'inscription. Rien dans le
+dispatcher n'a donc à connaître l'amorçage — il ne peut pas en rencontrer.
+
+### D-318 — Une entrée bloquée est sautée, et garde sa place
+
+**Décision.** La sélection prend la première entrée éligible, même si des entrées plus anciennes
+attendent une dépendance. L'entrée sautée n'est ni déplacée, ni retirée.
+
+**Justification.** Un blocage de tête aurait immobilisé tout le travail restant pour une raison qui
+ne le concerne pas. Trois tâches en file, la première attend `TASK-001` qui n'est pas commencée :
+sans cette règle, les deux autres attendraient aussi, et l'utilisateur devrait réordonner la file à
+la main pour contourner un mécanisme censé lui faire gagner du temps.
+
+L'inverse — retirer l'entrée bloquée — aurait été pire : elle porte une intention, et la déplacer
+en silence modifierait un plan humain.
+
+L'ordre de la file reste donc une **préférence**, et les dépendances de `TASK-024` restent
+l'autorité. C'est la seule répartition qui ne demande à personne de tenir deux vérités à la fois.
+
+### D-319 — La tâche lancée reste la barrière jusqu'à son acceptation
+
+**Décision.** L'entrée n'est pas retirée au démarrage. Elle survit à `RUNNING`, à `REVIEW`, à une
+correction, et ne disparaît qu'au passage de la tâche en `COMPLETED` — ou sur retrait humain.
+`Run.status === COMPLETED` ne fait jamais avancer la file.
+
+**Justification.** Une exécution qui se termine normalement n'est pas un travail accepté. Elle mène
+à une review, et une review peut aboutir à une demande de correction. Enchaîner sur la tâche
+suivante à ce moment-là ferait travailler Claude Code par-dessus un résultat que personne n'a
+encore validé — et rendrait la relecture de la seconde tâche impossible, puisque son diff
+contiendrait celui de la première.
+
+Le vocabulaire est le piège à éviter : `COMPLETED` existe des deux côtés, sur l'exécution et sur la
+tâche, et ne veut pas dire la même chose. La file écoute le second, jamais le premier.
+
+Conséquence : la barrière courante se **dérive** plutôt que de vivre dans une colonne
+`activeQueueTaskId`. Un pointeur explicite aurait dupliqué une information que les statuts portent
+déjà, et qu'il aurait fallu tenir à jour à chaque transition.
+
+**Correctif.** La première version dérivait cette barrière du seul statut — « l'entrée dont la
+tâche a quitté `READY` ». C'était faux dans un cas, et `D-321` le corrige : un `Reopen` ramène la
+tâche à `READY`, et la barrière tombait alors qu'aucun travail n'avait été accepté.
+
+### D-320 — La file ne contourne ni Git, ni un incident
+
+**Décision.** Un repository qui porte des modifications non commitées arrête la progression, sans
+rien affaiblir du préflight. Un échec, un blocage ou une annulation referme l'autorisation, et
+l'entrée reste en place.
+
+**Justification.** Tant que la livraison Git est manuelle — `TASK-029` ne l'a pas encore rendue
+possible —, un travail accepté laisse le dossier sale. La tentation aurait été d'assouplir le
+préflight pour rendre la file plus spectaculaire : deux tâches enchaînées produiraient alors un
+seul diff mêlant deux travaux, et la review de la seconde ne dirait plus rien.
+
+Le prix est assumé et visible : l'utilisateur accepte, commite à la main, puis clique « Try next ».
+C'est une friction réelle, préférable à une review fausse — et `TASK-029` pourra appeler le même
+dispatcher après une livraison validée, sans rien changer ici.
+
+Le même raisonnement vaut pour les incidents. Un échec ou une annulation est un signal : quelque
+chose demande un regard. Enchaîner aussitôt ferait exactement le contraire de ce qui vient d'être
+demandé. L'entrée reste en place pour qu'on sache **laquelle** a échoué, et le retrait — comme la
+reprise — reste un geste humain.
+
+### D-321 — Le départ d'une inscription est persisté, parce qu'aucun statut ne le porte
+
+**Décision.** `TaskQueueEntry.startedAt` enregistre l'instant où une exécution naît d'une
+inscription. Il est posé dans la transaction qui crée l'exécution, n'est jamais remis à zéro, et
+une entrée qui le porte reste la barrière de sa file jusqu'à ce que la tâche soit acceptée — son
+entrée disparaît alors — ou qu'un humain la retire. `Reopen` compris.
+
+**Justification.** `D-319` dérivait la barrière du seul statut : « l'entrée dont la tâche a quitté
+`READY` ». La règle est vraie pendant `RUNNING`, pendant `REVIEW`, pendant un échec — et fausse
+juste après un `Reopen`, moment où la tâche revient précisément à `READY`.
+
+Ce n'est pas un détail d'affichage. Une tâche rouverte redevenait, pour la file, une entrée
+ordinaire jamais commencée : première par position, prête, sans dépendance en attente. Le premier
+événement venu — inscrire une autre tâche pendant que la file est active, cliquer « Try next » —
+la **relançait**, sans qu'aucun humain n'ait décidé de reprendre ce travail. Une file qui repart
+toute seule sur un travail qu'on vient de refuser est exactement ce que `D-315` et `D-316`
+existaient pour empêcher.
+
+Aucune donnée existante ne répondait sans ambiguïté. Un run antérieur ne prouve rien : une tâche
+peut avoir un passé et être inscrite après coup, et ce serait alors une entrée neuve. Comparer les
+horodatages du run et de l'entrée aurait fait reposer une décision d'exécution sur une précision
+d'horloge. La question posée est étroite — « **cette inscription** a-t-elle déjà commencé son
+cycle ? » — et la réponse est un fait, pas une déduction : elle mérite sa colonne.
+
+**Pourquoi persisté plutôt que dérivé.** Parce qu'un redémarrage du serveur ne doit pas changer la
+réponse, et parce qu'un état gardé en mémoire n'aurait survécu ni à ce redémarrage, ni à deux
+processus — c'est le raisonnement de `D-313` sur la sérialisation, appliqué à une question de
+lecture. C'est la seule information de la file qui ne se dérive pas ; l'élément courant,
+l'éligibilité et l'état affiché continuent de se calculer.
+
+**Pourquoi dans la transaction qui crée l'exécution.** Une exécution créée sans marquage laisserait
+la file croire, après une réouverture, qu'elle a affaire à une tâche jamais commencée. Les deux
+écritures ne doivent pas pouvoir se séparer, et le marquage est conditionnel — `startedAt: null`
+fait partie du `where` —, donc sans lecture préalable. Une seule implémentation, appelée par le
+lancement initial **et** par la correction : les deux créent une exécution, et deux marquages
+auraient fini par diverger.
+
+**Ce que la décision refuse.** Que la file relance elle-même un travail refusé. `WAITING_CURRENT_TASK`
+est un état distinct de l'échec — rien n'a échoué, une relecture a demandé des changements —, et
+« Try next » n'est pas un bouton de reprise : il rappelle simplement quelle tâche attend. Le départ
+se décide sur la page de la tâche, par son workflow habituel.
+
+Corollaire assumé : le refus du lancement manuel épargne cette tâche-là, et elle seule. Ce refus
+vise ce qui **doublerait** un ordre préparé ; relancer la tâche que la file attend n'est pas ce
+cas, et le maintenir aurait rendu cette tâche injoignable jusqu'à son retrait de la file.

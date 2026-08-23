@@ -47,6 +47,8 @@ function facts(overrides: Partial<ProjectCardFacts> = {}): ProjectCardFacts {
     bootstrapStatus: null,
     readyWaitingOnDependencies: 0,
     lastTaskActivityAt: null,
+    queuedCount: 0,
+    queueActive: false,
     ...overrides,
   };
 }

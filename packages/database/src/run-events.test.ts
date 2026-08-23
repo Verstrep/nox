@@ -86,15 +86,16 @@ async function newRun(): Promise<{ runId: string; taskId: string }> {
   });
   assert.ok(task !== null);
 
-  const run = await createRun(db, {
+  const created = await createRun(db, {
+    projectId: project.id,
     taskId: task.id,
     prompt: "Prompt.",
     promptSha256: "a".repeat(64),
     runnerRunId: `3f2504e0-4f89-41d3-9a0c-${suffix}`,
   });
-  assert.ok(run !== null);
+  assert.ok(created.ok);
 
-  return { runId: run.id, taskId: task.id };
+  return { runId: created.run.id, taskId: task.id };
 }
 
 function event(sequence: number, overrides: Record<string, unknown> = {}) {

@@ -17,6 +17,13 @@ type TaskRowProps = {
    * taches, et une mention « 0 dependance » sur chaque ligne serait du bruit.
    */
   dependencies?: { total: number; unresolved: number };
+  /**
+   * Position dans la file d'execution, a partir de 1.
+   *
+   * Absente quand la tache n'y figure pas. Une ligne « pas en file » sur presque
+   * toutes les taches n'apprendrait rien.
+   */
+  queuePosition?: number;
 };
 
 /**
@@ -26,7 +33,7 @@ type TaskRowProps = {
  * un document en ordre ne merite pas une pastille de plus dans une liste deja
  * dense.
  */
-export function TaskRow({ projectId, task, dependencies }: TaskRowProps) {
+export function TaskRow({ projectId, task, dependencies, queuePosition }: TaskRowProps) {
   const updatedAt = formatIsoDateTime(task.updatedAt);
   const needsAttention = task.documentSyncStatus !== TASK_DOCUMENT_SYNC_STATUS.SYNCED;
 
@@ -45,6 +52,9 @@ export function TaskRow({ projectId, task, dependencies }: TaskRowProps) {
           <StatusBadge tone={taskStatusTone(task.status)}>
             {taskStatusLabel(task.status)}
           </StatusBadge>
+          {queuePosition === undefined ? null : (
+            <StatusBadge tone="accent">Queue #{queuePosition}</StatusBadge>
+          )}
           <StatusBadge tone="muted">{taskPriorityLabel(task.priority)}</StatusBadge>
         </div>
       </div>

@@ -34,6 +34,8 @@ export type ProjectCardFacts = {
   bootstrapStatus: TaskStatus | null;
   readyWaitingOnDependencies: number;
   lastTaskActivityAt: Date | null;
+  queuedCount: number;
+  queueActive: boolean;
 };
 
 /** Une carte de projet, prete a etre rendue. */
@@ -49,6 +51,10 @@ export type ProjectCard = {
   breakdown: readonly { status: TaskStatus; count: number }[];
   bootstrapLabel: string;
   waitingOnDependencies: number;
+  /** Taches inscrites dans la file d'execution du projet. */
+  queuedCount: number;
+  /** L'autorisation permanente de la file est-elle ouverte ? */
+  queueActive: boolean;
   lastActivityAt: Date;
 };
 
@@ -178,6 +184,8 @@ export function projectCard(
     breakdown: taskBreakdown(facts.taskCounts),
     bootstrapLabel: bootstrapCardLabel(facts.bootstrapStatus),
     waitingOnDependencies: facts.readyWaitingOnDependencies,
+    queuedCount: facts.queuedCount,
+    queueActive: facts.queueActive,
     lastActivityAt,
   };
 }

@@ -57,6 +57,10 @@ export type ProjectDashboardFacts = {
    * bouge pas.
    */
   lastTaskActivityAt: Date | null;
+  /** Nombre de taches inscrites dans la file d'execution du projet. */
+  queuedCount: number;
+  /** L'autorisation permanente de la file est-elle ouverte ? */
+  queueActive: boolean;
 };
 
 function emptyCounts(): Record<TaskStatus, number> {
@@ -86,6 +90,8 @@ export async function loadProjectDashboardFacts(
       bootstrapStatus: null,
       readyWaitingOnDependencies: 0,
       lastTaskActivityAt: null,
+      queuedCount: 0,
+      queueActive: false,
     });
   }
 
@@ -94,6 +100,32 @@ export async function loadProjectDashboardFacts(
   }
 
   const ids = [...projectIds];
+
+  // L'etat de la file vient de la ligne du projet et d'un comptage groupe :
+  // aucune sonde, aucun preflight. Le tableau de bord dit combien de taches
+  // attendent, il ne demande pas au runner si elles pourraient partir.
+  const projects = await db.project.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, executionQueueActive: true },
+  });
+  for (const project of projects) {
+    const entry = facts.get(project.id);
+    if (entry !== undefined) {
+      entry.queueActive = project.executionQueueActive;
+    }
+  }
+
+  const queued = await db.taskQueueEntry.groupBy({
+    by: ["projectId"],
+    where: { projectId: { in: ids } },
+    _count: { _all: true },
+  });
+  for (const row of queued) {
+    const entry = facts.get(row.projectId);
+    if (entry !== undefined) {
+      entry.queuedCount = row._count._all;
+    }
+  }
 
   const briefs = await db.projectBrief.findMany({
     where: { projectId: { in: ids } },

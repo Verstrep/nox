@@ -5,17 +5,18 @@ import { backlogUrl } from "@/lib/backlog/display";
 import { bootstrapUrl } from "@/lib/bootstrap/display";
 import { projectSettingsUrl } from "@/lib/project-delete";
 import { planUrl } from "@/lib/plan-display";
+import { queueUrl } from "@/lib/queue-display";
 
 /**
  * Navigation d'un projet.
  *
  * ## Un ordre, pas un menu
  *
- * Les cinq premieres entrees suivent le chemin reel du travail : on discute avec
+ * Les six premieres entrees suivent le chemin reel du travail : on discute avec
  * l'Architecte, on fixe le plan, on en tire un backlog, on prepare le
- * repository, puis on execute les taches. Les trois dernieres sont des surfaces
- * de consultation, separees par un trait : elles restent accessibles sans
- * pretendre etre des etapes.
+ * repository, on ecrit les taches, puis on les met en file. Les trois dernieres
+ * sont des surfaces de consultation, separees par un trait : elles restent
+ * accessibles sans pretendre etre des etapes.
  *
  * ## Ce que ce composant ne fait pas
  *
@@ -30,6 +31,7 @@ const WORKFLOW: readonly { label: string; url: (projectId: string) => string }[]
   { label: "Backlog", url: backlogUrl },
   { label: "Bootstrap", url: bootstrapUrl },
   { label: "Tasks", url: (projectId) => `/projects/${projectId}/tasks` },
+  { label: "Queue", url: queueUrl },
 ];
 
 const SECONDARY: readonly { label: string; url: (projectId: string) => string }[] = [

@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 22 août 2026, à l'issue de `TASK-025`.
+**Dernière mise à jour** : 23 août 2026, à l'issue de `TASK-026`.
 
 ---
 
@@ -41,12 +41,12 @@ sans clic.
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 21 |
-| Migrations appliquées | 17 |
+| Modèles Prisma | 22 |
+| Migrations appliquées | 19 |
 | Routes du runner | 18, dont une seule publique (`GET /health`) |
-| Pages de l'application web | 33 |
-| Tests automatisés | 3 497, dont 6 ignorés sous Windows |
-| Décisions consignées | 313 |
+| Pages de l'application web | 34 |
+| Tests automatisés | 3 658, dont 6 ignorés sous Windows |
+| Décisions consignées | 321 |
 
 ---
 
@@ -87,6 +87,45 @@ se relit toujours en base à partir de l'identifiant du projet — jamais depuis
 suppression n'accepte aucun chemin du navigateur : la liste des documents à retirer est
 reconstruite en base. Aucun `git add`, aucun commit, aucun push, aucun `restore`, et jamais
 un fichier que NOX n'a pas écrit.
+
+### 2.1 bis File d'exécution
+
+**Disponible.** Inscrire des tâches `READY` dans la file d'un projet, les réordonner, les en
+retirer. Démarrer la file — une autorisation permanente, explicite — puis laisser NOX lancer les
+tâches inscrites au fur et à mesure qu'elles deviennent éligibles. Mettre en pause, ou relancer
+l'avancement à la main avec « Try next ».
+
+La sélection est déterministe et sans appel à un modèle : la première entrée dont la tâche est
+prête et dont les dépendances sont terminées. Une entrée qui attend est sautée et garde sa place.
+Un appel démarre au plus une exécution.
+
+Une entrée reste en place pendant toute la vie du travail commencé — exécution, review, correction,
+et **réouverture** — et ne disparaît qu'à l'acceptation de la tâche, ou sur retrait humain. Une
+tâche rouverte redevient `READY` sans redevenir disponible : son inscription se souvient d'avoir
+démarré (`TaskQueueEntry.startedAt`), reste la barrière de la file, et se relance depuis sa propre
+page. La file ne relance jamais d'elle-même un travail qui vient d'être refusé.
+
+**Limites.**
+
+- **Aucun démarrage au lancement du serveur.** Une file active retrouve son autorisation après un
+  redémarrage, mais rien ne part sans un événement applicatif — une tâche acceptée, une
+  inscription, un « Try next ». La barrière courante survit elle aussi : elle est en base, pas en
+  mémoire.
+- **« Try next » n'est pas une reprise.** Il rappelle quelle tâche la file attend ; reprendre un
+  travail refusé se décide sur la page de cette tâche.
+- **Aucune livraison Git.** Après une acceptation, le repository reste souvent « dirty » : la file
+  s'arrête jusqu'à un commit fait à la main.
+- **Aucune validation autonome.** Une exécution terminée attend toujours une décision humaine.
+- **L'amorçage n'est pas inscriptible.** `TASK-000` se lance depuis sa propre page.
+- **Aucun ordonnanceur global.** La file est locale à un projet ; une seule exécution reste active
+  par repository, et une seule dans tout NOX.
+- Un échec ou une annulation met la file en pause, et NOX ne reprend jamais tout seul.
+
+**Frontières.** La file ne contourne ni le préflight Git, ni la review humaine, ni l'unicité de
+l'exécution active. Elle ne crée aucun second moteur Claude : le dispatcher choisit, le pipeline
+existant exécute. Les actions de file — inscrire, retirer, déplacer, mettre en pause — n'appellent
+ni OpenAI, ni Claude Code, et n'écrivent rien dans le repository. Une tâche inscrite ne se modifie,
+ne se supprime et ne se remet pas de côté tant qu'elle n'en est pas sortie.
 
 ### 2.2 Documents Markdown
 

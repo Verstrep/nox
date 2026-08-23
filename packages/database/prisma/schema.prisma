@@ -111,6 +111,29 @@ model Project {
   /// redevient alors possible.
   pendingBacklogProposalId String?
 
+  /// La file d'execution du projet est-elle autorisee a demarrer des taches ?
+  ///
+  /// ## Une autorisation permanente, pas un statut de travail
+  ///
+  /// `true` veut dire : « un humain a clique sur Start queue, et n'a pas mis en
+  /// pause depuis ». C'est ce qui permet a une tache inscrite de partir quand
+  /// ses conditions deviennent vraies, sans redemander l'accord a chaque fois.
+  ///
+  /// Ce n'est **pas** une autorisation de demarrer au boot : NOX ne declenche
+  /// rien au lancement du serveur. Une file active attend un evenement
+  /// applicatif — une tache terminee, une inscription, un « Try next ».
+  ///
+  /// Repasse a `false` des que la file se vide, pour qu'une file vide ne laisse
+  /// derriere elle aucune autorisation dormante.
+  executionQueueActive Boolean @default(false)
+
+  /// Prochaine position a attribuer dans la file d'execution.
+  ///
+  /// Meme regle que `nextTaskSequence` : il ne recule jamais. Un `MAX(sequence)`
+  /// releve puis incremente donnerait deux fois la meme position a deux
+  /// inscriptions simultanees ; une reservation transactionnelle, non.
+  nextQueueSequence Int @default(1)
+
   tasks              Task[]
   architectSessions  ArchitectSession[]
   memories           ProjectMemoryEntry[]
@@ -119,6 +142,7 @@ model Project {
   projectUpdates     ArchitectProjectUpdate[]
   backlogGenerations ArchitectBacklogGeneration[]
   backlogProposals   ArchitectBacklogProposal[]
+  queueEntries       TaskQueueEntry[]
 
   @@unique([mainArchitectSessionId])
   @@unique([activeBacklogGenerationId])
@@ -542,6 +566,9 @@ model Task {
 
   /// Dependances entrantes : les taches qui attendent celle-ci.
   dependents TaskDependency[] @relation("TaskDependencyTo")
+
+  /// Inscription dans la file d'execution du projet, le cas echeant.
+  queueEntry TaskQueueEntry?
 
   @@unique([projectId, sequence])
   @@index([projectId, status])
@@ -1362,4 +1389,67 @@ model TaskDependency {
   /// n'ait a lire avant d'ecrire.
   @@unique([taskId, dependsOnTaskId])
   @@index([dependsOnTaskId])
+}
+
+/// Inscription d'une tache dans la file d'execution de son projet.
+///
+/// ## Pourquoi une ligne plutot qu'un statut
+///
+/// Parce que « ou en est ce travail » et « est-il autorise a partir » sont deux
+/// questions differentes, comme les dependances de TASK-024. Une tache en file
+/// reste `READY` : sa presence ici dit l'intention, et rien d'autre. Un statut
+/// `QUEUED` aurait fait bouger `Task.status` sans geste humain, et aurait rendu
+/// impossible de distinguer une tache prete d'une tache prete **et** inscrite.
+///
+/// ## Ce que la ligne survit
+///
+/// Elle ne disparait pas quand l'execution demarre. Elle reste pendant
+/// `RUNNING`, pendant `REVIEW`, pendant une correction, et **apres un `Reopen`
+/// qui ramene la tache a `READY`** — jusqu'a ce que la tache soit acceptee, ou
+/// qu'un humain la retire. Tant qu'elle est la, la file ne passe pas a la
+/// suivante : un travail commence depuis la file mais non accepte n'est pas un
+/// travail termine. C'est `startedAt` qui rend ce dernier cas distinguable.
+model TaskQueueEntry {
+  id String @id @default(cuid())
+
+  projectId String
+  taskId    String
+
+  /// Position dans la file, attribuee par `Project.nextQueueSequence`.
+  ///
+  /// Les positions ne sont ni contigues, ni reutilisees : seul leur **ordre**
+  /// compte. Un deplacement echange deux valeurs, il ne renumerote pas la file.
+  sequence Int
+
+  createdAt DateTime @default(now())
+
+  /// Instant ou une execution est nee de cette inscription, ou `null`.
+  ///
+  /// La seule chose que `Task.status` ne sait pas dire. Une tache rouverte apres
+  /// une relecture redevient `READY`, exactement comme une tache jamais lancee ;
+  /// sans cette colonne, la file les confondrait et relancerait la premiere en
+  /// croyant demarrer la seconde.
+  ///
+  /// Elle n'est jamais remise a `null` : une inscription qui a commence son cycle
+  /// reste la barriere de la file jusqu'a ce que la tache soit acceptee — l'entree
+  /// disparait alors — ou qu'un humain la retire. Reinscrire une tache cree une
+  /// ligne neuve, dont le cycle recommence.
+  ///
+  /// Un instant plutot qu'un booleen : il ne coute pas plus cher et se lit dans
+  /// une base ouverte a la main.
+  startedAt DateTime?
+
+  /// `Cascade` des deux cotes : une inscription ne decrit rien sans sa tache, et
+  /// rien sans son projet. C'est le seul lien de NOX ou `Cascade` va de soi —
+  /// une entree de file ne porte aucune histoire a preserver.
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task    Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// Une tache n'apparait qu'une fois dans la file.
+  ///
+  /// Deux inscriptions simultanees de la meme tache ne produisent donc qu'une
+  /// ligne, sans qu'aucun code n'ait a lire avant d'ecrire.
+  @@unique([projectId, taskId])
+  @@unique([taskId])
+  @@index([projectId, sequence])
 }

@@ -514,6 +514,77 @@ rien depuis le disque, Git ou les documents restants.
 ne renomme aucun dossier, ne touche pas à Git, et ne réécrit ni le brief, ni le plan, ni la
 documentation du repository.
 
+### 6.2 quater File d'exécution
+
+**Une intention persistée, pas un ordonnanceur.** Une `TaskQueueEntry` dit « je veux que cette
+tâche s'exécute » ; elle ne dit rien de son état de travail. La tâche reste `READY` — il n'existe
+aucun statut `QUEUED`, pour la même raison qu'une dépendance ne pose jamais `BLOCKED` : un statut
+qui change sans geste humain se met à mentir.
+
+```text
+Task READY  →  TaskQueueEntry  →  Project.executionQueueActive  →  advanceQueue
+ (contrat)      (intention)          (autorisation permanente)       (choix)
+                                                                       ↓
+                                                            launchTaskRun (pipeline existant)
+```
+
+**Deux gestes humains, pas un.** Inscrire ne lance rien. Démarrer la file ouvre une autorisation
+permanente : à partir de là, NOX peut lancer les tâches **déjà inscrites** quand elles deviennent
+éligibles. Une file qui se vide referme cette autorisation, pour qu'aucune permission dormante ne
+s'applique à une tâche inscrite plus tard.
+
+**La sélection est déterministe, et sans blocage de tête.** `advanceQueue` prend la première
+entrée, par position, dont la tâche est `READY` et dont toutes les dépendances sont terminées. Une
+entrée qui attend est sautée et **garde sa place**. L'ordre de la file est une préférence ; les
+dépendances de `TASK-024` restent autoritaires.
+
+**Une entrée survit à son lancement.** Elle reste pendant `RUNNING`, pendant `REVIEW`, pendant une
+correction, et **après un `Reopen` qui ramène la tâche à `READY`** — jusqu'à ce que la tâche soit
+acceptée, ou qu'un humain la retire. C'est la barrière courante : tant qu'elle est là, la file ne
+passe pas à la suivante. Le `COMPLETED` de la **tâche**, et non celui de l'exécution, fait avancer
+la file.
+
+**Le départ d'une inscription est persisté, parce qu'aucun statut ne le porte.** Une tâche rouverte
+est `READY`, indiscernable d'une tâche jamais lancée : `TaskQueueEntry.startedAt`, posé dans la
+transaction qui crée l'exécution, est la seule chose qui les sépare. C'est la seule information de
+la file qui ne se dérive pas, et elle est en base plutôt qu'en mémoire pour survivre à un
+redémarrage. Le reste — élément courant, éligibilité, état affiché — continue de se dériver.
+
+Conséquence sur la reprise : la file **n'a rien à relancer**. Elle annonce `WAITING_CURRENT_TASK`,
+distinct d'un échec, et le départ se décide sur la page de la tâche. C'est aussi la seule tâche que
+le refus du lancement manuel épargne : ce refus vise ce qui doublerait un ordre préparé, pas ce que
+la file attend.
+
+**Un appel, au plus une exécution.** `advanceQueue` ne boucle jamais. L'avancement suivant vient
+d'un événement futur : une tâche acceptée, une inscription, un « Try next ». Cette contrainte est
+ce qui rend gérables la concurrence, la review, Git et les limites de Claude.
+
+**Aucun démarrage au boot.** Le dispatcher n'est appelé que depuis une Server Action, jamais au
+rendu d'une page ni au lancement du serveur. Une file laissée `ACTIVE` avant un redémarrage
+retrouve son autorisation, mais ne produit aucune exécution surprise : `ACTIVE` autorise un
+ordonnancement, pas un démarrage sans événement.
+
+**La file n'affaiblit aucune garantie existante.** Le préflight Git est celui de `TASK-011` — un
+repository qui porte des modifications non commitées arrête la progression, il ne la contourne pas.
+La review est celle de `TASK-011` — une exécution terminée attend une décision humaine. Le moteur
+est celui de `TASK-010` — `launchTaskRun` est le seul chemin vers un démarrage initial, appelé
+identiquement par la file et par le lancement manuel.
+
+**Le point de sérialisation est persistant.** `createRun` écrit la ligne d'exécution puis relit la
+base dans la même transaction, et annule si une autre exécution est déjà active sur ce repository.
+Deux avancements simultanés peuvent choisir deux tâches éligibles différentes ; un seul en ressort
+avec une exécution. Un verrou en mémoire ne survivrait ni à un redémarrage, ni à deux processus.
+
+**Une inscription gèle le contrat.** Une tâche inscrite ne se modifie pas, ne se supprime pas, et
+ne se remet ni en brouillon ni de côté à la main : l'inscription autorise l'exécution de **son
+contrat actuel**. Le retrait est un geste séparé, et il reste humain.
+
+**Un lancement manuel initial ne double pas une file préparée.** Tant qu'une entrée existe, il est
+refusé. Les corrections, elles, ne sont pas touchées : elles terminent un travail déjà commencé.
+
+**L'amorçage n'entre jamais dans la file.** `TASK-000` reçoit des permissions d'installation
+élargies et prépare la fondation ; elle se lance depuis sa propre page, explicitement.
+
 ### 6.3 Exécution Claude Code
 
 ```text

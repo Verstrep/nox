@@ -1,17 +1,11 @@
 "use server";
 
-import { getDatabaseClient, updateTaskStatus } from "@nox/database";
 import { TASK_STATUS } from "@nox/shared";
 import { revalidatePath } from "next/cache";
 
+import { applyTaskTransitionWithDefaultClient } from "@/lib/task-lifecycle";
+
 import type { ReviewDecisionState } from "./form-state";
-
-const UNKNOWN_TASK_MESSAGE =
-  "Cette tache n'existe pas dans ce projet. Revenez au backlog et rouvrez-la.";
-
-const FORBIDDEN_TRANSITION_MESSAGE =
-  "Cette tache n'est plus en review : son statut a change depuis l'affichage de cette page. " +
-  "Rechargez-la pour voir l'etat reel.";
 
 const UNEXPECTED_ERROR_MESSAGE =
   "Une erreur inattendue est survenue. Consultez les logs du serveur pour le detail.";
@@ -39,6 +33,17 @@ function readField(formData: FormData, field: string): string {
  * `updateTaskStatus`, seul point de passage vers l'ecriture, qui la revalide
  * contre la table des transitions manuelles : une tache qui aurait quitte
  * `REVIEW` entre l'affichage et le clic est refusee plutot qu'ecrasee.
+ *
+ * ## Ce qu'`Approve` declenche
+ *
+ * Accepter une tache est le seul evenement qui fait avancer la file
+ * d'execution : son inscription disparait, et NOX tente de lancer la suivante.
+ * « Tente » est le mot juste — la file peut etre en pause, la tache suivante
+ * peut attendre une dependance, et le repository peut porter des modifications
+ * non commitees. Aucun de ces cas n'est une erreur.
+ *
+ * `Reopen`, lui, ne libere rien : la tache redevient prete, garde sa place en
+ * tete de file, et rien ne repart sans un geste explicite.
  */
 export async function decideReviewAction(
   _previousState: ReviewDecisionState,
@@ -57,13 +62,9 @@ export async function decideReviewAction(
   const status = decision === "approve" ? TASK_STATUS.COMPLETED : TASK_STATUS.READY;
 
   try {
-    const result = await updateTaskStatus(getDatabaseClient(), taskId, projectId, status);
-
-    if (!result.ok) {
-      return {
-        error:
-          result.reason === "not_found" ? UNKNOWN_TASK_MESSAGE : FORBIDDEN_TRANSITION_MESSAGE,
-      };
+    const outcome = await applyTaskTransitionWithDefaultClient({ projectId, taskId, status });
+    if (!outcome.ok) {
+      return { error: outcome.message };
     }
   } catch (error) {
     console.error("[nox] Echec d'une decision de review :", error);
@@ -73,6 +74,7 @@ export async function decideReviewAction(
   revalidatePath(`/projects/${projectId}/tasks/${taskId}`);
   revalidatePath(`/projects/${projectId}/tasks`);
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/queue`);
 
   return { error: null, decided: decision };
 }

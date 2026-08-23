@@ -6,15 +6,17 @@ import {
   getDatabaseClient,
   getProjectById,
   getTaskById,
+  isTaskQueued,
   listRunsByTask,
-  updateTaskStatus,
 } from "@nox/database";
 import { isReservedTaskStatus, isTaskStatus } from "@nox/shared";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { TASK_QUEUED_MESSAGE } from "@/lib/queue-display";
 import { deleteTaskDocument } from "@/lib/runner/client";
 import { describeRunnerFailure } from "@/lib/runner/errors";
+import { applyTaskTransitionWithDefaultClient } from "@/lib/task-lifecycle";
 import {
   checkTaskDeletion,
   taskHasDependentsMessage,
@@ -27,10 +29,6 @@ import type { DeleteTaskState, TaskStatusState } from "./form-state";
 
 const UNKNOWN_TASK_MESSAGE =
   "Cette tache n'existe pas dans ce projet. Revenez au backlog et rouvrez-la.";
-
-const FORBIDDEN_TRANSITION_MESSAGE =
-  "Ce changement de statut n'est pas autorise depuis l'etat actuel de la tache. " +
-  "Rechargez la page pour voir les transitions possibles.";
 
 const RESERVED_STATUS_MESSAGE =
   "Ce statut est reserve aux executions de Claude Code : il ne peut pas etre pose a la main.";
@@ -80,13 +78,12 @@ export async function updateTaskStatusAction(
   }
 
   try {
-    const result = await updateTaskStatus(getDatabaseClient(), taskId, projectId, status);
-
-    if (!result.ok) {
-      return {
-        error:
-          result.reason === "not_found" ? UNKNOWN_TASK_MESSAGE : FORBIDDEN_TRANSITION_MESSAGE,
-      };
+    // La transition et l'avancement de la file vivent dans le meme service :
+    // accepter une tache est le seul evenement qui libere la file, et il se
+    // produit depuis plusieurs surfaces.
+    const outcome = await applyTaskTransitionWithDefaultClient({ projectId, taskId, status });
+    if (!outcome.ok) {
+      return { error: outcome.message };
     }
   } catch (error) {
     console.error("[nox] Echec du changement de statut d'une tache :", error);
@@ -94,6 +91,7 @@ export async function updateTaskStatusAction(
   }
 
   revalidateTask(projectId, taskId);
+  revalidatePath(`/projects/${projectId}/queue`);
   return { error: null };
 }
 
@@ -203,6 +201,7 @@ export async function deleteTaskAction(
         documentSyncStatus: task.documentSyncStatus,
         runCount: runs.length,
         dependents,
+        queued: await isTaskQueued(db, task.id),
       },
       confirmationCode,
     );
@@ -236,9 +235,11 @@ export async function deleteTaskAction(
         error:
           result.reason === "has_runs"
             ? TASK_HAS_RUNS_MESSAGE
-            : result.reason === "has_dependents"
-              ? taskHasDependentsMessage(result.dependents)
-              : UNKNOWN_TASK_MESSAGE,
+            : result.reason === "queued"
+              ? TASK_QUEUED_MESSAGE
+              : result.reason === "has_dependents"
+                ? taskHasDependentsMessage(result.dependents)
+                : UNKNOWN_TASK_MESSAGE,
       };
     }
   } catch (error) {

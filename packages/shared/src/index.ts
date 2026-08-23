@@ -323,6 +323,38 @@ export type {
 } from "./task-documents.js";
 
 export {
+  EXECUTION_QUEUE_ERROR,
+  LAUNCH_REFUSAL,
+  EXECUTION_QUEUE_PENDING,
+  QUEUE_DISPATCH,
+  QUEUE_STATE,
+  QUEUE_STATES,
+  TASK_IS_QUEUED,
+  checkQueueCandidate,
+  deriveQueueState,
+  isQueueBarrier,
+  isQueueEntryEligible,
+  isQueueLockedStatusChange,
+  isQueueState,
+  selectNextQueueEntry,
+  selectQueueBarrier,
+} from "./execution-queue.js";
+
+export type {
+  ExecutionQueueErrorCode,
+  LaunchOutcome,
+  LaunchRefusalCode,
+  QueueCandidate,
+  QueueCandidateCheck,
+  QueueDispatchOutcome,
+  QueueEntryFacts,
+  QueueMoveDirection,
+  QueueReadModel,
+  QueueRepositoryReadiness,
+  QueueState,
+} from "./execution-queue.js";
+
+export {
   PROJECT_DELETION_ERROR,
   TASK_ARTIFACT_OUTCOME,
   countModifiedArtifacts,
@@ -647,6 +679,7 @@ export type {
   GuidedCorrectionFact,
   GuidedCorrectionReadiness,
   GuidedLaunchReadiness,
+  GuidedQueueFact,
   GuidedProgressEntry,
   GuidedProgressState,
   GuidedProgressStep,

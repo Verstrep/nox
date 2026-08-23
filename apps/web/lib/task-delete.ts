@@ -11,6 +11,7 @@
  * concerne le fichier reel.
  */
 
+import { TASK_QUEUED_MESSAGE } from "./queue-display.ts";
 import {
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_STATUS,
@@ -73,6 +74,13 @@ export type TaskDeletionState = {
    * document supprime et une tache toujours la.
    */
   dependents: readonly { code: string; title: string }[];
+  /**
+   * La tache est inscrite dans la file d'execution.
+   *
+   * Verifie ici pour la meme raison que les dependants : le refus doit tomber
+   * **avant** que le document ne soit retire du repository.
+   */
+  queued: boolean;
 };
 
 export type TaskDeletionCheck = { ok: true } | { ok: false; message: string };
@@ -99,6 +107,10 @@ export function checkTaskDeletion(
 
   if (state.dependents.length > 0) {
     return { ok: false, message: taskHasDependentsMessage(state.dependents) };
+  }
+
+  if (state.queued) {
+    return { ok: false, message: TASK_QUEUED_MESSAGE };
   }
 
   if (state.status === TASK_STATUS.RUNNING) {

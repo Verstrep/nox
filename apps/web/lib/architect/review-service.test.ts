@@ -186,15 +186,16 @@ async function newRun(): Promise<{ runId: string; task: DevelopmentTaskDetail }>
   });
   assert.ok(task !== null);
 
-  const run = await createRun(db, {
+  const created = await createRun(db, {
+    projectId: task.projectId,
     taskId: task.id,
     prompt: "Prompt.",
     promptSha256: "a".repeat(64),
     runnerRunId: `3f2504e0-4f89-41d3-9a0c-${suffix}`,
   });
-  assert.ok(run !== null);
+  assert.ok(created.ok);
 
-  return { runId: run.id, task };
+  return { runId: created.run.id, task };
 }
 
 type AnalyzeOptions = {

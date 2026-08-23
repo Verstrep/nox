@@ -25,6 +25,7 @@
  */
 
 import { TASK_STATUS, createStatusGuard, type TaskStatus } from "./statuses.js";
+import { TASK_IS_QUEUED } from "./execution-queue.js";
 
 /** Refus possibles d'une edition. */
 export const TASK_EDIT_ERROR = {
@@ -36,6 +37,15 @@ export const TASK_EDIT_ERROR = {
   STATUS_NOT_EDITABLE: "TASK_EDIT_STATUS_NOT_EDITABLE",
   /** Elle a change depuis l'ouverture du formulaire. */
   STALE: "TASK_EDIT_STALE",
+  /**
+   * Elle est inscrite dans la file d'execution.
+   *
+   * Le code est celui de `TASK_IS_QUEUED`, et non une seconde chaine : le refus
+   * est le meme, qu'il vienne de l'edition, d'une transition de statut ou d'une
+   * suppression. Un code par surface aurait fait diverger trois messages qui
+   * decrivent un seul fait.
+   */
+  QUEUED: TASK_IS_QUEUED,
 } as const;
 
 export type TaskEditErrorCode = (typeof TASK_EDIT_ERROR)[keyof typeof TASK_EDIT_ERROR];

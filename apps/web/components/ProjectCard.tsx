@@ -7,6 +7,7 @@ import {
   waitingLabel,
   type ProjectCard as Card,
 } from "@/lib/project-dashboard";
+import { queuedCountLabel } from "@/lib/queue-display";
 import { taskStatusTone } from "@/lib/task-display";
 
 import { StatusBadge } from "./StatusBadge";
@@ -24,6 +25,9 @@ import { StatusBadge } from "./StatusBadge";
  */
 export function ProjectCard({ card }: { card: Card }) {
   const waiting = waitingLabel(card.waitingOnDependencies);
+  // Une ligne « 0 queued » sur chaque carte serait du bruit : la file ne se
+  // signale que lorsqu'elle contient quelque chose.
+  const queued = queuedCountLabel(card.queuedCount);
 
   return (
     <li className="rounded-lg border border-zinc-800 bg-zinc-950/40 transition-colors hover:border-zinc-700">
@@ -58,6 +62,14 @@ export function ProjectCard({ card }: { card: Card }) {
             <dt className="text-xs uppercase tracking-wider text-zinc-600">Bootstrap</dt>
             <dd className="text-zinc-300">{card.bootstrapLabel}</dd>
           </div>
+          {queued === null ? null : (
+            <div className="flex items-center gap-2">
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Queue</dt>
+              <dd className="text-zinc-300">
+                {queued} · {card.queueActive ? "Active" : "Paused"}
+              </dd>
+            </div>
+          )}
         </dl>
 
         {card.breakdown.length === 0 ? null : (

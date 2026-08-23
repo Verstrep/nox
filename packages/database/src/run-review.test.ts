@@ -85,15 +85,16 @@ async function newRun(validationCommands: string[] = []): Promise<{ runId: strin
   });
   assert.ok(task !== null);
 
-  const run = await createRun(db, {
+  const created = await createRun(db, {
+    projectId: project.id,
     taskId: task.id,
     prompt: "Prompt.",
     promptSha256: "a".repeat(64),
     runnerRunId: `3f2504e0-4f89-41d3-9a0c-${suffix}`,
   });
-  assert.ok(run !== null);
+  assert.ok(created.ok);
 
-  return { runId: run.id };
+  return { runId: created.run.id };
 }
 
 function fileChange(position: number, overrides: Record<string, unknown> = {}) {

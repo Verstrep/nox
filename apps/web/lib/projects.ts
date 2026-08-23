@@ -16,7 +16,7 @@ import {
 } from "@nox/database";
 import { connection } from "next/server";
 
-import { TASK_STATUSES, type TaskStatus } from "@nox/shared";
+import { TASK_STATUSES, type QueueReadModel, type TaskStatus } from "@nox/shared";
 
 import {
   projectCard,
@@ -24,6 +24,8 @@ import {
   type ProjectCard,
   type ProjectCardFacts,
 } from "./project-dashboard.ts";
+import { readQueue } from "./queue.ts";
+import { claudePreflight } from "./runner/client.ts";
 
 export async function loadProjects(): Promise<Project[]> {
   await connection();
@@ -74,5 +76,46 @@ function emptyFacts(): ProjectCardFacts {
     bootstrapStatus: null,
     readyWaitingOnDependencies: 0,
     lastTaskActivityAt: null,
+    queuedCount: 0,
+    queueActive: false,
   };
+}
+
+/**
+ * File d'execution d'un projet, sans sonder le repository.
+ *
+ * Utilisee partout ou l'etat suffit : page d'un projet, page d'une tache.
+ * Ouvrir ces pages ne doit interroger ni le runner, ni Git.
+ */
+export async function loadQueue(projectId: string): Promise<QueueReadModel> {
+  await connection();
+  return readQueue(getDatabaseClient(), projectId, "unknown");
+}
+
+/**
+ * File d'execution **avec** l'etat du repository.
+ *
+ * Reservee a la page de la file, seule surface ou la reponse sert : c'est la
+ * qu'on cherche a savoir pourquoi rien ne part. La sonde est le preflight
+ * existant, en lecture seule ; NOX ne tient pas un second diagnostic Git.
+ *
+ * Elle n'a lieu que si une tache pourrait effectivement partir : inutile
+ * d'interroger le runner pour afficher « attend une dependance ».
+ */
+export async function loadQueueWithRepository(projectId: string): Promise<QueueReadModel> {
+  await connection();
+  const db = getDatabaseClient();
+
+  const model = await readQueue(db, projectId, "unknown");
+  if (!model.active || model.current !== null || model.nextEligible === null) {
+    return model;
+  }
+
+  const project = await getProjectById(db, projectId);
+  if (project === null) {
+    return model;
+  }
+
+  const preflight = await claudePreflight(project.repositoryPath);
+  return readQueue(db, projectId, preflight.ok ? "ready" : "not_ready");
 }

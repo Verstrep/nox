@@ -1,0 +1,22 @@
+-- La barriere d'une file survit a un `Reopen`.
+--
+-- Additive : une colonne facultative ajoutee a "TaskQueueEntry". Aucune table
+-- n'est reconstruite, aucune donnee n'est lue ni reecrite, aucun index n'est
+-- touche.
+--
+-- La migration precedente est deja appliquee sur les bases existantes : cette
+-- correction en ajoute une seconde plutot que de reecrire la premiere, dont
+-- l'empreinte enregistree ne doit pas changer.
+--
+-- ## Ce que cette colonne repond
+--
+-- « Cette inscription a-t-elle deja commence son cycle ? » — la seule question
+-- que `Task.status` ne sait pas trancher. Une tache rouverte apres une relecture
+-- redevient `READY`, exactement comme une tache jamais lancee.
+--
+-- Les inscriptions existantes recoivent `NULL`, c'est-a-dire « pas encore
+-- commencee ». C'est la valeur sure : au pire, une entree dont l'execution est
+-- en cours reste barriere par son statut, qui suffit tant que la tache n'est
+-- pas revenue a `READY`.
+
+ALTER TABLE "TaskQueueEntry" ADD COLUMN "startedAt" DATETIME;

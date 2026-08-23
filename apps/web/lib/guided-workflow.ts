@@ -39,6 +39,7 @@ import {
   getDatabaseClient,
   getRunResumeContext,
   listFeedbacksForSourceRun,
+  listQueueEntries,
   listTaskDependencies,
   listTaskRunFacts,
   type ArchitectReviewSummary,
@@ -51,6 +52,7 @@ import {
   TASK_STATUS,
   checkResumeCandidate,
   deriveGuidedWorkflowState,
+  isQueueBarrier,
   isRunKind,
   selectGuidedCurrentRun,
   summarizeTaskDependencies,
@@ -59,6 +61,7 @@ import {
   type GuidedCorrectionFact,
   type GuidedCorrectionReadiness,
   type GuidedLaunchReadiness,
+  type GuidedQueueFact,
   type GuidedRunFact,
   type GuidedWorkflowState,
   type TaskDependencySummary,
@@ -210,13 +213,31 @@ export async function loadGuidedWorkflow(input: {
   const architectSummary =
     current === null || !current.hasReview ? null : await getArchitectReviewSummary(db, current.id);
 
+  // La file est lue en base : deux comptages, aucune sonde. Une tache dont le
+  // projet possede une file en attente n'a pas de lancement direct a preparer,
+  // et sonder le runner pour elle serait un aller-retour pour rien.
+  const queuedEntries = await listQueueEntries(db, input.project.id);
+  // La barriere se derive comme partout ailleurs, par la meme fonction : la
+  // premiere entree dont le cycle a commence, ou dont la tache a quitte
+  // `READY`. Une tache rouverte en fait partie, bien qu'elle soit `READY`.
+  const barrier = queuedEntries.find(isQueueBarrier) ?? null;
+  const queue: GuidedQueueFact = {
+    queued: queuedEntries.some((entry) => entry.taskId === task.id),
+    pendingEntries: queuedEntries.length,
+    isCurrent: barrier !== null && barrier.taskId === task.id,
+  };
+
   // Une tache qui attend une autre tache n'a rien a lancer : sonder le runner y
   // serait un aller-retour pour rien, et une panne du runner y afficherait un
   // blocage sans objet. Le refus, lui, ne depend pas de cette sonde — il est
   // reverifie cote serveur au lancement.
-  const launch = dependencies.allSatisfied
-    ? await probeLaunch(input.project.repositoryPath, task, hasActiveRun)
-    : ({ state: "unknown" } as const);
+  // La barriere courante, elle, se lance depuis cette page : la sonde sert donc,
+  // et l'ecran doit dire la verite sur le repository plutot que « je ne sais
+  // pas ».
+  const launch =
+    dependencies.allSatisfied && (queue.pendingEntries === 0 || queue.isCurrent)
+      ? await probeLaunch(input.project.repositoryPath, task, hasActiveRun)
+      : ({ state: "unknown" } as const);
   const correction = await probeCorrection(
     db,
     input.project.repositoryPath,
@@ -233,6 +254,7 @@ export async function loadGuidedWorkflow(input: {
     designedWithArchitect: architectSession !== null,
     runs,
     launch,
+    queue,
     architect: toArchitectFact(config.ok, architectSummary),
     correction,
   });

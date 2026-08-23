@@ -11,6 +11,7 @@ import { notFound } from "next/navigation";
 
 import { GuidedWorkflow } from "@/components/GuidedWorkflow";
 import { TaskDependencies } from "@/components/TaskDependencies";
+import { TaskQueue } from "@/components/TaskQueue";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
@@ -28,7 +29,7 @@ import { formatDuration, newRunUrl, runStatusTone, runUrl } from "@/lib/run-disp
 import { loadTaskRuns } from "@/lib/runs";
 import { taskStatusTone, taskUrl } from "@/lib/task-display";
 import { taskEditUrl } from "@/lib/task-display";
-import { loadTask } from "@/lib/tasks";
+import { loadTask, loadTaskQueueState } from "@/lib/tasks";
 
 import { retryTaskDocumentAction } from "./actions";
 import { DeleteTaskForm } from "./DeleteTaskForm";
@@ -293,7 +294,14 @@ export default async function TaskDetailPage({
   // Deux etats derives, jamais stockes : la tache est-elle encore modifiable, et
   // qu'attend-elle ? Le premier decide de ce qui est **propose** ; l'editeur et
   // la Server Action decident de ce qui est permis.
-  const editable = checkTaskEditable({ status: task.status, runCount: runs.length }).ok;
+  // La file est lue en base, sans sonder le repository : savoir qu'une tache est
+  // inscrite ne demande pas d'interroger Git.
+  const queue = await loadTaskQueueState(project.id, task.id);
+  // Une tache inscrite autorise l'execution de son contrat actuel : l'editeur
+  // n'est donc pas propose tant qu'elle y figure. La Server Action refuse de
+  // toute facon, et c'est elle qui fait autorite.
+  const editable =
+    !queue.queued && checkTaskEditable({ status: task.status, runCount: runs.length }).ok;
   // Une projection, pas une machine d'etat : elle se recalcule entierement a
   // chaque rendu, et ne declenche ni appel IA, ni execution, ni transition.
   const workflow = await loadGuidedWorkflow({ project, task });
@@ -344,6 +352,14 @@ export default async function TaskDetailPage({
           projectId={project.id}
           dependencies={workflow.dependencies}
           editHref={editable ? taskEditUrl(project.id, task.id) : null}
+        />
+
+        <TaskQueue
+          projectId={project.id}
+          taskId={task.id}
+          taskKind={task.kind}
+          taskStatus={task.status}
+          queue={queue}
         />
 
         <SectionCard

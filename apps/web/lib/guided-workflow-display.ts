@@ -32,6 +32,7 @@ import { architectAnalysisUrl, architectReviewUrl } from "./architect/review-dis
 import { correctionUrl, requestChangesUrl } from "./correction-display.ts";
 import { reviewUrl } from "./review-display.ts";
 import { newRunUrl, runUrl } from "./run-display.ts";
+import { queueUrl } from "./queue-display.ts";
 import { taskUrl } from "./task-display.ts";
 
 /** Identifiants des sections ancrables de la page d'une tache. */
@@ -79,6 +80,9 @@ export function guidedActionHref(
 
     case GUIDED_ACTION.RUN_CLAUDE:
       return newRunUrl(projectId, taskId);
+
+    case GUIDED_ACTION.OPEN_QUEUE:
+      return queueUrl(projectId);
 
     case GUIDED_ACTION.OPEN_RUN:
       return withRun((runId) => runUrl(projectId, taskId, runId));

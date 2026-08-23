@@ -116,6 +116,8 @@ export const GUIDED_ACTION = {
   RETRY: "RETRY",
   /** Preparer une execution de Claude Code. */
   RUN_CLAUDE: "RUN_CLAUDE",
+  /** Ouvrir la file d'execution du projet. */
+  OPEN_QUEUE: "OPEN_QUEUE",
   /** Suivre l'execution en cours. */
   OPEN_RUN: "OPEN_RUN",
   /** Consulter l'historique des executions de la tache. */
@@ -172,6 +174,14 @@ export const GUIDED_BLOCKER = {
   TASK_BLOCKED: "TASK_BLOCKED",
   /** Une ou plusieurs dependances explicites ne sont pas terminees. */
   DEPENDENCIES_UNRESOLVED: "DEPENDENCIES_UNRESOLVED",
+  /**
+   * Le projet possede une file d'execution en attente.
+   *
+   * Le lancement direct est alors refuse : l'ordre prepare ne doit pas se
+   * contourner par accident. Ce n'est pas une panne — c'est une file qui attend
+   * d'etre demarree.
+   */
+  EXECUTION_QUEUE_PENDING: "EXECUTION_QUEUE_PENDING",
 } as const;
 
 export type GuidedBlockerCode = (typeof GUIDED_BLOCKER)[keyof typeof GUIDED_BLOCKER];
@@ -320,6 +330,23 @@ export type GuidedCorrectionFact = {
   readiness: GuidedCorrectionReadiness;
 };
 
+/** Ce que la file d'execution change pour cette tache. */
+export type GuidedQueueFact = {
+  /** Cette tache est inscrite dans la file. */
+  queued: boolean;
+  /** Nombre d'inscriptions dans la file du projet, celle-ci comprise. */
+  pendingEntries: number;
+  /**
+   * Cette tache est la barriere courante de la file.
+   *
+   * Elle a deja lance une execution depuis son inscription, et n'a pas ete
+   * acceptee. La file l'attend et ne la relancera pas : c'est donc depuis sa
+   * propre page qu'elle repart, et l'ecran doit proposer ce geste plutot que de
+   * renvoyer vers une file qui n'attend que lui.
+   */
+  isCurrent: boolean;
+};
+
 export type GuidedWorkflowFacts = {
   taskStatus: TaskStatus;
   /**
@@ -337,6 +364,13 @@ export type GuidedWorkflowFacts = {
   /** Executions, de la plus recente a la plus ancienne. */
   runs: readonly GuidedRunFact[];
   launch: GuidedLaunchReadiness;
+  /**
+   * Etat de la file d'execution du projet, autour de cette tache.
+   *
+   * `pendingEntries` compte les inscriptions du **projet**, pas de la tache : un
+   * lancement direct est refuse des qu'il en existe une, quelle qu'elle soit.
+   */
+  queue: GuidedQueueFact;
   architect: GuidedArchitectFact;
   correction: GuidedCorrectionFact | null;
 };
@@ -989,6 +1023,17 @@ function readyState(facts: GuidedWorkflowFacts): PartialState {
     return waitingForDependenciesState(facts.unresolvedDependencies);
   }
 
+  // La file passe avant le lancement direct. Proposer les deux cote a cote
+  // inviterait a contourner l'ordre qu'on vient de preparer — et la Server
+  // Action refuserait de toute facon.
+  //
+  // Sauf pour la barriere courante : une tache rouverte est precisement celle
+  // que la file attend, et la file ne la relancera pas d'elle-meme. La renvoyer
+  // vers la file serait un aller-retour sans issue.
+  if (facts.queue.pendingEntries > 0 && !facts.queue.isCurrent) {
+    return queuedReadyState(facts);
+  }
+
   const blockers: GuidedBlocker[] = [];
 
   if (facts.documentSyncStatus !== TASK_DOCUMENT_SYNC_STATUS.SYNCED) {
@@ -1017,15 +1062,56 @@ function readyState(facts: GuidedWorkflowFacts): PartialState {
 
   return {
     stage: GUIDED_STAGE.READY_TO_RUN,
-    summary: "Cette tache est prete a etre envoyee a Claude Code.",
-    reason: launchable
-      ? "La preparation montre le prompt exact, les commandes autorisees et l'etat du repository. " +
-        "Rien ne demarre avant le clic de lancement."
-      : "Le lancement n'est pas possible en l'etat. NOX ne pretend pas le contraire : corrigez ce qui " +
-        "est signale ci-dessous, puis rechargez cette page.",
+    summary: facts.queue.isCurrent
+      ? "Cette tache est la tache courante de la file d'execution, et attend d'etre relancee."
+      : "Cette tache est prete a etre envoyee a Claude Code.",
+    reason: !launchable
+      ? "Le lancement n'est pas possible en l'etat. NOX ne pretend pas le contraire : corrigez ce qui " +
+        "est signale ci-dessous, puis rechargez cette page."
+      : facts.queue.isCurrent
+        ? "Son travail a commence depuis la file et n'a pas ete accepte : la file l'attend et ne la " +
+          "relancera pas d'elle-meme. Le depart se decide ici, et rien ne demarre avant le clic."
+        : "La preparation montre le prompt exact, les commandes autorisees et l'etat du repository. " +
+          "Rien ne demarre avant le clic de lancement.",
     recommendedAction: launchable ? action(GUIDED_ACTION.RUN_CLAUDE) : null,
-    alternativeActions: [action(GUIDED_ACTION.BACK_TO_DRAFT)],
+    // `Back to draft` est refuse sur une tache inscrite : le proposer serait
+    // promettre un geste qui echouerait. La file, elle, reste a un clic.
+    alternativeActions: facts.queue.queued
+      ? [action(GUIDED_ACTION.OPEN_QUEUE)]
+      : [action(GUIDED_ACTION.BACK_TO_DRAFT)],
     blockers,
+    architectBlockers: [],
+  };
+}
+
+/**
+ * Tache prete, dans un projet dont la file attend.
+ *
+ * L'etape reste `READY_TO_RUN` : la tache **est** prete, et rien n'est casse.
+ * Ce qui change est la porte par laquelle elle passera.
+ */
+function queuedReadyState(facts: GuidedWorkflowFacts): PartialState {
+  const alternatives: GuidedAction[] = [];
+  // `Back to draft` est refuse sur une tache inscrite : le proposer serait
+  // promettre un geste qui echouerait.
+  if (!facts.queue.queued) {
+    alternatives.push(action(GUIDED_ACTION.BACK_TO_DRAFT));
+  }
+
+  return {
+    stage: GUIDED_STAGE.READY_TO_RUN,
+    summary: facts.queue.queued
+      ? "Cette tache est inscrite dans la file d'execution."
+      : "Ce projet possede une file d'execution en attente.",
+    reason: facts.queue.queued
+      ? "Elle partira depuis la file, quand celle-ci sera active et que ses conditions seront " +
+        "reunies. Tant qu'elle y figure, son contrat est gele."
+      : "Le lancement direct est refuse tant que des taches attendent dans la file : l'ordre " +
+        "prepare ne doit pas se contourner par accident. Inscrivez cette tache, ou retirez les " +
+        "autres de la file.",
+    recommendedAction: action(GUIDED_ACTION.OPEN_QUEUE),
+    alternativeActions: alternatives,
+    blockers: [blocker(GUIDED_BLOCKER.EXECUTION_QUEUE_PENDING)],
     architectBlockers: [],
   };
 }

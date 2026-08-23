@@ -19,6 +19,24 @@ export {
 } from "./projects.js";
 
 export {
+  countQueueEntries,
+  dequeueTask,
+  enqueueTask,
+  isQueueActive,
+  isTaskQueued,
+  listQueueEntries,
+  markQueueEntryStarted,
+  moveQueueEntry,
+  queuePositionOf,
+  setQueueActive,
+  type DequeueResult,
+  type MoveQueueResult,
+  type QueueOperationResult,
+  type SetQueueActiveResult,
+  type TaskQueueEntryRow,
+} from "./task-queue.js";
+
+export {
   PROJECT_DELETION_ORDER,
   deleteProjectState,
   listOwnedTaskArtifacts,
@@ -133,6 +151,7 @@ export {
   startTaskExecution,
   updateRunFromRunner,
   type CreateRunInput,
+  type CreateRunResult,
   type RunGitInput,
   type RunOutcomeInput,
   type RunnerRunReport,
