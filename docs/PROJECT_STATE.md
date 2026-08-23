@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 15 août 2026, à l'issue de `TASK-021`.
+**Dernière mise à jour** : 22 août 2026, à l'issue de `TASK-025`.
 
 ---
 
@@ -41,12 +41,12 @@ sans clic.
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 20 |
-| Migrations appliquées | 16 |
-| Routes du runner | 17, dont une seule publique (`GET /health`) |
-| Pages de l'application web | 30 |
-| Tests automatisés | 3 382, dont 5 ignorés sous Windows |
-| Décisions consignées | 306 |
+| Modèles Prisma | 21 |
+| Migrations appliquées | 17 |
+| Routes du runner | 18, dont une seule publique (`GET /health`) |
+| Pages de l'application web | 33 |
+| Tests automatisés | 3 497, dont 6 ignorés sous Windows |
+| Décisions consignées | 313 |
 
 ---
 
@@ -57,18 +57,36 @@ actuelles, et les **frontières** qu'elle ne franchit jamais.
 
 ### 2.1 Projets
 
-**Disponible.** Créer un projet avec un nom et une description, le lister, le consulter.
-Suivre son statut parmi `DRAFT`, `ACTIVE`, `PAUSED`, `COMPLETED`, `ARCHIVED`. Associer un
-projet à un dossier du poste : NOX vérifie que le chemin existe, que c'est un repository Git,
-et affiche sa branche et l'état de son dossier de travail.
+**Disponible.** Créer un projet avec un nom et une description, le renommer, le consulter,
+le supprimer de NOX. Suivre son statut parmi `DRAFT`, `ACTIVE`, `PAUSED`, `COMPLETED`,
+`ARCHIVED`. Associer un projet à un dossier du poste : NOX vérifie que le chemin existe, que
+c'est un repository Git, et affiche sa branche et l'état de son dossier de travail.
+
+La page d'accueil est un **tableau de bord des projets** : une carte par projet, avec le résumé
+de son brief, ses compteurs de tâches par statut, l'état de son amorçage et sa dernière
+activité. Tout y est dérivé à chaque rendu ; rien n'est stocké.
+
+Supprimer un projet retire **tout son état NOX** — conversation, brief, plan, mémoire, backlog,
+tâches, dépendances, exécutions, reviews — en une transaction, plus les documents
+`tasks/TASK-xxx.md` que NOX a lui-même écrits. Le repository, son code, son `.git` et sa
+documentation applicative sont préservés. Le même dossier peut ensuite être réenregistré comme
+un projet réellement neuf.
 
 **Limites.**
 
-- Aucune suppression de projet. Ni corbeille, ni archivage réel, ni restauration.
+- La suppression est irréversible : ni corbeille, ni archivage réel, ni restauration.
+- Une exécution active interdit la suppression ; NOX ne l'annule pas à la place de
+  l'utilisateur.
 - Le chemin d'un repository ne se modifie pas après enregistrement.
+- Un document de tâche dont la révision n'a jamais été enregistrée n'est pas nettoyé : NOX ne
+  peut pas prouver qu'il lui appartient.
+- Ni recherche, ni filtre, ni pagination sur le tableau de bord.
 
 **Frontières.** Un chemin absolu ne remonte jamais au navigateur, et le chemin d'un repository
-se relit toujours en base à partir de l'identifiant du projet — jamais depuis un formulaire.
+se relit toujours en base à partir de l'identifiant du projet — jamais depuis un formulaire. La
+suppression n'accepte aucun chemin du navigateur : la liste des documents à retirer est
+reconstruite en base. Aucun `git add`, aucun commit, aucun push, aucun `restore`, et jamais
+un fichier que NOX n'a pas écrit.
 
 ### 2.2 Documents Markdown
 

@@ -36,6 +36,8 @@ base SQLite dans le dossier du projet.
 | **V1 Backlog** | Générer le backlog des tâches restantes, le relire, le réordonner, et créer les tâches en un lot |
 | **Bootstrap** | Préparer le repository et sa documentation fondamentale avec `TASK-000`, construite sans appel à une IA |
 | **Dépendances** | Dire qu'une tâche en attend une autre, et modifier une tâche tant qu'elle n'a jamais été exécutée |
+| **Tableau de bord** | Voir d'un coup d'œil quels projets existent et où en est chacun, sans ouvrir une seule tâche |
+| **Cycle de vie** | Renommer un projet, ou le supprimer de NOX — le repository, son code et son `.git` restent intacts |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
 modèles, aucun commit, aucun push, aucun résumé silencieux, aucune estimation de coût. Les

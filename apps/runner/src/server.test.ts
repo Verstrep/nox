@@ -9,12 +9,14 @@ import type {
   CorrectionPreflightRequest,
   CorrectionPreflightResult,
 } from "./claude/correction-preflight.ts";
+import type { ProjectTaskArtifact } from "@nox/shared";
 import { createRunnerServer } from "./server.ts";
 import type { ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
 import type { CreateDocumentResult } from "./repositories/documents/create-document.ts";
 import type { CreateTaskDocumentResult } from "./repositories/tasks/create-task-document.ts";
 import type { DeleteDocumentResult } from "./repositories/documents/delete-document.ts";
+import type { DeleteProjectDocumentsResult } from "./repositories/tasks/delete-project-documents.ts";
 import type { DeleteTaskDocumentResult } from "./repositories/tasks/delete-task-document.ts";
 import type { PreflightResult } from "./claude/preflight.ts";
 import { ClaudeRunRegistry } from "./claude/registry.ts";
@@ -256,6 +258,32 @@ const receivedTaskDeleteCalls: {
   expectedRevision: string | null;
 }[] = [];
 
+/** Nettoyages d'artefacts de projet recus. */
+const receivedProjectCleanupCalls: {
+  repositoryPath: string;
+  artifacts: readonly ProjectTaskArtifact[];
+}[] = [];
+
+function fakeDeleteProjectTaskDocuments(
+  repositoryPath: string,
+  artifacts: readonly ProjectTaskArtifact[],
+): Promise<DeleteProjectDocumentsResult> {
+  receivedProjectCleanupCalls.push({ repositoryPath, artifacts: [...artifacts] });
+
+  if (artifacts.some((artifact) => !/^TASK-\d{3,}$/.test(artifact.taskCode))) {
+    return Promise.resolve({ ok: false, code: "TASK_CODE_INVALID" });
+  }
+
+  return Promise.resolve({
+    ok: true,
+    documents: artifacts.map((artifact) => ({
+      taskCode: artifact.taskCode,
+      path: `tasks/${artifact.taskCode}.md`,
+      outcome: artifact.taskCode === "TASK-404" ? "ABSENT" : "REMOVED",
+    })),
+  });
+}
+
 function fakeDeleteTaskDocument(
   repositoryPath: string,
   taskCode: string,
@@ -384,6 +412,7 @@ before(async () => {
     deleteDocument: fakeDelete,
     createTaskDocument: fakeCreateTaskDocument,
     deleteTaskDocument: fakeDeleteTaskDocument,
+    deleteProjectTaskDocuments: fakeDeleteProjectTaskDocuments,
     log: () => undefined,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -1425,6 +1454,103 @@ describe("POST /repositories/documents/delete", () => {
     assert.equal(response.text.includes(TOKEN), false);
     assert.equal(response.text.includes(REPOSITORY), false);
     assert.equal(response.text.includes("D:\\"), false);
+  });
+});
+
+describe("POST /repositories/tasks/delete-project-documents", () => {
+  const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
+  const REPOSITORY = "D:\\Projets\\depot";
+
+  function body(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      repositoryPath: REPOSITORY,
+      artifacts: [
+        { taskCode: "TASK-000", expectedRevision: CURRENT_REVISION },
+        { taskCode: "TASK-001", expectedRevision: CURRENT_REVISION },
+      ],
+      ...overrides,
+    });
+  }
+
+  it("rapporte le sort de chaque document", async () => {
+    const response = await call("/repositories/tasks/delete-project-documents", {
+      ...authorized,
+      body: body(),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      ok: true,
+      documents: [
+        { taskCode: "TASK-000", path: "tasks/TASK-000.md", outcome: "REMOVED" },
+        { taskCode: "TASK-001", path: "tasks/TASK-001.md", outcome: "REMOVED" },
+      ],
+    });
+  });
+
+  it("transmet des codes, jamais un chemin", async () => {
+    receivedProjectCleanupCalls.length = 0;
+    await call("/repositories/tasks/delete-project-documents", {
+      ...authorized,
+      // Un chemin glisse dans une entree n'a aucune prise : le contrat ne le
+      // transporte pas, et le runner compose le sien a partir du code.
+      body: JSON.stringify({
+        repositoryPath: REPOSITORY,
+        artifacts: [
+          {
+            taskCode: "TASK-001",
+            expectedRevision: CURRENT_REVISION,
+            path: "../../src/App.tsx",
+          },
+        ],
+      }),
+    });
+
+    assert.deepEqual(receivedProjectCleanupCalls, [
+      {
+        repositoryPath: REPOSITORY,
+        artifacts: [{ taskCode: "TASK-001", expectedRevision: CURRENT_REVISION }],
+      },
+    ]);
+  });
+
+  it("refuse un corps sans revision", async () => {
+    const response = await call("/repositories/tasks/delete-project-documents", {
+      ...authorized,
+      body: body({ artifacts: [{ taskCode: "TASK-001" }] }),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it("remonte un refus metier", async () => {
+    const response = await call("/repositories/tasks/delete-project-documents", {
+      ...authorized,
+      body: body({ artifacts: [{ taskCode: "../secret", expectedRevision: CURRENT_REVISION }] }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(
+      (response.json as { error?: { code?: string } }).error?.code,
+      "TASK_CODE_INVALID",
+    );
+  });
+
+  it("exige le jeton", async () => {
+    const response = await call("/repositories/tasks/delete-project-documents", {
+      method: "POST",
+      body: body(),
+    });
+
+    assert.equal(response.status, 401);
+  });
+
+  it("refuse une autre methode", async () => {
+    const response = await call("/repositories/tasks/delete-project-documents", {
+      token: `Bearer ${TOKEN}`,
+    });
+
+    assert.equal(response.status, 405);
   });
 });
 

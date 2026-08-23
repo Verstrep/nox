@@ -30,6 +30,7 @@ import {
   parseCreateProjectDocumentRequest,
   parseCreateTaskDocumentRequest,
   parseDeleteProjectDocumentRequest,
+  parseDeleteProjectDocumentsRequest,
   parseDeleteTaskDocumentRequest,
   parseInspectRepositoryRequest,
   parseListProjectDocumentsRequest,
@@ -46,6 +47,8 @@ import {
   type CreateProjectDocumentSuccess,
   type CreateTaskDocumentSuccess,
   type DeleteProjectDocumentSuccess,
+  type DeleteProjectDocumentsSuccess,
+  type ProjectTaskArtifact,
   type DeleteTaskDocumentSuccess,
   type InspectRepositorySuccess,
   type ListProjectDocumentsSuccess,
@@ -87,6 +90,10 @@ import {
   deleteTaskDocument,
   type DeleteTaskDocumentResult,
 } from "./repositories/tasks/delete-task-document.ts";
+import {
+  deleteProjectTaskDocuments,
+  type DeleteProjectDocumentsResult,
+} from "./repositories/tasks/delete-project-documents.ts";
 import { cancelClaudeRun, type CancelRunResult } from "./claude/cancel.ts";
 import {
   runCorrectionPreflight,
@@ -130,6 +137,10 @@ export type RunnerDependencies = {
     taskCode: string,
     expectedRevision: string | null,
   ) => Promise<DeleteTaskDocumentResult>;
+  deleteProjectTaskDocuments?: (
+    repositoryPath: string,
+    artifacts: readonly ProjectTaskArtifact[],
+  ) => Promise<DeleteProjectDocumentsResult>;
   claudePreflight?: (repositoryPath: string) => Promise<PreflightResult>;
   claudeCorrectionPreflight?: (
     request: CorrectionPreflightRequest,
@@ -157,6 +168,7 @@ const DOCUMENTS_CREATE_ROUTE = "/repositories/documents/create";
 const DOCUMENTS_DELETE_ROUTE = "/repositories/documents/delete";
 const TASKS_CREATE_DOCUMENT_ROUTE = "/repositories/tasks/create-document";
 const TASKS_DELETE_DOCUMENT_ROUTE = "/repositories/tasks/delete-document";
+const TASKS_DELETE_PROJECT_DOCUMENTS_ROUTE = "/repositories/tasks/delete-project-documents";
 const CLAUDE_PREFLIGHT_ROUTE = "/claude/preflight";
 const CLAUDE_RUNS_START_ROUTE = "/claude/runs/start";
 const CLAUDE_RUNS_STATUS_ROUTE = "/claude/runs/status";
@@ -263,6 +275,10 @@ export function createRunnerServer(
     dependencies.deleteTaskDocument ??
     ((repositoryPath: string, taskCode: string, expectedRevision: string | null) =>
       deleteTaskDocument(repositoryPath, taskCode, expectedRevision));
+  const removeProjectTasks =
+    dependencies.deleteProjectTaskDocuments ??
+    ((repositoryPath: string, artifacts: readonly ProjectTaskArtifact[]) =>
+      deleteProjectTaskDocuments(repositoryPath, artifacts));
   // Le registre appartient au serveur : il vit aussi longtemps que le processus,
   // et pas une requete de plus.
   const registry = dependencies.runRegistry ?? new ClaudeRunRegistry();
@@ -574,6 +590,36 @@ export function createRunnerServer(
           alreadyAbsent: result.alreadyAbsent,
           path: result.path,
         };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === TASKS_DELETE_PROJECT_DOCUMENTS_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, TASKS_DELETE_PROJECT_DOCUMENTS_ROUTE, log,
+          parseDeleteProjectDocumentsRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Comme les deux routes voisines, le corps ne porte aucun chemin : le
+        // runner compose `tasks/<code>.md` a partir de codes que le serveur web
+        // a lus en base. Le sort de chaque document est rapporte ligne par
+        // ligne — un refus n'interrompt pas le lot, il le condamne cote web.
+        const result = await removeProjectTasks(parsed.repositoryPath, parsed.artifacts);
+        if (!result.ok) {
+          logRefusal(requestId, TASKS_DELETE_PROJECT_DOCUMENTS_ROUTE, result.code);
+          sendRunnerError(response, result.code, requestId);
+          return;
+        }
+
+        const payload: DeleteProjectDocumentsSuccess = { ok: true, documents: result.documents };
         sendJson(response, 200, payload, requestId);
         return;
       }

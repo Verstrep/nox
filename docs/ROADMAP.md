@@ -40,6 +40,9 @@ vide à une exécution relue.
 | 20 | Conversation projet | Une conversation durable par projet, plusieurs tâches dans le temps |
 | 21 | Plan de projet structuré | Project Brief et Living V1 Plan, proposés par l'Architecte, appliqués par l'humain |
 | 22 | Backlog de V1 | Planification multi-tâches, revue et réordonnancement, création par lot |
+| 23 | Amorçage d'un projet | `TASK-000` déterministe, construite sans appel à une IA |
+| 24 | Dépendances et tâches futures | Graphe acyclique explicite, édition avant première exécution |
+| 25 | Tableau de bord et cycle de vie | Accueil centrée projets, suppression d'un projet de NOX, repository préservé |
 
 **Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
 automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
@@ -146,20 +149,25 @@ la satisfaction se dérive du statut courant — seule une tâche terminée comp
 est revalidé côté serveur. Une tâche jamais exécutée reste modifiable ; dès sa première
 exécution, sa spécification est figée.
 
-### `TASK-025` — Tableau de bord et cycle de vie d'un projet — **suivante**
+### `TASK-025` — Tableau de bord et cycle de vie d'un projet — terminée
 
-Répondre à « où en est ce projet » sans ouvrir chaque tâche, et savoir en sortir. Cette étape
-regroupe ce qui a été reporté depuis plusieurs tâches : nettoyer la page d'accueil des textes de
-développement devenus obsolètes, une présentation réellement centrée projet, un vocabulaire et
-une navigation revus, les métadonnées techniques derrière une inspection plutôt qu'en surface,
-la suppression d'un projet **de NOX** avec sa Danger Zone, et la gestion des documents
-`tasks/TASK-xxx.md` laissés dans le repository — pour qu'un même dépôt puisse être réajouté
-comme nouveau projet. Le code applicatif, le repository et son `.git` ne sont jamais supprimés.
+La page d'accueil est devenue un tableau de bord des projets : une carte par projet, dérivée des
+données réelles, à la place des textes de développement qui décrivaient l'avancement de NOX
+lui-même. La navigation d'un projet a été remise dans l'ordre du travail, et les métadonnées
+techniques d'une exécution sont passées derrière Inspect.
 
-### `TASK-026` — File d'exécution
+Un projet se **supprime de NOX** : tout son état part en une transaction, et les documents
+`tasks/TASK-xxx.md` que NOX a écrits sont retirés — reconnus par la révision enregistrée en
+base, jamais par un motif de nom de fichier. Le code applicatif, le `.git` et la documentation
+du repository sont préservés, aucune opération Git n'a lieu, et le même dossier peut être
+réenregistré comme un projet réellement neuf. Un projet se renomme aussi, sans que rien du
+repository ne bouge.
 
-Enchaîner plusieurs tâches prêtes. Enchaîner n'est pas s'autonomiser : chaque départ reste
-décidé, et une seule exécution reste active.
+### `TASK-026` — File d'exécution — **suivante**
+
+Enchaîner plusieurs tâches prêtes, en respectant les dépendances posées en `TASK-024`, et en
+garantissant au plus une exécution Claude active par repository. Enchaîner n'est pas
+s'autonomiser : chaque départ reste décidé.
 
 ### `TASK-027` — Validation autonome et classification des tests humains
 
@@ -176,10 +184,13 @@ tourner seule.
 Commit et push depuis NOX, sur décision explicite, avec un message relu. La règle « aucun push
 automatique » ne change pas : c'est le geste qui entre dans l'outil, pas la décision.
 
-### `TASK-030` — Vue d'ensemble multi-projets
+### `TASK-030` — Vue d'ensemble multi-projets — **absorbée par `TASK-025`**
 
-Une vue d'ensemble, une fois qu'un projet unique est correctement tenu. À réconcilier avec
-`TASK-025` le moment venu : deux tableaux de bord vaudraient moins qu'un seul.
+Le tableau de bord des projets existe depuis `TASK-025`. Cette entrée reste ici pour que son
+numéro ne soit pas réutilisé, et pour dire explicitement ce qu'elle est devenue : **aucune
+seconde implémentation de tableau de bord n'est prévue**. Ce qui pourra encore manquer — une
+recherche, un filtre, une pagination — se traitera comme une évolution de la surface existante,
+pas comme une nouvelle étape.
 
 ### `TASK-031` — Runner multi-projets
 

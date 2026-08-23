@@ -4498,3 +4498,149 @@ plus de sujet. Elle n'emporte pas ce qui l'attendait.
 **Ce que cela coûtera plus tard.** Une suppression de projet devra retirer ces lignes avant les
 tâches, en une opération explicite. C'est un `deleteMany` de plus, connu d'avance, écrit dans le
 schéma — pas une découverte au moment de l'écrire.
+
+
+---
+
+## Décisions de TASK-025 — Tableau de bord et cycle de vie d'un projet
+
+### D-307 — Une page d'accueil centrée projets, pas un état d'avancement de NOX
+
+**Décision.** La page racine liste les projets et rien d'autre. La version codée en dur, la
+« phase courante », l'inventaire du socle technique et la liste des « prochaines grandes
+étapes » ont été retirés sans remplacement.
+
+**Justification.** Ces sections décrivaient l'avancement de NOX lui-même. Chacune était juste le
+jour où elle a été écrite, et fausse quelques tâches plus tard : la roadmap statique annonçait
+comme « pas encore implémentées » des capacités livrées depuis longtemps, et la « phase
+courante » pointait vers `TASK-002`, terminée depuis vingt étapes.
+
+Le problème n'était pas leur contenu, c'était leur nature. Une information saisie à la main dans
+une page se périme dès que le produit avance, et personne ne pense à la mettre à jour — parce
+qu'elle n'appartient à aucune fonctionnalité. Les remplacer par un autre bloc statique, même
+plus juste, aurait reproduit exactement la même mécanique.
+
+Ce qui reste vient donc **entièrement** de la base. Un compteur faux devient alors impossible :
+il n'existe pas de valeur à tenir à jour, seulement des lignes à lire.
+
+L'état du runner survit, mais comme indicateur discret : il explique pourquoi une action
+échouerait, ce qui est une information opérationnelle et non une description de l'outil.
+
+### D-308 — Supprimer un projet supprime son état NOX, jamais son repository
+
+**Décision.** « Delete project from NOX » retire la conversation, le brief, le plan, la mémoire,
+le backlog, les tâches, les dépendances, les exécutions et les reviews. Il ne retire ni code
+source, ni `.git`, ni `package.json`, ni `docs/`, ni `CLAUDE.md`, ni aucun fichier
+arbitraire du repository.
+
+**Justification.** Le repository appartient à l'utilisateur ; NOX n'en est que le spectateur
+outillé. Un outil de pilotage qui peut effacer le logiciel qu'il pilote est un outil qu'on
+n'ose pas utiliser — et la première hésitation devant un bouton « Delete » suffit à rendre la
+fonctionnalité inutile.
+
+La documentation fondamentale produite par `TASK-000` reste, elle aussi, et ce n'est pas une
+exception : dès qu'elle est écrite, elle **appartient au repository**. Des tâches suivantes l'ont
+peut-être modifiée, un humain l'a peut-être relue, Git en porte l'historique. Les retirer ferait
+de la suppression d'un projet un « annuler l'amorçage » déguisé, ce qu'elle n'est pas.
+
+L'interface répète donc deux listes côte à côte — ce qui part, ce qui reste — avec la même
+insistance. La seconde n'est pas une note rassurante : c'est la moitié de la définition.
+
+### D-309 — L'appartenance d'un document de tâche se prouve par sa révision enregistrée
+
+**Décision.** Les seuls fichiers retirés du repository sont les `tasks/TASK-xxx.md` des tâches
+du projet **dont la révision est enregistrée en base**. La liste vient de SQLite ; aucun
+répertoire n'est balayé, aucun motif de nom de fichier n'est appliqué.
+
+**Justification.** L'alternative évidente — supprimer tous les `tasks/TASK-*.md` du dépôt —
+est fausse dans les deux sens. Elle retirerait un fichier écrit par quelqu'un d'autre, et elle
+supposerait qu'un nom de fichier prouve une origine, ce qu'un nom ne prouve jamais.
+
+Une révision enregistrée, si. Elle veut dire : NOX a écrit ce fichier à ce chemin, puis en a relu
+les octets. C'est une trace de l'action, pas une déduction sur le nom.
+
+La conséquence, assumée, est qu'une tâche dont la synchronisation a échoué ne produit **aucun**
+artefact à nettoyer. Si un fichier occupe malgré tout son chemin, il n'est pas celui de NOX — et
+il reste. Mieux vaut laisser un fichier dont l'origine est douteuse que retirer un fichier dont
+elle l'est tout autant.
+
+### D-310 — Une route dédiée plutôt qu'un drapeau de forçage
+
+**Décision.** Le nettoyage passe par une troisième route du runner,
+`POST /repositories/tasks/delete-project-documents`, plutôt que par un paramètre ajouté à la
+suppression d'un document de tâche. Elle calcule et **rapporte** la révision de chaque fichier —
+un document divergent est annoncé comme tel — sans en faire une condition.
+
+**Justification.** Les deux gestes ne posent pas la même question. Supprimer **une** tâche est une
+opération ordinaire : un document modifié à la main y mérite un conflit, parce que quelqu'un a
+peut-être écrit quelque chose qui compte. Supprimer **un projet** est une décision confirmée en
+recopiant son nom, qui dit précisément « retire ce que NOX a laissé ici » — un artefact modifié
+n'y est pas un désaccord à arbitrer.
+
+Ajouter un `force` à la route existante aurait fait dépendre sa garantie d'un booléen. C'est
+exactement ce qu'il ne faut pas pour du code qui supprime des fichiers : la lecture du module ne
+suffirait plus à savoir ce qu'il fait, il faudrait remonter à l'appelant.
+
+Deux routes, deux contrats, deux garanties lisibles séparément. Tout le reste est partagé et
+inchangé : le chemin est composé par le runner à partir du code, aucun lien n'est suivi, aucun
+dossier n'est créé ni supprimé, et `unlink` reste le seul appel destructeur.
+
+**Ce que cela contredit.** L'invariant « aucune suppression sans contrôle de révision » de
+`CLAUDE.md` § 8.1 portait sur les routes de documents. Il y gagne désormais une exception
+nommée, avec sa raison — plutôt qu'un silence.
+
+### D-311 — Le disque avant la base, et un refus plutôt qu'une suppression partielle
+
+**Décision.** Le nettoyage du repository précède la transaction SQLite. Un seul document qui
+résiste annule la suppression entière, et le refus le nomme.
+
+**Justification.** Les deux systèmes ne partagent aucune transaction, et NOX ne prétend à aucune
+atomicité entre eux. Le choix se réduit donc à quelle incohérence on préfère laisser derrière
+soi.
+
+Supprimer la base d'abord emporterait les révisions qui prouvent l'appartenance des documents.
+Les `tasks/TASK-xxx.md` resteraient sur le disque, et plus rien — ni NOX, ni l'utilisateur — ne
+pourrait dire à quel projet ils appartenaient. Réenregistrer le même dépôt ferait alors surgir
+des documents historiques sans propriétaire, exactement ce que `TASK-025` existe pour empêcher.
+
+Dans l'autre sens, un échec de nettoyage laisse **tout** en place : l'utilisateur voit pourquoi,
+corrige, réessaie. Le premier cas se découvre des mois plus tard ; le second se répare dans la
+minute.
+
+Le refus global suit la même logique. « Trois documents retirés sur quatre, projet supprimé »
+serait le pire résultat possible : un état que personne n'a demandé et que rien ne rattrape.
+
+### D-312 — Une exécution active interdit la suppression
+
+**Décision.** Un projet dont une tâche porte une exécution `QUEUED`, `RUNNING` ou
+`CANCELLING` ne peut pas être supprimé. NOX ne tente pas d'annuler l'exécution.
+
+**Justification.** Claude Code écrit dans le repository pendant ce temps. Supprimer l'état qui
+décrit ce travail créerait une course dont personne ne saurait raisonner : les événements
+continueraient d'arriver pour une exécution dont la tâche n'existe plus, et le diff produit
+n'aurait plus de spécification à laquelle se rattacher.
+
+Annuler automatiquement aurait été la fausse bonne idée. Une annulation est une décision — elle
+interrompt un travail en cours, laisse le dossier dans l'état où l'agent l'a abandonné, et NOX
+ne restaure rien. La déclencher comme effet de bord d'un autre geste mettrait deux décisions
+sous un seul clic.
+
+Le message dit donc les deux choses : ce qui bloque, et que c'est à l'utilisateur d'agir.
+`CANCELLING` compte comme actif pour la même raison qu'ailleurs : le processus n'est pas mort.
+
+### D-313 — Le tableau de bord global de `TASK-030` est absorbé par `TASK-025`
+
+**Décision.** La roadmap ne prévoit plus de seconde implémentation de tableau de bord.
+L'entrée `TASK-030` reste, marquée comme absorbée.
+
+**Justification.** Deux étapes promettant le même écran auraient fini par produire deux écrans,
+ou une réécriture de l'un par l'autre. Le tableau de bord livré ici est déjà multi-projets : il
+liste tous les projets, ordonnés par activité réelle.
+
+Retirer purement l'entrée aurait libéré le numéro `TASK-030` pour autre chose, et rendu
+illisibles les documents qui la citent. La conserver en disant ce qu'elle est devenue coûte trois
+lignes et évite les deux problèmes.
+
+Ce qui pourrait encore manquer — une recherche, un filtre, une pagination — relève d'une
+évolution de la surface existante. Aucune de ces trois choses ne justifie une étape : avec une
+poignée de projets, elles rempliraient l'écran sans rien résoudre.

@@ -1,173 +1,102 @@
-import { NOX_VERSION, PROJECT_STATUS, PROJECT_STATUSES, type ProjectStatus } from "@nox/shared";
 import Link from "next/link";
 
 import { EmptyState } from "@/components/EmptyState";
 import { ProjectCard } from "@/components/ProjectCard";
 import { RunnerStatusBadge } from "@/components/RunnerStatusBadge";
-import { SectionCard } from "@/components/SectionCard";
-import { StatusBadge } from "@/components/StatusBadge";
-import { loadProjects } from "@/lib/projects";
+import { projectDeletedNotice, readDeletedCount } from "@/lib/project-delete";
+import { loadProjectCards } from "@/lib/projects";
 
 /**
- * Seule la liste des projets provient de la base. Les sections « Socle » et
- * « Prochaines grandes etapes » restent des reperes statiques : elles decrivent
- * l'avancement du produit, pas des donnees utilisateur.
+ * Tableau de bord des projets.
+ *
+ * ## Ce que cette page repond
+ *
+ * Quels projets existent, ou en est chacun, lequel ouvrir, comment en creer un
+ * nouveau. C'est tout, et c'est delibere : le premier ecran doit mener au
+ * travail, pas decrire l'outil.
+ *
+ * ## Ce qu'elle ne raconte plus
+ *
+ * Jusqu'a TASK-025, elle affichait la version de NOX, une « phase courante »
+ * pointant vers une tache interne, un inventaire du socle technique et une liste
+ * de « prochaines grandes etapes ». Chacune de ces sections etait juste le jour
+ * ou elle a ete ecrite, et fausse quelques taches plus tard — la roadmap statique
+ * annoncait comme a venir des capacites livrees depuis. Une page d'accueil qui
+ * decrit l'avancement de son propre developpement se perime par construction ;
+ * celle-ci ne montre que des donnees.
+ *
+ * L'etat du runner reste, mais comme un indicateur discret : il explique
+ * pourquoi une action echouerait, et rien de plus.
+ *
+ * Aucun appel au fournisseur, aucun Claude Code, aucune ecriture : ce rendu ne
+ * fait que lire SQLite.
  */
-const CURRENT_PHASE_STATUS: ProjectStatus = PROJECT_STATUS.DRAFT;
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ deleted?: string; removed?: string; modified?: string }>;
+}) {
+  const { deleted, removed, modified } = await searchParams;
+  const cards = await loadProjectCards();
 
-const NEXT_STEPS = [
-  {
-    id: "documents",
-    title: "Documents Markdown",
-    description: "Maintenir le brief, le perimetre et les decisions directement depuis NOX.",
-  },
-  {
-    id: "tasks",
-    title: "Backlog de taches",
-    description: "Decouper un projet en petites taches structurees et suivre leur statut.",
-  },
-  {
-    id: "runner",
-    title: "Runner controle",
-    description: "Piloter le runner local depuis l'interface et suivre ses logs.",
-  },
-  {
-    id: "claude",
-    title: "Integration Claude Code",
-    description: "Envoyer une tache au CLI et recuperer le compte rendu d'execution.",
-  },
-  {
-    id: "git",
-    title: "Git et validations",
-    description: "Afficher le statut Git et le resultat du lint, du typecheck et du build.",
-  },
-] as const;
-
-const FOUNDATION_ITEMS = [
-  { id: "web", label: "Application web", detail: "Next.js App Router, TypeScript strict, Tailwind" },
-  {
-    id: "runner",
-    label: "Runner local",
-    detail: "API HTTP authentifiee, resolution des repositories Git",
-  },
-  { id: "shared", label: "Package partage", detail: "@nox/shared, statuts et contrat runner" },
-  { id: "database", label: "Persistance locale", detail: "Prisma + SQLite, modele Project" },
-] as const;
-
-export default async function DashboardPage() {
-  const projects = await loadProjects();
+  // La confirmation d'une suppression est **reconstruite** a partir de deux
+  // compteurs bornes : rien de ce que l'URL porte n'est affiche tel quel.
+  const deletedNotice =
+    deleted === "1" ? projectDeletedNotice(readDeletedCount(removed), readDeletedCount(modified)) : null;
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-10 px-5 py-10 sm:px-8 sm:py-14">
-      <header className="flex flex-col gap-6 border-b border-zinc-800 pb-8">
+    <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
+      <header className="flex flex-col gap-5 border-b border-zinc-800 pb-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-baseline gap-3">
-            <h1 className="text-3xl font-semibold tracking-[0.2em] text-zinc-50">NOX</h1>
-            <span className="font-mono text-xs text-zinc-600">v{NOX_VERSION}</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <RunnerStatusBadge />
-            <StatusBadge tone="accent" withDot>
-              Systeme en phase d&apos;initialisation
-            </StatusBadge>
-          </div>
+          <h1 className="text-3xl font-semibold tracking-[0.2em] text-zinc-50">NOX</h1>
+          <RunnerStatusBadge />
         </div>
 
         <p className="max-w-2xl text-sm leading-relaxed text-zinc-400">
-          NOX orchestre le developpement assiste par IA : formaliser un besoin, le decouper en
-          petites taches, les envoyer a Claude Code, executer les validations et relire le resultat
-          &mdash; sans copier-coller manuel entre la conception et l&apos;implementation.
+          NOX orchestre le développement assisté par IA : formaliser un besoin, le découper en
+          petites tâches, les envoyer à Claude Code, exécuter les validations et relire le résultat
+          &mdash; sans copier-coller manuel entre la conception et l&apos;implémentation.
         </p>
-
-        <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-600">
-          <span>Phase courante</span>
-          <StatusBadge tone="neutral">{CURRENT_PHASE_STATUS}</StatusBadge>
-          <span aria-hidden="true">&middot;</span>
-          <span>TASK-002 &mdash; gestion locale des projets</span>
-        </div>
       </header>
 
-      <main className="flex flex-col gap-8">
-        <SectionCard
-          title="Projets"
-          description="Chaque projet NOX pointe vers un repository Git local de cette machine."
-          action={
-            <Link
-              href="/projects/new"
-              className="inline-block rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
-            >
-              Nouveau projet
-            </Link>
-          }
-        >
-          {projects.length === 0 ? (
-            <EmptyState
-              title="Aucun projet pour le moment"
-              hint="Creez un projet et associez-le a un repository Git local pour commencer."
-            />
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {projects.map((project) => (
-                <ProjectCard key={project.id} project={project} />
-              ))}
-            </ul>
-          )}
+      <main className="flex flex-col gap-6">
+        {deletedNotice === null ? null : (
+          <p
+            aria-live="polite"
+            className="rounded-lg border border-teal-400/30 bg-teal-400/5 px-4 py-3 text-sm leading-relaxed text-teal-200/90"
+          >
+            {deletedNotice}
+          </p>
+        )}
 
-          <div className="mt-5 flex flex-wrap items-center gap-2">
-            <span className="text-xs uppercase tracking-wider text-zinc-600">
-              Cycle de vie prevu
-            </span>
-            {PROJECT_STATUSES.map((status) => (
-              <StatusBadge key={status} tone="muted">
-                {status}
-              </StatusBadge>
-            ))}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-zinc-100">Projects</h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              Chaque projet NOX pointe vers un repository Git local de cette machine.
+            </p>
           </div>
-        </SectionCard>
+          <Link
+            href="/projects/new"
+            className="rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-200"
+          >
+            Create project
+          </Link>
+        </div>
 
-        <SectionCard
-          title="Socle en place"
-          description="Ce qui existe reellement dans le repository a ce stade."
-        >
-          <ul className="grid gap-3 sm:grid-cols-2">
-            {FOUNDATION_ITEMS.map((item) => (
-              <li
-                key={item.id}
-                className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3"
-              >
-                <p className="text-sm font-medium text-zinc-200">{item.label}</p>
-                <p className="mt-1 text-xs text-zinc-500">{item.detail}</p>
-              </li>
+        {cards.length === 0 ? (
+          <EmptyState
+            title="No projects yet."
+            hint="Créez un projet pour définir son brief, son plan de V1 et ses tâches d'implémentation."
+          />
+        ) : (
+          <ul className="flex flex-col gap-4">
+            {cards.map((card) => (
+              <ProjectCard key={card.id} card={card} />
             ))}
           </ul>
-        </SectionCard>
-
-        <SectionCard
-          title="Prochaines grandes etapes"
-          description="Trajectoire prevue vers la V1. Aucune de ces etapes n'est encore implementee."
-        >
-          <ol className="flex flex-col gap-3">
-            {NEXT_STEPS.map((step, index) => (
-              <li
-                key={step.id}
-                className="flex gap-4 rounded-lg border border-zinc-800/70 bg-zinc-950/30 px-4 py-3"
-              >
-                <span className="mt-0.5 font-mono text-xs text-zinc-600">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-zinc-200">{step.title}</p>
-                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">{step.description}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </SectionCard>
+        )}
       </main>
-
-      <footer className="mt-auto border-t border-zinc-800 pt-6 text-xs text-zinc-600">
-        NOX est en cours de developpement. Seule la liste des projets provient de la base locale.
-      </footer>
     </div>
   );
 }

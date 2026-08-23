@@ -3,6 +3,7 @@ import { findProjectArchitectSession, getDatabaseClient, listArchitectSessions }
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { ProjectNav } from "@/components/ProjectNav";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { architectHistoryUrl, architectUrl } from "@/lib/architect/display";
@@ -16,7 +17,7 @@ import {
   type BacklogSurfaceState,
 } from "@/lib/backlog/display";
 import { loadProjectDocuments } from "@/lib/documents";
-import { formatDateTime, formatIsoDateTime } from "@/lib/format";
+import { formatIsoDateTime } from "@/lib/format";
 import { taskStatusLabel } from "@/lib/labels";
 import {
   briefSectionState,
@@ -29,19 +30,6 @@ import { loadProject } from "@/lib/projects";
 import { countTasksByStatus } from "@/lib/task-display";
 import { loadProjectTasks } from "@/lib/tasks";
 
-/**
- * Sections encore vides. Elles annoncent ce qui viendra sans simuler de donnees :
- * afficher de faux messages rendrait le tableau de bord illisible et ferait
- * croire a des fonctionnalites inexistantes.
- */
-const PLANNED_SECTIONS = [
-  {
-    id: "runs",
-    title: "Executions",
-    description: "Suivre les executions de Claude Code, leurs logs et leurs resultats.",
-  },
-] as const;
-
 function TaskCount({ label, value }: { label: string; value: number }) {
   return (
     <div>
@@ -51,6 +39,25 @@ function TaskCount({ label, value }: { label: string; value: number }) {
   );
 }
 
+/**
+ * Page d'un projet.
+ *
+ * ## L'ordre des sections
+ *
+ * Il suit le chemin du travail : l'Architecte, puis le plan qu'on en tire, le
+ * backlog qui en decoule, l'amorcage du repository, et enfin les taches. Les
+ * surfaces de consultation — documents, memoire — viennent apres, sans pretendre
+ * etre des etapes.
+ *
+ * ## Ce qui a disparu en TASK-025
+ *
+ * Une carte « Executions — A venir » annoncait une fonctionnalite livree depuis
+ * longtemps, et un pied de page expliquait comment lire des sections qui
+ * n'existent plus. Les metadonnees techniques du repository — dates
+ * d'enregistrement, phrase de validation Git — sont parties dans Project
+ * settings, ou elles servent : cette page repond a « ou en est ce projet », pas
+ * a « qu'est-ce que NOX a enregistre a son sujet ».
+ */
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const project = await loadProject(id);
@@ -105,74 +112,78 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-5 border-b border-zinc-800 pb-6">
         <Link href="/" className="text-xs text-zinc-500 hover:text-zinc-300">
-          &larr; Retour au tableau de bord
+          &larr; Retour aux projets
         </Link>
 
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold text-zinc-50">{project.name}</h1>
-            {project.description === null ? (
-              <p className="mt-2 text-sm italic text-zinc-600">Aucune description.</p>
-            ) : (
+            {project.description === null ? null : (
               <p className="mt-2 max-w-prose text-sm leading-relaxed text-zinc-400">
                 {project.description}
               </p>
             )}
+            <p
+              className="mt-2 truncate font-mono text-xs text-zinc-600"
+              title={project.repositoryPath}
+            >
+              {project.repositoryPath}
+            </p>
           </div>
           <StatusBadge tone="neutral">{project.status}</StatusBadge>
         </div>
+
+        <ProjectNav projectId={project.id} />
       </header>
 
       <main className="flex flex-col gap-8">
         <SectionCard
-          title="Repository"
-          description="Chemin canonique retourne par Git lors de l'enregistrement du projet."
-        >
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <dt className="text-xs uppercase tracking-wider text-zinc-600">Chemin local</dt>
-              <dd className="mt-1 break-all font-mono text-sm text-zinc-300">
-                {project.repositoryPath}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-zinc-600">Cree le</dt>
-              <dd className="mt-1 text-sm text-zinc-300">{formatDateTime(project.createdAt)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-zinc-600">Modifie le</dt>
-              <dd className="mt-1 text-sm text-zinc-300">{formatDateTime(project.updatedAt)}</dd>
-            </div>
-          </dl>
-
-          <p className="mt-5 flex items-center gap-2 rounded-md border border-teal-400/20 bg-teal-400/5 px-3 py-2 text-xs text-teal-200/90">
-            <span aria-hidden="true">&#10003;</span>
-            Repository Git valide lors de la creation : le chemin ci-dessus est la racine retournee
-            par Git.
-          </p>
-        </SectionCard>
-
-        <SectionCard
-          title="Documents"
-          description="Documents Markdown de reference presents dans le repository."
+          title="Architecte"
+          description="La conversation durable de ce projet : concevoir, décider, préparer la suite."
           action={
             <Link
-              href={`/projects/${project.id}/documents`}
+              href={architectUrl(project.id)}
               className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
             >
-              Voir les documents
+              {architect === null ? "Open conversation" : "Continue conversation"}
             </Link>
           }
         >
-          {documents.ok ? (
-            <p className="text-sm text-zinc-400">
-              {documents.documents.length === 0
-                ? "Aucun document Markdown trouve dans les emplacements inspectes."
-                : `${String(documents.documents.length)} document(s) Markdown detecte(s).`}
-            </p>
-          ) : (
-            <p className="text-sm text-amber-200/90">{documents.message}</p>
-          )}
+          <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
+            L&apos;architecte lit les documents du projet, sa mémoire et ses tâches récentes. Il
+            répond, compare des options, et propose une tâche quand un prochain incrément est
+            clair &mdash; vous la relisez avant de la créer. Créer une tâche ne ferme pas la
+            conversation : vous y revenez pour la suite.
+          </p>
+          <p className="mt-3 max-w-prose text-sm leading-relaxed text-zinc-500">
+            Il ne lance rien, ne modifie aucun fichier, et ne voit ni le code, ni les diffs, ni les
+            sorties de Claude Code. Ouvrir la conversation ne coûte aucun appel.
+          </p>
+
+          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-zinc-800 pt-4 text-xs text-zinc-600">
+            {architect === null ? (
+              <span>Aucun tour échangé pour le moment.</span>
+            ) : (
+              <span>
+                {architect.generationCount === 0
+                  ? "Aucun tour échangé"
+                  : architect.generationCount === 1
+                    ? "1 tour échangé"
+                    : `${String(architect.generationCount)} tours échangés`}{" "}
+                · dernière activité {formatIsoDateTime(architect.updatedAt)}
+              </span>
+            )}
+            {legacyArchitectSessions === 0 ? null : (
+              <Link
+                href={architectHistoryUrl(project.id)}
+                className="underline hover:text-zinc-400"
+              >
+                {legacyArchitectSessions === 1
+                  ? "1 conversation historique"
+                  : `${String(legacyArchitectSessions)} conversations historiques`}
+              </Link>
+            )}
+          </div>
         </SectionCard>
 
         <SectionCard
@@ -199,20 +210,15 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           </dl>
 
           <p className="mt-5 max-w-prose text-sm leading-relaxed text-zinc-400">
-            Cet etat accompagne chaque conversation Architecte, et prime sur la documentation du
+            Cet état accompagne chaque conversation Architecte, et prime sur la documentation du
             repository pour l&apos;intention produit. NOX ne le modifie jamais seul : une
             proposition de l&apos;Architecte attend toujours votre validation.
           </p>
         </SectionCard>
 
-        {/*
-          Une indication concise, et rien de plus : le tableau de bord complet
-          viendra en TASK-025. Elle vient entierement de SQLite — ouvrir cette
-          page ne relit pas le repository et n'appelle jamais le fournisseur.
-        */}
         <SectionCard
           title="V1 Backlog"
-          description="Le travail d'implementation restant pour atteindre le Living V1 Plan."
+          description="Le travail d'implémentation restant pour atteindre le Living V1 Plan."
           action={
             <Link
               href={backlogUrl(project.id)}
@@ -228,7 +234,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               <dd className="mt-1 text-sm text-zinc-300">{backlogStateLabel(backlogState)}</dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wider text-zinc-600">Taches creees</dt>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Tâches créées</dt>
               <dd className="mt-1 text-sm text-zinc-300">
                 {backlogTaskCountLabel(backlog.lastAppliedTasks.length)}
               </dd>
@@ -236,8 +242,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           </dl>
 
           <p className="mt-5 max-w-prose text-sm leading-relaxed text-zinc-400">
-            Generer un backlog est une action explicite, qui engage un appel au fournisseur. Aucune
-            tache n&apos;est creee tant que vous n&apos;avez pas applique un backlog vous-meme.
+            Générer un backlog est une action explicite, qui engage un appel au fournisseur. Aucune
+            tâche n&apos;est créée tant que vous n&apos;avez pas appliqué un backlog vous-même.
           </p>
         </SectionCard>
 
@@ -247,7 +253,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         */}
         <SectionCard
           title="Bootstrap"
-          description="TASK-000 prepare le repository avant les taches produit."
+          description="TASK-000 prépare le repository avant les tâches produit."
           action={
             <Link
               href={bootstrapUrl(project.id)}
@@ -259,7 +265,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         >
           <dl className="grid gap-4 sm:grid-cols-2">
             <div>
-              <dt className="text-xs uppercase tracking-wider text-zinc-600">Etat</dt>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">État</dt>
               <dd className="mt-1 text-sm text-zinc-300">
                 {bootstrapTask === null
                   ? "Not prepared"
@@ -267,17 +273,50 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wider text-zinc-600">Execution</dt>
+              <dt className="text-xs uppercase tracking-wider text-zinc-600">Exécution</dt>
               <dd className="mt-1 text-sm text-zinc-300">
-                Toujours explicite : creer TASK-000 ne lance rien.
+                Toujours explicite : créer TASK-000 ne lance rien.
               </dd>
             </div>
           </dl>
         </SectionCard>
 
         <SectionCard
-          title="Memoire"
-          description="Ce que NOX retient de ce projet : decisions, contraintes, conventions, connaissances durables."
+          title="Tâches"
+          description="Unités de travail structurées, enregistrées dans la base locale de NOX."
+          action={
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={`/projects/${project.id}/tasks`}
+                className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+              >
+                Voir les tâches
+              </Link>
+              <Link
+                href={`/projects/${project.id}/tasks/new`}
+                className="inline-block rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
+              >
+                Nouvelle tâche
+              </Link>
+            </div>
+          }
+        >
+          <dl className="grid grid-cols-3 gap-4">
+            <TaskCount label="Total" value={tasks.length} />
+            <TaskCount
+              label={taskStatusLabel(TASK_STATUS.READY)}
+              value={taskCounts[TASK_STATUS.READY]}
+            />
+            <TaskCount
+              label={taskStatusLabel(TASK_STATUS.BLOCKED)}
+              value={taskCounts[TASK_STATUS.BLOCKED]}
+            />
+          </dl>
+        </SectionCard>
+
+        <SectionCard
+          title="Mémoire"
+          description="Ce que NOX retient de ce projet : décisions, contraintes, conventions, connaissances durables."
           action={
             <Link
               href={`/projects/${project.id}/memory`}
@@ -288,111 +327,35 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           }
         >
           <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
-            Les entrees actives accompagnent chaque conversation Architecte de ce projet, sans avoir
-            a etre reexpliquees. Rien n&apos;y entre automatiquement : ni depuis une conversation, ni
-            depuis une proposition, ni depuis une execution de Claude Code.
+            Les entrées actives accompagnent chaque conversation Architecte de ce projet, sans avoir
+            à être réexpliquées. Rien n&apos;y entre automatiquement : ni depuis une conversation,
+            ni depuis une proposition, ni depuis une exécution de Claude Code.
           </p>
         </SectionCard>
 
         <SectionCard
-          title="Architecte"
-          description="La conversation durable de ce projet : concevoir, decider, preparer la suite."
+          title="Documents"
+          description="Documents Markdown de référence présents dans le repository."
           action={
             <Link
-              href={architectUrl(project.id)}
+              href={`/projects/${project.id}/documents`}
               className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
             >
-              {architect === null ? "Open conversation" : "Continue conversation"}
+              Voir les documents
             </Link>
           }
         >
-          <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
-            L&apos;architecte lit les documents du projet, sa memoire et ses taches recentes. Il
-            repond, compare des options, et propose une tache quand un prochain increment est
-            clair — vous la relisez avant de la creer. Creer une tache ne ferme pas la
-            conversation : vous y revenez pour la suite.
-          </p>
-          <p className="mt-3 max-w-prose text-sm leading-relaxed text-zinc-500">
-            Il ne lance rien, ne modifie aucun fichier, et ne voit ni le code, ni les diffs, ni les
-            sorties de Claude Code. Ouvrir la conversation ne coute aucun appel.
-          </p>
-
-          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-zinc-800 pt-4 text-xs text-zinc-600">
-            {architect === null ? (
-              <span>Aucun tour echange pour le moment.</span>
-            ) : (
-              <span>
-                {architect.generationCount === 0
-                  ? "Aucun tour echange"
-                  : architect.generationCount === 1
-                    ? "1 tour echange"
-                    : `${String(architect.generationCount)} tours echanges`}{" "}
-                · derniere activite {formatIsoDateTime(architect.updatedAt)}
-              </span>
-            )}
-            {legacyArchitectSessions === 0 ? null : (
-              <Link
-                href={architectHistoryUrl(project.id)}
-                className="underline hover:text-zinc-400"
-              >
-                {legacyArchitectSessions === 1
-                  ? "1 conversation historique"
-                  : `${String(legacyArchitectSessions)} conversations historiques`}
-              </Link>
-            )}
-          </div>
+          {documents.ok ? (
+            <p className="text-sm text-zinc-400">
+              {documents.documents.length === 0
+                ? "Aucun document Markdown trouvé dans les emplacements inspectés."
+                : `${String(documents.documents.length)} document(s) Markdown détecté(s).`}
+            </p>
+          ) : (
+            <p className="text-sm text-amber-200/90">{documents.message}</p>
+          )}
         </SectionCard>
-
-        <SectionCard
-          title="Taches"
-          description="Unites de travail structurees, enregistrees dans la base locale de NOX."
-          action={
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                href={`/projects/${project.id}/tasks`}
-                className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
-              >
-                Voir les taches
-              </Link>
-              <Link
-                href={`/projects/${project.id}/tasks/new`}
-                className="inline-block rounded-md bg-teal-400/90 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300"
-              >
-                Nouvelle tache
-              </Link>
-            </div>
-          }
-        >
-          <dl className="grid grid-cols-3 gap-4">
-            <TaskCount label="Total" value={tasks.length} />
-            <TaskCount label={taskStatusLabel(TASK_STATUS.READY)} value={taskCounts[TASK_STATUS.READY]} />
-            <TaskCount
-              label={taskStatusLabel(TASK_STATUS.BLOCKED)}
-              value={taskCounts[TASK_STATUS.BLOCKED]}
-            />
-          </dl>
-        </SectionCard>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          {PLANNED_SECTIONS.map((section) => (
-            <section
-              key={section.id}
-              className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 p-5"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold text-zinc-300">{section.title}</h2>
-                <StatusBadge tone="muted">A venir</StatusBadge>
-              </div>
-              <p className="mt-2 text-xs leading-relaxed text-zinc-600">{section.description}</p>
-            </section>
-          ))}
-        </div>
       </main>
-
-      <footer className="mt-auto border-t border-zinc-800 pt-6 text-xs text-zinc-600">
-        Les sections marquees « A venir » seront ajoutees dans les prochaines etapes. Aucune donnee
-        n&apos;y est simulee.
-      </footer>
     </div>
   );
 }

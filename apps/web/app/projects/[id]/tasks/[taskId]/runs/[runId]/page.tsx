@@ -13,6 +13,7 @@ import {
   formatDuration,
   formatReportedCost,
   runEventsEndpoint,
+  runInspectUrl,
   runStatusEndpoint,
   runStatusTone,
   runUrl,
@@ -294,7 +295,6 @@ export default async function RunPage({
             <Field label="Code de sortie">
               {run.claude.exitCode === null ? "-" : String(run.claude.exitCode)}
             </Field>
-            <Field label="Session Claude">{run.claude.sessionId ?? "-"}</Field>
             <Field label="Cout rapporte">
               {formatReportedCost(run.claude.reportedCostUsd) ?? "non fourni"}
             </Field>
@@ -329,16 +329,21 @@ export default async function RunPage({
           </SectionCard>
         )}
 
+        {/*
+          Le prompt integral et son empreinte vivent desormais dans Inspect : ils
+          servent au debug et a la reproductibilite, pas a decider quoi faire de
+          cette execution. Rien n'a ete supprime, tout est a un clic.
+        */}
         <SectionCard
-          title="Prompt envoye"
-          description="Conserve exactement tel qu'il a ete transmis au processus."
+          title="Inspect"
+          description="Le prompt transmis au processus et ses empreintes, pour le debug et la reproductibilité."
         >
-          <pre className="max-h-[40vh] overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs leading-relaxed text-zinc-300">
-            {run.prompt}
-          </pre>
-          <p className="mt-3 break-all font-mono text-xs text-zinc-600">
-            SHA-256 : {run.promptSha256}
-          </p>
+          <Link
+            href={runInspectUrl(project.id, task.id, run.id)}
+            className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+          >
+            Inspect run
+          </Link>
         </SectionCard>
       </main>
 

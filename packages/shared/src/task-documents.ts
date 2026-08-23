@@ -15,6 +15,14 @@
  */
 
 import { isProjectDocumentContent, type ProjectDocumentContent } from "./documents.js";
+import {
+  TASK_ARTIFACT_OUTCOME,
+  type TaskArtifactOutcome,
+  type TaskArtifactReport,
+} from "./project-deletion.js";
+
+/** Liste fermee des sorts possibles, pour valider une reponse du runner. */
+const TASK_ARTIFACT_OUTCOMES: readonly TaskArtifactOutcome[] = Object.values(TASK_ARTIFACT_OUTCOME);
 
 /**
  * Demande de creation du document d'une tache.
@@ -137,5 +145,102 @@ export function isDeleteTaskDocumentSuccess(value: unknown): value is DeleteTask
     typeof value["deleted"] === "boolean" &&
     typeof value["alreadyAbsent"] === "boolean" &&
     typeof value["path"] === "string"
+  );
+}
+
+/**
+ * Demande de nettoyage des documents de taches d'un projet supprime.
+ *
+ * ## Pourquoi une troisieme route, et pas un drapeau sur la deuxieme
+ *
+ * `POST /repositories/tasks/delete-document` refuse un fichier dont la revision
+ * ne correspond plus : la suppression d'**une** tache est une operation
+ * ordinaire, et un document modifie a la main y merite un conflit. Ajouter un
+ * `force` a cette route aurait fait dependre sa garantie d'un booleen — c'est
+ * exactement ce qu'il ne faut pas pour du code qui supprime des fichiers.
+ *
+ * La suppression d'un **projet** pose une question differente : l'utilisateur a
+ * recopie le nom du projet pour confirmer le retrait de tout ce que NOX en sait.
+ * Un document divergent n'y est pas un desaccord a arbitrer — c'est un artefact
+ * de NOX que l'utilisateur a modifie, et qu'il demande explicitement a voir
+ * disparaitre. La revision reste calculee, et la divergence reste **annoncee** :
+ * ce qui change est qu'elle n'interdit plus le retrait.
+ *
+ * Ce que cette route ne fait pas, en revanche, ne change pas d'un iota : aucun
+ * chemin ne vient de l'appelant, aucun lien n'est suivi, aucun dossier n'est
+ * cree ni supprime, et un fichier dont NOX ne connait pas la revision n'est
+ * jamais candidat — il n'entre meme pas dans la requete.
+ */
+export type ProjectTaskArtifact = {
+  taskCode: string;
+  /**
+   * Revision enregistree en base, jamais `null`.
+   *
+   * C'est la preuve d'appartenance : NOX a ecrit ce fichier a ce chemin et en a
+   * relu les octets. Une tache jamais synchronisee n'a pas de revision, donc
+   * pas d'artefact — et le fichier qui occuperait malgre tout son chemin n'est
+   * pas le sien.
+   */
+  expectedRevision: string;
+};
+
+export type DeleteProjectDocumentsRequest = {
+  repositoryPath: string;
+  artifacts: ProjectTaskArtifact[];
+};
+
+/**
+ * Reponse du nettoyage.
+ *
+ * `ok: true` signifie que la route a traite la liste, pas que tout a ete
+ * retire : chaque entree porte son propre sort, et un `REFUSED` interdit a
+ * l'appelant d'affirmer que le projet a ete supprime.
+ */
+export type DeleteProjectDocumentsSuccess = {
+  ok: true;
+  documents: TaskArtifactReport[];
+};
+
+/** Valide le corps recu par `POST /repositories/tasks/delete-project-documents`. */
+export function parseDeleteProjectDocumentsRequest(
+  value: unknown,
+): DeleteProjectDocumentsRequest | null {
+  if (
+    !isRecord(value) ||
+    typeof value["repositoryPath"] !== "string" ||
+    !Array.isArray(value["artifacts"])
+  ) {
+    return null;
+  }
+
+  const artifacts: ProjectTaskArtifact[] = [];
+  for (const entry of value["artifacts"] as unknown[]) {
+    if (
+      !isRecord(entry) ||
+      typeof entry["taskCode"] !== "string" ||
+      typeof entry["expectedRevision"] !== "string"
+    ) {
+      return null;
+    }
+    artifacts.push({ taskCode: entry["taskCode"], expectedRevision: entry["expectedRevision"] });
+  }
+
+  return { repositoryPath: value["repositoryPath"], artifacts };
+}
+
+/** Verifie qu'une reponse JSON est un nettoyage d'artefacts reussi. */
+export function isDeleteProjectDocumentsSuccess(
+  value: unknown,
+): value is DeleteProjectDocumentsSuccess {
+  if (!isRecord(value) || value["ok"] !== true || !Array.isArray(value["documents"])) {
+    return false;
+  }
+
+  return (value["documents"] as unknown[]).every(
+    (entry) =>
+      isRecord(entry) &&
+      typeof entry["taskCode"] === "string" &&
+      typeof entry["path"] === "string" &&
+      (TASK_ARTIFACT_OUTCOMES as readonly string[]).includes(entry["outcome"] as string),
   );
 }

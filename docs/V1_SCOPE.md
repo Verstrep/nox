@@ -120,28 +120,36 @@ seul geste. Modifier une tâche en file la ramène en brouillon dès que son con
 seulement alors. Dès la première exécution, la spécification est figée : ce qui a déjà servi
 devient un fait historique.
 
+### 1.14 Tableau de bord et cycle de vie d'un projet
+
+La page d'accueil répond « quels projets existent, où en est chacun, lequel ouvrir » sans
+ouvrir une seule tâche. Tout y est dérivé des données réelles : résumé du brief, compteurs de
+tâches par statut, état d'amorçage, dépendances en attente, dernière activité.
+
+Un projet se renomme, et se **supprime de NOX** : son état complet part en une transaction, et
+les documents `tasks/TASK-xxx.md` que NOX a écrits sont retirés du repository. Le code source,
+le `.git` et la documentation applicative sont préservés, aucune opération Git n'a lieu, et le
+même dossier peut ensuite être réenregistré comme un projet réellement neuf — rien n'est
+reconstruit depuis le disque.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Tableau de bord d'un projet
-
-Une vue qui répond « où en est ce projet » sans ouvrir chaque tâche.
-
-### 2.2 File d'exécution
+### 2.1 File d'exécution
 
 Enchaîner plusieurs tâches prêtes, sans qu'un enchaînement devienne une autonomie : chaque
 départ reste décidé, et une exécution reste seule active.
 
-### 2.3 Validation intelligente
+### 2.2 Validation intelligente
 
 Distinguer ce qu'une commande peut prouver, ce qu'une relecture par l'Architecte peut établir,
 et ce qui exige réellement un test humain — pour ne solliciter l'humain que dans le troisième
 cas.
 
-### 2.4 Livraison Git contrôlée
+### 2.3 Livraison Git contrôlée
 
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.

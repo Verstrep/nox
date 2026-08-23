@@ -19,6 +19,24 @@ export {
 } from "./projects.js";
 
 export {
+  PROJECT_DELETION_ORDER,
+  deleteProjectState,
+  listOwnedTaskArtifacts,
+  projectHasActiveRun,
+  renameProject,
+  type DeleteProjectStateResult,
+  type OwnedTaskArtifact,
+  type ProjectDeletionCounts,
+  type ProjectDeletionTable,
+  type RenameProjectResult,
+} from "./project-deletion.js";
+
+export {
+  loadProjectDashboardFacts,
+  type ProjectDashboardFacts,
+} from "./project-dashboard.js";
+
+export {
   InvalidTaskRecordError,
   createTask,
   deleteTaskWithoutRuns,

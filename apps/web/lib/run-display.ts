@@ -43,6 +43,18 @@ export function runUrl(projectId: string, taskId: string, runId: string): string
   return `/projects/${projectId}/tasks/${taskId}/runs/${runId}`;
 }
 
+/**
+ * URL de l'inspection technique d'une execution.
+ *
+ * Le prompt integral et son empreinte y vivent depuis TASK-025 : ils servent au
+ * debug et a la reproductibilite, pas a decider quoi faire ensuite. La page
+ * d'une execution renvoie ici plutot que de derouler quarante lignes de prompt
+ * entre la timeline et l'etat Git.
+ */
+export function runInspectUrl(projectId: string, taskId: string, runId: string): string {
+  return `${runUrl(projectId, taskId, runId)}/inspect`;
+}
+
 /** URL du Route Handler interrogé par le navigateur pendant une execution. */
 export function runStatusEndpoint(projectId: string, taskId: string, runId: string): string {
   return `/api/projects/${projectId}/tasks/${taskId}/runs/${runId}/status`;

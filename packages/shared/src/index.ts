@@ -305,17 +305,37 @@ export type {
 
 export {
   isCreateTaskDocumentSuccess,
+  isDeleteProjectDocumentsSuccess,
   isDeleteTaskDocumentSuccess,
   parseCreateTaskDocumentRequest,
+  parseDeleteProjectDocumentsRequest,
   parseDeleteTaskDocumentRequest,
 } from "./task-documents.js";
 
 export type {
   CreateTaskDocumentRequest,
   CreateTaskDocumentSuccess,
+  DeleteProjectDocumentsRequest,
+  DeleteProjectDocumentsSuccess,
   DeleteTaskDocumentRequest,
   DeleteTaskDocumentSuccess,
+  ProjectTaskArtifact,
 } from "./task-documents.js";
+
+export {
+  PROJECT_DELETION_ERROR,
+  TASK_ARTIFACT_OUTCOME,
+  countModifiedArtifacts,
+  countRemovedArtifacts,
+  hasRefusedArtifact,
+  projectDeletionConfirmed,
+} from "./project-deletion.js";
+
+export type {
+  ProjectDeletionErrorCode,
+  TaskArtifactOutcome,
+  TaskArtifactReport,
+} from "./project-deletion.js";
 
 export {
   ARCHITECT_CONVERSATION_VERSION,

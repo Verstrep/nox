@@ -21,6 +21,7 @@ import {
   isCreateProjectDocumentSuccess,
   isCreateTaskDocumentSuccess,
   isDeleteProjectDocumentSuccess,
+  isDeleteProjectDocumentsSuccess,
   isDeleteTaskDocumentSuccess,
   isInspectRepositorySuccess,
   isListProjectDocumentsSuccess,
@@ -46,6 +47,8 @@ import {
   type CreateTaskDocumentRequest,
   type DeleteProjectDocumentRequest,
   type DeleteProjectDocumentSuccess,
+  type DeleteProjectDocumentsRequest,
+  type DeleteProjectDocumentsSuccess,
   type DeleteTaskDocumentRequest,
   type DeleteTaskDocumentSuccess,
   type InspectRepositoryRequest,
@@ -57,7 +60,9 @@ import {
   type ReadProjectDocumentRequest,
   type ResolveRepositoryRequest,
   type RunReviewSnapshot,
+  type ProjectTaskArtifact,
   type RunnerHealthResponse,
+  type TaskArtifactReport,
   type UpdateProjectDocumentRequest,
 } from "@nox/shared";
 
@@ -430,6 +435,38 @@ export function deleteTaskDocument(
     payload,
     isDeleteTaskDocumentSuccess,
     (value) => value as DeleteTaskDocumentSuccess,
+    options,
+  );
+}
+
+/**
+ * Retire les documents de taches d'un projet supprime de NOX.
+ *
+ * Le web n'envoie **aucun chemin** : il envoie des codes de taches et les
+ * revisions enregistrees en base — l'ensemble est reconstruit cote serveur a
+ * partir du projet, jamais recu du navigateur. Une tache dont le document n'a
+ * jamais ete synchronise n'a pas de revision, donc pas d'artefact, donc
+ * n'apparait pas dans cette requete.
+ *
+ * La reponse rapporte le sort de chaque document. Un `REFUSED` ne leve pas : il
+ * remonte tel quel, et c'est l'appelant qui en fait un refus global.
+ */
+export function deleteProjectTaskDocuments(
+  repositoryPath: string,
+  artifacts: readonly ProjectTaskArtifact[],
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<TaskArtifactReport[]>> {
+  const payload: DeleteProjectDocumentsRequest = {
+    repositoryPath,
+    artifacts: artifacts.map((artifact) => ({ ...artifact })),
+  };
+
+  return postAuthenticated(
+    "/repositories/tasks/delete-project-documents",
+    "tasks/delete-project-documents",
+    payload,
+    isDeleteProjectDocumentsSuccess,
+    (value) => (value as DeleteProjectDocumentsSuccess).documents,
     options,
   );
 }

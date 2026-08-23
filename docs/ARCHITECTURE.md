@@ -455,6 +455,65 @@ transaction SQLite (contrat + dépendances + statut)  →  document Markdown
   contrôle de révision. Un fichier modifié à la main produit un conflit, jamais un écrasement —
   et éditer ce fichier ne modifie toujours pas la tâche.
 
+### 6.2 ter Tableau de bord et cycle de vie d'un projet
+
+**Le tableau de bord est entièrement dérivé.** La page d'accueil ne stocke aucun état
+d'avancement : ni compteur de tâches, ni « progression », ni état d'amorçage. Quatre requêtes
+groupées suffisent, quel que soit le nombre de projets — les faits sont lus en lot puis
+regroupés en mémoire, jamais une requête par carte.
+
+```text
+listProjects  +  loadProjectDashboardFacts   →   projectCard   →   sortProjectCards
+   (SQLite)        (briefs, tâches, arêtes)       (libellés)         (activité ↓)
+```
+
+Aucun repository n'est ouvert, le runner n'est pas interrogé, et aucun fournisseur n'est
+appelé. L'ordre affiché combine `Project.updatedAt` et la date de la tâche la plus récemment
+modifiée : la ligne du projet ne bouge pas quand une exécution change le statut d'une tâche.
+
+**Les métadonnées techniques vivent derrière Inspect.** Le prompt intégral d'une exécution et
+son empreinte SHA-256 ont quitté la page de l'exécution pour `runs/<id>/inspect`. Rien n'a été
+supprimé : ce qui sert au débogage et à la reproductibilité reste à un clic, mais ne s'intercale
+plus entre la timeline et l'état Git.
+
+**Supprimer un projet, c'est supprimer ce que NOX en sait.** Jamais le logiciel. La séquence est
+fixe, et son ordre n'est pas négociable :
+
+```text
+1. relire le projet en base
+2. revalider la confirmation (nom recopié) puis l'absence d'exécution active
+3. énumérer les artefacts possédés   ← revision enregistrée = preuve d'appartenance
+4. runner : retirer ces documents    ← disque d'abord
+5. SQLite : deleteProjectState       ← base ensuite, en une transaction
+6. rediriger vers le tableau de bord
+```
+
+Le disque passe avant la base parce que les révisions qui **prouvent** l'appartenance des
+documents vivent en base. Les supprimer d'abord laisserait des `tasks/TASK-xxx.md` que plus rien
+ne pourrait rattacher à un projet. Dans l'autre sens, un échec de nettoyage refuse la suppression
+et **rien** n'a bougé.
+
+Un seul document qui résiste — lien symbolique, dossier, erreur système — annule tout le geste.
+« Projet supprimé, documents orphelins » est l'état que cette conception existe pour rendre
+impossible.
+
+**Le navigateur n'envoie que deux valeurs** : l'identifiant du projet et le nom recopié. Aucun
+chemin, aucune liste de fichiers, aucune révision. La liste des artefacts est reconstruite côté
+serveur à partir de la base ; un fichier `tasks/TASK-999.md` qu'aucune tâche ne revendique n'est
+jamais candidat, et une tâche dont le document n'a jamais été synchronisé n'en produit aucun.
+
+**Le repository survit entièrement.** Code source, `.git`, `package.json`, `docs/`,
+`CLAUDE.md`, fichiers arbitraires : rien n'est touché. Aucun `git add`, aucun commit, aucun
+push, aucun `restore`. Le dossier `tasks/` lui-même n'est jamais supprimé, même devenu vide.
+
+**Après suppression, le chemin redevient enregistrable.** Le projet obtenu est réellement neuf :
+ni brief, ni plan, ni mémoire, ni conversation, ni tâche, ni compteur hérité. NOX ne reconstruit
+rien depuis le disque, Git ou les documents restants.
+
+**Renommer est une écriture SQLite, et rien d'autre.** Le nom NOX est une métadonnée locale : il
+ne renomme aucun dossier, ne touche pas à Git, et ne réécrit ni le brief, ni le plan, ni la
+documentation du repository.
+
 ### 6.3 Exécution Claude Code
 
 ```text

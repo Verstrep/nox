@@ -177,6 +177,10 @@ doit le dire explicitement et la justifier.
 - **Les chemins finaux sont reconstruits côté serveur.** Le navigateur n'envoie jamais un chemin
   complet, ni un préfixe, ni un chemin absolu.
 - **Aucune suppression sans contrôle de révision**, et une suppression forcée n'existe pas.
+  Seule exception, nommée : le **nettoyage des documents de tâches d'un projet supprimé**, dont
+  la route dédiée calcule et **rapporte** la révision — un document divergent est annoncé comme
+  tel — sans en faire une condition. Ce qui prouve l'appartenance y est la révision enregistrée
+  en base, sans laquelle le document n'entre même pas dans la requête.
 - **Aucun document de tâche supprimé par la route générique.** Les chemins
   `tasks/TASK-<chiffres>.md` sont refusés par `POST /repositories/documents/delete`, quelle que
   soit la révision. La protection vit dans le runner, pas seulement dans l'interface.
@@ -647,3 +651,37 @@ doit le dire explicitement et la justifier.
   dépendances sont des écritures SQLite ; les pages fonctionnent runner arrêté.
 - **Le planificateur de backlog est inchangé.** `backlog/1` ne propose aucune dépendance : elles
   sont posées à la main après l'application.
+
+### 8.15 Tableau de bord et cycle de vie d'un projet
+
+- **La page d'accueil est centrée projets.** Aucune roadmap statique, aucune « phase courante »,
+  aucun inventaire du socle technique, aucune version codée en dur ne pilote l'interface : un
+  écran qui décrit l'avancement de NOX lui-même se périme par construction.
+- **Tout ce que le tableau de bord affiche est dérivé.** Aucun compteur, aucun état
+  d'avancement, aucune « progression » n'est stocké en base, et ouvrir la page n'appelle ni
+  fournisseur, ni Claude Code, ni le runner.
+- **Supprimer un projet, c'est supprimer son état NOX, jamais son repository applicatif.** Ni
+  code source, ni `.git`, ni documentation fondamentale, ni fichier arbitraire n'est retiré.
+- **Seuls les documents de tâches dont NOX connaît la révision sont nettoyés.** L'appartenance
+  se prouve en base, jamais par un motif de nom de fichier : un `tasks/TASK-999.md` qu'aucune
+  tâche ne revendique est préservé, et un balayage de `tasks/*.md` n'existe pas.
+- **Aucun chemin ne vient du navigateur.** La suppression reçoit un identifiant de projet et un
+  nom recopié ; la liste des documents à retirer est reconstruite côté serveur.
+- **Le disque avant la base.** Supprimer les lignes d'abord emporterait les révisions qui
+  prouvent l'appartenance des documents. Un échec de nettoyage **refuse** la suppression : un
+  projet à moitié supprimé n'existe pas, et un artefact resté en place l'interdit entièrement.
+- **Une suppression de projet ne touche jamais à Git.** Aucun `git add`, aucun commit, aucun
+  push, aucun `reset`, aucun `restore`. Le repository peut rester « dirty » : c'est un fait
+  annoncé, pas un problème à réparer.
+- **Un projet dont une exécution Claude est active n'est pas supprimable**, et NOX ne l'annule
+  pas à la place de l'utilisateur.
+- **Les dépendances sont retirées avant les tâches**, comme les six autres relations `Restrict`
+  du schéma. L'ordre de suppression est écrit une seule fois, et un test vérifie qu'il couvre
+  toutes les tables du projet.
+- **Après suppression, le même repository se réenregistre comme un projet neuf**, et rien n'est
+  reconstruit depuis Git, les documents restants ou la documentation du dépôt.
+- **Renommer un projet est une écriture SQLite.** Aucun dossier renommé, aucune opération Git,
+  aucun appel au fournisseur, et aucun document réécrit.
+- **Les empreintes, révisions et métadonnées de fournisseur vivent derrière Inspect** dès
+  qu'elles ne servent pas au workflow. Elles sont **déplacées**, jamais supprimées : ce qui
+  servait au débogage reste à un clic.
