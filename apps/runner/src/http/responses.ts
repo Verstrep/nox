@@ -148,6 +148,11 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   // l'appelant, et surtout : ce n'est pas une autorisation.
   [RUNNER_ERROR.WORKSPACE_FINGERPRINT_UNAVAILABLE]: 500,
 
+  // Une commande refusee est une faute de l'appelant : 400. Un demarrage
+  // impossible est un fait de la machine : 500.
+  [RUNNER_ERROR.VALIDATION_COMMAND_REFUSED]: 400,
+  [RUNNER_ERROR.VALIDATION_SPAWN_FAILED]: 500,
+
   [RUNNER_ERROR.INTERNAL_ERROR]: 500,
 };
 

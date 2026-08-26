@@ -40,20 +40,27 @@ import {
   ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_LIMITS,
   ARCHITECT_BACKLOG_PROPOSAL_STATUS,
-  ARCHITECT_BACKLOG_SCHEMA_VERSION,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  COMMAND_EXECUTION_MODE,
+  DEFAULT_HUMAN_INSTRUCTIONS,
   EMPTY_ARCHITECT_USAGE,
+  VERIFICATION_MODE,
   formatBacklogCode,
   formatTaskCode,
   isArchitectBacklogGenerationStatus,
   isArchitectBacklogProposalStatus,
   isBacklogContextManifest,
+  isCommandExecutionMode,
   isTaskPriority,
   isTaskStatus,
+  isVerificationMode,
   TASK_PRIORITY,
   type ArchitectBacklogGenerationStatus,
-  type ArchitectBacklogProposal,
+  type ArchitectBacklogCommandProposal,
+  type ArchitectBacklogCriterionProposal,
   type ArchitectBacklogProposalStatus,
-  type ArchitectBacklogTaskProposal,
+  type ArchitectBacklogProposalV2,
+  type ArchitectBacklogTaskProposalV2,
   type ArchitectUsage,
   type BacklogContextManifest,
   type DevelopmentTaskDetail,
@@ -61,7 +68,12 @@ import {
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
-import { reserveTaskSequences, writeTaskRow, type CreateTaskInput } from "./tasks.js";
+import {
+  reserveTaskSequences,
+  writeTaskRow,
+  type CreateTaskInput,
+  type TaskRowInput,
+} from "./tasks.js";
 
 /**
  * Etat de planification **vu par le fournisseur** au moment de l'appel.
@@ -113,10 +125,16 @@ export type ArchitectBacklogProposalView = {
   status: ArchitectBacklogProposalStatus;
   message: string;
   taskCount: number;
-  /** Ce que le fournisseur a propose, tel quel. Jamais reecrit. */
-  provided: ArchitectBacklogProposal;
+  /**
+   * Ce que le fournisseur a propose, tel quel. Jamais reecrit.
+   *
+   * Rendu dans la forme courante quelle que soit la version dans laquelle il a
+   * ete ecrit : une proposition `backlog/1` est **relevee** a la lecture, avec
+   * les defauts surs, sans que le document enregistre ne bouge.
+   */
+  provided: ArchitectBacklogProposalV2;
   /** Ce que l'humain a reellement applique. `null` tant que ce n'est pas fait. */
-  applied: ArchitectBacklogProposal | null;
+  applied: ArchitectBacklogProposalV2 | null;
   appliedAt: string | null;
   dismissedAt: string | null;
   createdAt: string;
@@ -194,9 +212,99 @@ function readStrings(value: unknown): string[] {
  * A l'application, chaque tache repasse par la validation complete — bornes,
  * commandes, chemins — contre l'etat courant du projet.
  */
-function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBacklogProposal {
-  const empty: ArchitectBacklogProposal = {
-    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
+/**
+ * Relit les commandes d'un element, dans l'une ou l'autre version.
+ *
+ * Une chaine est une commande de `backlog/1` : elle devient `AGENT_ONLY`, le
+ * defaut sur. Un objet est une commande de `backlog/2`, dont le mode est relu
+ * — et retombe sur `AGENT_ONLY` s'il est illisible, jamais sur `AUTONOMOUS`.
+ */
+function readPayloadCommands(value: unknown): ArchitectBacklogCommandProposal[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const commands: ArchitectBacklogCommandProposal[] = [];
+  for (const raw of value) {
+    if (typeof raw === "string") {
+      commands.push({ command: raw, executionMode: COMMAND_EXECUTION_MODE.AGENT_ONLY });
+      continue;
+    }
+    if (!isRecord(raw) || typeof raw["command"] !== "string") {
+      continue;
+    }
+    commands.push({
+      command: raw["command"],
+      executionMode: isCommandExecutionMode(raw["executionMode"])
+        ? raw["executionMode"]
+        : COMMAND_EXECUTION_MODE.AGENT_ONLY,
+    });
+  }
+  return commands;
+}
+
+/**
+ * Relit les criteres d'un element, dans l'une ou l'autre version.
+ *
+ * Une chaine est un critere de `backlog/1` : il devient `HUMAN`, avec
+ * l'instruction neutre. Un mode illisible retombe sur `HUMAN` pour la meme
+ * raison que partout ailleurs — c'est la valeur qui n'autorise rien.
+ */
+function readPayloadCriteria(
+  value: unknown,
+  commandCount: number,
+): ArchitectBacklogCriterionProposal[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const criteria: ArchitectBacklogCriterionProposal[] = [];
+  for (const raw of value) {
+    if (typeof raw === "string") {
+      criteria.push({
+        text: raw,
+        verificationMode: VERIFICATION_MODE.HUMAN,
+        humanInstructions: DEFAULT_HUMAN_INSTRUCTIONS,
+        validationCommandIndexes: [],
+      });
+      continue;
+    }
+    if (!isRecord(raw) || typeof raw["text"] !== "string") {
+      continue;
+    }
+    const mode = isVerificationMode(raw["verificationMode"])
+      ? raw["verificationMode"]
+      : VERIFICATION_MODE.HUMAN;
+    const automated = mode === VERIFICATION_MODE.AUTOMATED;
+    const rawIndexes: unknown = raw["validationCommandIndexes"];
+    const indexes = automated && Array.isArray(rawIndexes)
+      ? [
+          ...new Set(
+            rawIndexes.filter(
+              (entry): entry is number =>
+                typeof entry === "number" &&
+                Number.isInteger(entry) &&
+                entry >= 0 &&
+                entry < commandCount,
+            ),
+          ),
+        ].sort((left, right) => left - right)
+      : [];
+    criteria.push({
+      text: raw["text"],
+      verificationMode: mode,
+      humanInstructions: automated
+        ? null
+        : typeof raw["humanInstructions"] === "string" && raw["humanInstructions"].trim() !== ""
+          ? raw["humanInstructions"]
+          : DEFAULT_HUMAN_INSTRUCTIONS,
+      validationCommandIndexes: indexes,
+    });
+  }
+  return criteria;
+}
+
+function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBacklogProposalV2 {
+  const empty: ArchitectBacklogProposalV2 = {
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
     message: fallbackMessage,
     tasks: [],
   };
@@ -208,21 +316,26 @@ function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBa
     }
 
     const rawTasks: unknown = parsed["tasks"];
-    const tasks: ArchitectBacklogTaskProposal[] = Array.isArray(rawTasks)
-      ? rawTasks.filter(isRecord).map((task) => ({
-          title: typeof task["title"] === "string" ? task["title"] : "",
-          priority: isTaskPriority(task["priority"]) ? task["priority"] : TASK_PRIORITY.MEDIUM,
-          objective: typeof task["objective"] === "string" ? task["objective"] : "",
-          context: typeof task["context"] === "string" ? task["context"] : null,
-          acceptanceCriteria: readStrings(task["acceptanceCriteria"]),
-          outOfScope: readStrings(task["outOfScope"]),
-          documentReferences: readStrings(task["documentReferences"]),
-          validationCommands: readStrings(task["validationCommands"]),
-        }))
+    const tasks: ArchitectBacklogTaskProposalV2[] = Array.isArray(rawTasks)
+      ? rawTasks.filter(isRecord).map((task) => {
+          const commands = readPayloadCommands(task["validationCommands"]);
+          return {
+            title: typeof task["title"] === "string" ? task["title"] : "",
+            priority: isTaskPriority(task["priority"]) ? task["priority"] : TASK_PRIORITY.MEDIUM,
+            objective: typeof task["objective"] === "string" ? task["objective"] : "",
+            context: typeof task["context"] === "string" ? task["context"] : null,
+            acceptanceCriteria: readPayloadCriteria(task["acceptanceCriteria"], commands.length),
+            outOfScope: readStrings(task["outOfScope"]),
+            documentReferences: readStrings(task["documentReferences"]),
+            validationCommands: commands,
+          };
+        })
       : [];
 
     return {
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
+      // La forme rendue est toujours la forme courante : une proposition de
+      // `backlog/1` est **relevee** a la lecture, jamais reecrite en base.
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
       message: typeof parsed["message"] === "string" ? parsed["message"] : fallbackMessage,
       tasks,
     };
@@ -405,7 +518,7 @@ export type FinishBacklogGenerationInput = {
   usage?: ArchitectUsage;
   errorCode?: string | null;
   /** Backlog valide, lorsque l'appel a abouti. */
-  proposal?: ArchitectBacklogProposal | null;
+  proposal?: ArchitectBacklogProposalV2 | null;
 };
 
 /**
@@ -639,8 +752,16 @@ export async function loadProjectBacklog(
 
 // --- Application et abandon --------------------------------------------------
 
-/** Une tache du backlog, telle que l'humain l'a validee. */
-export type BacklogTaskToCreate = Omit<CreateTaskInput, "projectId">;
+/**
+ * Une tache du backlog, telle que l'humain l'a validee.
+ *
+ * `verificationPlan` est facultatif : une proposition `backlog/1` n'en porte
+ * pas, et la tache recoit alors les defauts surs. Presente, il fait foi — c'est
+ * lui qui decide si NOX pourra terminer cette tache tout seul.
+ */
+export type BacklogTaskToCreate = Omit<CreateTaskInput, "projectId"> & {
+  verificationPlan?: TaskRowInput["verificationPlan"];
+};
 
 export type ApplyBacklogResult =
   | {
@@ -749,19 +870,48 @@ export async function applyBacklogProposal(
       return { ok: false, reason: "stale" };
     }
 
-    const applied: ArchitectBacklogProposal = {
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
+    // `appliedJson` porte ce que l'humain a retenu, dans la forme courante :
+    // classification comprise. `providerJson`, lui, n'est jamais reecrit — les
+    // deux restent distincts, et c'est ce qui permet de comparer plus tard ce
+    // qui avait ete propose et ce qui a ete applique.
+    const applied: ArchitectBacklogProposalV2 = {
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
       message: input.message,
-      tasks: input.tasks.map((task) => ({
-        title: task.title,
-        priority: task.priority,
-        objective: task.objective,
-        context: task.context,
-        acceptanceCriteria: [...task.acceptanceCriteria],
-        outOfScope: task.outOfScope === null ? [] : [task.outOfScope],
-        documentReferences: [...task.documentReferences],
-        validationCommands: [...task.validationCommands],
-      })),
+      tasks: input.tasks.map((task) => {
+        const plan = task.verificationPlan;
+        return {
+          title: task.title,
+          priority: task.priority,
+          objective: task.objective,
+          context: task.context,
+          acceptanceCriteria:
+            plan === undefined
+              ? task.acceptanceCriteria.map((text) => ({
+                  text,
+                  verificationMode: VERIFICATION_MODE.HUMAN,
+                  humanInstructions: DEFAULT_HUMAN_INSTRUCTIONS,
+                  validationCommandIndexes: [],
+                }))
+              : plan.criteria.map((criterion) => ({
+                  text: criterion.text,
+                  verificationMode: criterion.verificationMode,
+                  humanInstructions: criterion.humanInstructions,
+                  validationCommandIndexes: [...criterion.commandPositions],
+                })),
+          outOfScope: task.outOfScope === null ? [] : [task.outOfScope],
+          documentReferences: [...task.documentReferences],
+          validationCommands:
+            plan === undefined
+              ? task.validationCommands.map((command) => ({
+                  command,
+                  executionMode: COMMAND_EXECUTION_MODE.AGENT_ONLY,
+                }))
+              : plan.commands.map((command) => ({
+                  command: command.command,
+                  executionMode: command.executionMode,
+                })),
+        };
+      }),
     };
 
     // La proposition est prise avant toute creation. Une mise a jour

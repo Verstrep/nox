@@ -26,10 +26,13 @@ import { fileURLToPath } from "node:url";
 import {
   ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_PROPOSAL_STATUS,
-  ARCHITECT_BACKLOG_SCHEMA_VERSION,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  COMMAND_EXECUTION_MODE,
+  DEFAULT_HUMAN_INSTRUCTIONS,
+  VERIFICATION_MODE,
   TASK_PRIORITY,
   TASK_STATUS,
-  type ArchitectBacklogProposal,
+  type ArchitectBacklogProposalV2,
   type BacklogContextManifest,
 } from "@nox/shared";
 
@@ -86,16 +89,23 @@ function planningBase(overrides: Partial<BacklogPlanningBase> = {}): BacklogPlan
   };
 }
 
-function backlog(titles: readonly string[]): ArchitectBacklogProposal {
+function backlog(titles: readonly string[]): ArchitectBacklogProposalV2 {
   return {
-    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
     message: "Ce decoupage couvre le plan.",
     tasks: titles.map((title) => ({
       title,
       priority: TASK_PRIORITY.MEDIUM,
       objective: `Objectif de ${title}.`,
       context: null,
-      acceptanceCriteria: [`${title} est verifiable`],
+      acceptanceCriteria: [
+        {
+          text: `${title} est verifiable`,
+          verificationMode: VERIFICATION_MODE.HUMAN,
+          humanInstructions: "Verifier a la main.",
+          validationCommandIndexes: [],
+        },
+      ],
       outOfScope: [],
       documentReferences: [],
       validationCommands: [],
@@ -930,5 +940,95 @@ describe("lecture de la page", () => {
 
     assert.equal(await getBacklogProposal(db, otherId, proposalId), null);
     assert.equal((await loadProjectBacklog(db, otherId)).pending, null);
+  });
+});
+
+describe("relecture d'une proposition historique", () => {
+  it("releve un payload backlog/1 avec les defauts surs", async () => {
+    // Une proposition enregistree avant TASK-027 ne porte aucune
+    // classification. La relire ne doit ni echouer, ni en inventer une : les
+    // criteres deviennent `HUMAN`, les commandes `AGENT_ONLY`.
+    const projectId = await newProject();
+    const { proposalId } = await newProposal(projectId, ["A"]);
+
+    const historical = JSON.stringify({
+      schemaVersion: 1,
+      message: "Ancien backlog.",
+      tasks: [
+        {
+          title: "A",
+          priority: TASK_PRIORITY.MEDIUM,
+          objective: "Objectif de A.",
+          context: null,
+          acceptanceCriteria: ["A est verifiable"],
+          outOfScope: [],
+          documentReferences: [],
+          validationCommands: ["npm test"],
+        },
+      ],
+    });
+    await db.architectBacklogProposal.update({
+      where: { id: proposalId },
+      data: { providerJson: historical },
+    });
+
+    const proposal = await getBacklogProposal(db, projectId, proposalId);
+    assert.ok(proposal !== null);
+
+    const first = proposal.provided.tasks[0];
+    assert.equal(first?.acceptanceCriteria[0]?.text, "A est verifiable");
+    assert.equal(first?.acceptanceCriteria[0]?.verificationMode, VERIFICATION_MODE.HUMAN);
+    assert.equal(first?.acceptanceCriteria[0]?.humanInstructions, DEFAULT_HUMAN_INSTRUCTIONS);
+    assert.equal(first?.validationCommands[0]?.command, "npm test");
+    assert.equal(first?.validationCommands[0]?.executionMode, COMMAND_EXECUTION_MODE.AGENT_ONLY);
+
+    // Le document enregistre n'a pas bouge : il raconte toujours ce que le
+    // fournisseur avait rendu ce jour-la.
+    const row = await db.architectBacklogProposal.findUnique({
+      where: { id: proposalId },
+      select: { providerJson: true },
+    });
+    assert.equal(row?.providerJson, historical);
+  });
+
+  it("ne fait jamais retomber un mode illisible sur autonome", async () => {
+    const projectId = await newProject();
+    const { proposalId } = await newProposal(projectId, ["A"]);
+
+    await db.architectBacklogProposal.update({
+      where: { id: proposalId },
+      data: {
+        providerJson: JSON.stringify({
+          schemaVersion: 2,
+          message: "m",
+          tasks: [
+            {
+              title: "A",
+              priority: TASK_PRIORITY.MEDIUM,
+              objective: "Objectif.",
+              context: null,
+              acceptanceCriteria: [
+                {
+                  text: "Un",
+                  verificationMode: "PEUT_ETRE",
+                  humanInstructions: null,
+                  validationCommandIndexes: [0],
+                },
+              ],
+              outOfScope: [],
+              documentReferences: [],
+              validationCommands: [{ command: "npm test", executionMode: "SUDO" }],
+            },
+          ],
+        }),
+      },
+    });
+
+    const proposal = await getBacklogProposal(db, projectId, proposalId);
+    assert.ok(proposal !== null);
+    const first = proposal.provided.tasks[0];
+    assert.equal(first?.acceptanceCriteria[0]?.verificationMode, VERIFICATION_MODE.HUMAN);
+    assert.equal(first?.validationCommands[0]?.executionMode, COMMAND_EXECUTION_MODE.AGENT_ONLY);
+    assert.deepEqual(first?.acceptanceCriteria[0]?.validationCommandIndexes, []);
   });
 });

@@ -65,6 +65,7 @@ import {
   type ArchitectPromptDocument,
 } from "./architect-prompt.js";
 import { MAX_VALIDATION_COMMAND_LENGTH } from "./claude-commands.js";
+import { MAX_HUMAN_INSTRUCTIONS_LENGTH } from "./verification.js";
 import type { ArchitectPromptMemory } from "./project-memory.js";
 import type { ArchitectPromptBrief, ArchitectPromptV1Plan } from "./project-plan.js";
 
@@ -77,8 +78,16 @@ import type { ArchitectPromptBrief, ArchitectPromptV1Plan } from "./project-plan
  * suivi la premiere validation reelle n'a donc pas incremente ce numero :
  * `backlog/1` n'avait alors jamais ete livre, et aucune generation persistee ne
  * porte le texte d'avant.
+ *
+ * `backlog/2` : le plan de verification entre dans la proposition. Chaque
+ * critere declare comment il se verifie, chaque commande declare ce que NOX a le
+ * droit d'en faire. Les generations `backlog/1` deja enregistrees gardent leur
+ * version : elles restent lisibles, et restent applicables.
  */
-export const BACKLOG_PROMPT_VERSION = "backlog/1";
+export const BACKLOG_PROMPT_VERSION = "backlog/2";
+
+/** Version historique, conservee pour relire une generation anterieure. */
+export const BACKLOG_PROMPT_VERSION_1 = "backlog/1";
 
 /** Delimiteurs de l'inventaire des taches existantes. */
 export const EXISTING_TASK_OPEN = "<existing_task";
@@ -437,6 +446,7 @@ function renderInstructions(): string {
     `- Le contexte explique pourquoi la tache existe. ${String(ARCHITECT_BACKLOG_LIMITS.context)} caracteres au maximum.`,
     `- Les criteres d'acceptation sont entre ${String(ARCHITECT_BACKLOG_LIMITS.criteria.min)} et ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)}. Chacun est verifiable,`,
     "  observable et specifique. « Le code est propre » n'est pas un critere.",
+    "  Chacun declare aussi **comment** il se verifie : voir la section suivante.",
     `- Le hors perimetre dit ce que l'implementeur ne doit pas faire. ${String(ARCHITECT_BACKLOG_LIMITS.outOfScope.max)} au maximum.`,
     "- `CRITICAL` est reserve a une urgence technique ou de securite reelle. La",
     "  priorite dit l'urgence, jamais l'ambition de la tache.",
@@ -459,6 +469,42 @@ function renderInstructions(): string {
     "ni `>`, ni `<`, ni guillemet, ni virgule, ni retour a la ligne.",
     "Ne propose que des commandes plausibles pour ce projet, telles qu'elles",
     "apparaissent dans ses documents ou dans ses taches existantes.",
+    "",
+    "Chaque commande porte un `executionMode` :",
+    "",
+    "- `AGENT_ONLY` : elle est autorisee a l'implementeur pendant son travail, et NOX",
+    "  ne la lance jamais lui-meme. C'est le mode par defaut, et le mode sur.",
+    "- `AUTONOMOUS` : NOX l'executera **lui-meme**, apres le travail, sans surveillance.",
+    "  Elle doit donc se terminer d'elle-meme et ne rien installer : pas de serveur,",
+    "  pas de `dev`, pas de `start`, pas de `watch`, pas d'`install`, pas de `git`,",
+    "  pas de reseau, pas de deploiement. Seule une commande `AUTONOMOUS` peut prouver",
+    "  un critere.",
+    "",
+    "## Comment chaque critere se verifie",
+    "",
+    "Chaque critere porte un `verificationMode` :",
+    "",
+    "- `AUTOMATED` : une commande de cette tache, executee par NOX apres le travail,",
+    "  **suffit a elle seule** a prouver ce critere. Le critere nomme alors ces",
+    "  commandes dans `validationCommandIndexes`, par leur position dans",
+    "  `validationCommands` de la meme tache, et `humanInstructions` vaut `null`.",
+    "- `HUMAN` : un jugement ou une observation humaine est reellement necessaire.",
+    "  `humanInstructions` dit alors ce qu'il faut verifier, et comment, en une ou",
+    `  deux phrases de ${String(MAX_HUMAN_INSTRUCTIONS_LENGTH)} caracteres au maximum. Aucune commande n'y est nommee.`,
+    "",
+    "**Classe conservateur.** Dans le doute, `HUMAN`. L'existence d'une suite de tests",
+    "ne rend pas un critere automatise : la question n'est pas « ce projet a-t-il des",
+    "tests ? », elle est « cette commande precise echouerait-elle si ce critere precis",
+    "n'etait pas satisfait ? ». Si la reponse n'est pas evidemment oui, c'est `HUMAN`.",
+    "",
+    "Ne classe jamais `AUTOMATED` un critere qui porte sur la qualite visuelle, le",
+    "rendu responsive, la clarte d'un texte, l'ergonomie, la pertinence d'un choix",
+    "produit ou toute appreciation subjective — meme si `npm test` existe. Une",
+    "commande qui passe ne prouve pas qu'un ecran est lisible.",
+    "",
+    "Un critere `AUTOMATED` engage NOX a terminer la tache **sans intervention",
+    "humaine** si toutes ses preuves passent. Ne l'utilise que quand c'est exactement",
+    "ce que tu veux dire.",
     "",
     "## Ton message",
     "",

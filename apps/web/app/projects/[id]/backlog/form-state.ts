@@ -7,7 +7,7 @@
  * rien entrainer avec eux.
  */
 
-import type { TaskFormValues } from "@/lib/task-input";
+import type { TaskEditFormValues } from "@/lib/verification-fields";
 
 /** Ce que rend l'action de generation. */
 export type BacklogGenerateState = {
@@ -26,11 +26,11 @@ export const INITIAL_DISMISS_STATE: BacklogDismissState = { error: null };
 /**
  * Un element de backlog en cours de revue.
  *
- * Exactement les valeurs d'un formulaire de tache : c'est la meme chose, et
- * une seconde forme presque identique aurait fini par accepter ce que l'autre
- * refuse.
+ * Exactement les valeurs d'un formulaire d'edition de tache — plan de
+ * verification compris : c'est la meme chose, et une seconde forme presque
+ * identique aurait fini par accepter ce que l'autre refuse.
  */
-export type BacklogItemValues = TaskFormValues;
+export type BacklogItemValues = TaskEditFormValues;
 
 /**
  * Ce que rend l'action d'application.

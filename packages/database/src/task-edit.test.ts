@@ -27,10 +27,12 @@ import { fileURLToPath } from "node:url";
 
 import {
   TASK_DEPENDENCY_ERROR,
+  COMMAND_EXECUTION_MODE,
   TASK_EDIT_ERROR,
   TASK_KIND,
   TASK_PRIORITY,
   TASK_STATUS,
+  VERIFICATION_MODE,
 } from "@nox/shared";
 
 import {
@@ -47,6 +49,10 @@ import {
   updateTaskStatus,
   writeTaskRow,
   type DatabaseClient,
+  readVerificationPlan,
+  taskEditSnapshotOf,
+  type TaskEditCommandInput,
+  type TaskEditCriterionInput,
   type TaskEditInput,
   type TaskEditSnapshot,
 } from "../dist/index.js";
@@ -123,38 +129,47 @@ async function newTask(projectId: string, title: string): Promise<string> {
   return task.id;
 }
 
+/**
+ * Criteres humains, tels qu'un formulaire les produirait.
+ *
+ * `HUMAN` avec une instruction : c'est la classification qui n'autorise rien, et
+ * la seule qu'un contrat sans plan explicite puisse recevoir.
+ */
+function humanCriteria(...texts: readonly string[]): TaskEditCriterionInput[] {
+  return texts.map((text) => ({
+    text,
+    verificationMode: VERIFICATION_MODE.HUMAN,
+    humanInstructions: "Verifier a la main.",
+    commandPositions: [],
+  }));
+}
+
+/** Commandes reservees a Claude Code : NOX ne les executera pas. */
+function agentCommands(...commands: readonly string[]): TaskEditCommandInput[] {
+  return commands.map((command) => ({
+    command,
+    executionMode: COMMAND_EXECUTION_MODE.AGENT_ONLY,
+  }));
+}
+
 /** Revision courante d'une tache, telle que la page la calculerait. */
 async function currentRevision(taskId: string): Promise<string> {
+  return revision(await snapshotOf(taskId));
+}
+
+/** Contrat courant, plan de verification compris. */
+async function snapshotOf(taskId: string): Promise<TaskEditSnapshot> {
   const task = await getTaskById(db, taskId);
   assert.ok(task !== null);
-  return revision({
-    title: task.title,
-    objective: task.objective,
-    context: task.context,
-    outOfScope: task.outOfScope,
-    priority: task.priority,
-    acceptanceCriteria: task.acceptanceCriteria,
-    documentReferences: task.documentReferences,
-    validationCommands: task.validationCommands,
-    dependsOnTaskIds: await listDependencyIds(db, taskId),
-  });
+  return taskEditSnapshotOf(
+    task,
+    await readVerificationPlan(db, taskId),
+    await listDependencyIds(db, taskId),
+  );
 }
 
 async function valuesOf(taskId: string, overrides: Partial<TaskEditInput> = {}): Promise<TaskEditInput> {
-  const task = await getTaskById(db, taskId);
-  assert.ok(task !== null);
-  return {
-    title: task.title,
-    objective: task.objective,
-    context: task.context,
-    outOfScope: task.outOfScope,
-    priority: task.priority,
-    acceptanceCriteria: [...task.acceptanceCriteria],
-    documentReferences: [...task.documentReferences],
-    validationCommands: [...task.validationCommands],
-    dependsOnTaskIds: await listDependencyIds(db, taskId),
-    ...overrides,
-  };
+  return { ...(await snapshotOf(taskId)), ...overrides };
 }
 
 before(async () => {
@@ -186,9 +201,9 @@ describe("edition d'un brouillon", () => {
         context: "Contexte ajoute.",
         outOfScope: "- Rien d'autre.",
         priority: TASK_PRIORITY.HIGH,
-        acceptanceCriteria: ["Premier critere", "Second critere"],
+        acceptanceCriteria: humanCriteria("Premier critere", "Second critere"),
         documentReferences: ["docs/ARCHITECTURE.md"],
-        validationCommands: ["npm run test"],
+        validationCommands: agentCommands("npm run test"),
         dependsOnTaskIds: [other],
       }),
     });
@@ -218,7 +233,7 @@ describe("edition d'un brouillon", () => {
       expectedRevision: await currentRevision(taskId),
       revision,
       values: await valuesOf(taskId, {
-        acceptanceCriteria: ["Troisieme", "Premier", "Second"],
+        acceptanceCriteria: humanCriteria("Troisieme", "Premier", "Second"),
       }),
     });
 
@@ -718,5 +733,255 @@ describe("atomicite", () => {
       result.ok === false && result.reason === "edit" && result.code,
       TASK_EDIT_ERROR.FROZEN,
     );
+  });
+});
+
+describe("edition du plan de verification", () => {
+  it("enregistre une classification automatisee et ses preuves", async () => {
+    const projectId = await newProject();
+    const taskId = await newTask(projectId, "A");
+
+    const result = await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, {
+        acceptanceCriteria: [
+          {
+            text: "La suite de tests passe.",
+            verificationMode: VERIFICATION_MODE.AUTOMATED,
+            humanInstructions: null,
+            commandPositions: [0, 1],
+          },
+          {
+            text: "L'ecran est lisible.",
+            verificationMode: VERIFICATION_MODE.HUMAN,
+            humanInstructions: "Ouvrir la page et regarder.",
+            commandPositions: [],
+          },
+        ],
+        validationCommands: [
+          { command: "npm run test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+          { command: "npm run lint", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+        ],
+      }),
+    });
+
+    assert.ok(result.ok);
+
+    const plan = await readVerificationPlan(db, taskId);
+    assert.equal(plan.criteria.length, 2);
+    assert.equal(plan.criteria[0]?.verificationMode, VERIFICATION_MODE.AUTOMATED);
+    // Le lien est un identifiant, jamais une position ni un texte : reordonner
+    // les commandes plus tard ne doit pas deplacer une preuve.
+    assert.deepEqual(
+      plan.criteria[0]?.commandIds,
+      plan.commands.map((command) => command.id),
+    );
+    assert.equal(plan.criteria[1]?.humanInstructions, "Ouvrir la page et regarder.");
+    assert.deepEqual(plan.criteria[1]?.commandIds, []);
+    assert.equal(plan.commands[0]?.executionMode, COMMAND_EXECUTION_MODE.AUTONOMOUS);
+  });
+
+  it("n'ecrit aucune instruction sur un critere automatise", async () => {
+    const projectId = await newProject();
+    const taskId = await newTask(projectId, "A");
+
+    await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, {
+        acceptanceCriteria: [
+          {
+            text: "La suite passe.",
+            verificationMode: VERIFICATION_MODE.AUTOMATED,
+            // Un texte orphelin reapparaitrait au prochain changement de mode.
+            humanInstructions: "Ne devrait pas survivre.",
+            commandPositions: [0],
+          },
+        ],
+        validationCommands: [
+          { command: "npm run test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+        ],
+      }),
+    });
+
+    const plan = await readVerificationPlan(db, taskId);
+    assert.equal(plan.criteria[0]?.humanInstructions, null);
+  });
+
+  it("ramene une tache en file a l'etat de brouillon quand seul le mode change", async () => {
+    // Le plan fait partie du contrat : le changer invalide la validation
+    // humaine qui avait fait passer la tache en `READY`.
+    const projectId = await newProject();
+    const taskId = await newTask(projectId, "A");
+
+    const withCommand = await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, {
+        acceptanceCriteria: [
+          {
+            text: "La suite passe.",
+            verificationMode: VERIFICATION_MODE.HUMAN,
+            humanInstructions: "Lancer les tests et regarder.",
+            commandPositions: [],
+          },
+        ],
+        validationCommands: [
+          { command: "npm run test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+        ],
+      }),
+    });
+    assert.ok(withCommand.ok);
+
+    const ready = await updateTaskStatus(db, taskId, projectId, TASK_STATUS.READY);
+    assert.ok(ready.ok);
+
+    const changed = await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, {
+        acceptanceCriteria: [
+          {
+            text: "La suite passe.",
+            verificationMode: VERIFICATION_MODE.AUTOMATED,
+            humanInstructions: null,
+            commandPositions: [0],
+          },
+        ],
+      }),
+    });
+
+    assert.ok(changed.ok);
+    assert.equal(changed.ok && changed.changed, true);
+    assert.equal(changed.ok && changed.task.status, TASK_STATUS.DRAFT);
+  });
+
+  it("ne touche a rien quand le plan est resoumis a l'identique", async () => {
+    const projectId = await newProject();
+    const taskId = await newTask(projectId, "A");
+
+    await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, {
+        acceptanceCriteria: [
+          {
+            text: "La suite passe.",
+            verificationMode: VERIFICATION_MODE.AUTOMATED,
+            humanInstructions: null,
+            commandPositions: [0],
+          },
+        ],
+        validationCommands: [
+          { command: "npm run test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+        ],
+      }),
+    });
+
+    const ready = await updateTaskStatus(db, taskId, projectId, TASK_STATUS.READY);
+    assert.ok(ready.ok);
+
+    const before = await db.task.findUnique({
+      where: { id: taskId },
+      select: { updatedAt: true, status: true },
+    });
+
+    const again = await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId),
+    });
+
+    assert.ok(again.ok);
+    assert.equal(again.ok && again.changed, false);
+
+    const after = await db.task.findUnique({
+      where: { id: taskId },
+      select: { updatedAt: true, status: true },
+    });
+    // Ni `updatedAt`, ni statut : relire un formulaire n'est pas une
+    // modification, et degrader un `READY` pour cela serait une punition.
+    assert.deepEqual(after, before);
+    assert.equal(after?.status, TASK_STATUS.READY);
+  });
+
+  it("ne laisse aucun lien vers une commande retiree", async () => {
+    const projectId = await newProject();
+    const taskId = await newTask(projectId, "A");
+
+    await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, {
+        acceptanceCriteria: [
+          {
+            text: "La suite passe.",
+            verificationMode: VERIFICATION_MODE.AUTOMATED,
+            humanInstructions: null,
+            commandPositions: [0],
+          },
+        ],
+        validationCommands: [
+          { command: "npm run test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+        ],
+      }),
+    });
+
+    await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, { validationCommands: [] }),
+    });
+
+    const plan = await readVerificationPlan(db, taskId);
+    assert.deepEqual(plan.commands, []);
+    // Le critere reste automatise et devient sans preuve : `Mark ready` le
+    // refusera. Un lien pendant, lui, n'existe jamais.
+    assert.deepEqual(plan.criteria[0]?.commandIds, []);
+  });
+
+  it("refuse de rendre prete une tache dont le plan est incomplet", async () => {
+    const projectId = await newProject();
+    const taskId = await newTask(projectId, "A");
+
+    await updateFutureTask(db, {
+      projectId,
+      taskId,
+      expectedRevision: await currentRevision(taskId),
+      revision,
+      values: await valuesOf(taskId, {
+        acceptanceCriteria: [
+          {
+            text: "La suite passe.",
+            verificationMode: VERIFICATION_MODE.AUTOMATED,
+            humanInstructions: null,
+            commandPositions: [],
+          },
+        ],
+        validationCommands: [],
+      }),
+    });
+
+    // Le brouillon a le droit d'etre incomplet ; c'est le passage en file qui
+    // exige un contrat entier.
+    const ready = await updateTaskStatus(db, taskId, projectId, TASK_STATUS.READY);
+    assert.equal(ready.ok, false);
   });
 });

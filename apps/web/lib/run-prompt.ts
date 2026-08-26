@@ -20,6 +20,7 @@ import {
   renderClaudeExecutionPrompt,
   type DevelopmentTaskDetail,
   type TaskDependencyRef,
+  type VerificationPlan,
 } from "@nox/shared";
 
 export type ExecutionPrompt = {
@@ -42,8 +43,9 @@ export function fingerprintPrompt(prompt: string): string {
 export function buildExecutionPrompt(
   task: DevelopmentTaskDetail,
   dependencies: readonly TaskDependencyRef[] = [],
+  plan: VerificationPlan | null = null,
 ): ExecutionPrompt {
-  const prompt = renderClaudeExecutionPrompt(task, dependencies);
+  const prompt = renderClaudeExecutionPrompt(task, dependencies, plan);
   return { prompt, sha256: fingerprintPrompt(prompt) };
 }
 

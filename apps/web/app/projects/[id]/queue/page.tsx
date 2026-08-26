@@ -1,4 +1,9 @@
-import { TASK_STATUS, isQueueEntryEligible, type QueueEntryFacts } from "@nox/shared";
+import {
+  QUEUE_STATE,
+  TASK_STATUS,
+  isQueueEntryEligible,
+  type QueueEntryFacts,
+} from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -7,17 +12,22 @@ import { QueueActionButton } from "@/components/QueueActionButton";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { taskStatusLabel } from "@/lib/labels";
+import { getDatabaseClient } from "@nox/database";
+
 import { loadProject, loadQueueWithRepository } from "@/lib/projects";
 
 import {
   QUEUE_ENQUEUE_NOTICE,
   QUEUE_ORDER_NOTICE,
   QUEUE_STANDING_AUTHORIZATION,
+  queueReviewExplanation,
+  queueReviewLabel,
   queueStateExplanation,
   queueStateLabel,
 } from "@/lib/queue-display";
 import { describeWaitingDependencies } from "@/lib/task-dependencies";
 import { taskStatusTone, taskUrl } from "@/lib/task-display";
+import { loadReviewWait } from "@/lib/verification-review";
 
 import {
   dequeueTaskAction,
@@ -57,6 +67,18 @@ export default async function QueuePage({ params }: { params: Promise<{ id: stri
   const last = queue.entries.at(-1)?.taskId ?? null;
   const first = queue.entries.at(0)?.taskId ?? null;
 
+  // « Waiting for review » couvrait quatre situations qui n'appellent pas le
+  // meme geste. La precision vient d'une **lecture** de la review courante :
+  // ouvrir cette page n'execute rien, et n'interroge ni runner, ni fournisseur.
+  const reviewWait =
+    queue.state === QUEUE_STATE.WAITING_REVIEW && queue.current !== null
+      ? await loadReviewWait(getDatabaseClient(), queue.current.taskId)
+      : null;
+
+  const stateLabel = reviewWait === null ? queueStateLabel(queue.state) : queueReviewLabel(reviewWait);
+  const stateExplanation =
+    reviewWait === null ? queueStateExplanation(queue.state) : queueReviewExplanation(reviewWait);
+
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-5 border-b border-zinc-800 pb-6">
@@ -78,7 +100,7 @@ export default async function QueuePage({ params }: { params: Promise<{ id: stri
             <StatusBadge tone={queue.active ? "accent" : "muted"} withDot>
               {queue.active ? "Active" : "Paused"}
             </StatusBadge>
-            <StatusBadge tone="neutral">{queueStateLabel(queue.state)}</StatusBadge>
+            <StatusBadge tone="neutral">{stateLabel}</StatusBadge>
           </div>
         </div>
 
@@ -86,9 +108,9 @@ export default async function QueuePage({ params }: { params: Promise<{ id: stri
       </header>
 
       <main className="flex flex-col gap-6">
-        <SectionCard title="État" description={queueStateLabel(queue.state)}>
+        <SectionCard title="État" description={stateLabel}>
           <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
-            {queueStateExplanation(queue.state)}
+            {stateExplanation}
           </p>
 
           <dl className="mt-5 grid gap-4 sm:grid-cols-3">

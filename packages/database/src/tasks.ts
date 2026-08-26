@@ -30,9 +30,20 @@ import {
   type TaskKind,
   type TaskPriority,
   type TaskStatus,
+  DEFAULT_HUMAN_INSTRUCTIONS,
+  VERIFICATION_MODE,
+  checkVerificationPlan,
+  type ReviewDecisionSource,
+  type VerificationPlanIssue,
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
+import {
+  readVerificationPlan,
+  writeVerificationPlan,
+  type VerificationCommandInput,
+  type VerificationCriterionInput,
+} from "./verification-plan.js";
 
 /** Donnees necessaires a la creation d'une tache. */
 export type CreateTaskInput = {
@@ -263,7 +274,10 @@ export async function createTask(
  * ne porte ni `$connect`, ni `$transaction`. Ce type dit exactement ce dont
  * l'ecriture d'une tache a besoin, et rien de plus.
  */
-export type TaskWriteClient = Pick<DatabaseClient, "task" | "project">;
+export type TaskWriteClient = Pick<
+  DatabaseClient,
+  "task" | "project" | "taskAcceptanceCriterion" | "taskValidationCommand" | "taskCriterionValidation"
+>;
 
 /**
  * Reserve `count` numeros de tache consecutifs, en une seule operation atomique.
@@ -345,6 +359,19 @@ export type TaskRowInput = CreateTaskInput & {
   backlogProposalId?: string | null;
   /** Position dans l'ordre valide par l'humain, a partir de 0. */
   backlogItemPosition?: number | null;
+  /**
+   * Plan de verification explicite.
+   *
+   * Absent, la tache recoit les defauts surs — chaque critere `HUMAN` avec
+   * l'instruction neutre, chaque commande `AGENT_ONLY` — et
+   * `acceptanceCriteria`/`validationCommands` font foi. Present, il **remplace**
+   * ces deux listes : leurs textes viennent alors du plan, qui est la seule
+   * source. Deux sources auraient fini par diverger sur l'ordre.
+   */
+  verificationPlan?: {
+    criteria: readonly VerificationCriterionInput[];
+    commands: readonly VerificationCommandInput[];
+  };
 };
 
 /**
@@ -385,25 +412,99 @@ export async function writeTaskRow(
       documentSyncStatus: TASK_DOCUMENT_SYNC_STATUS.PENDING,
       backlogProposalId: input.backlogProposalId ?? null,
       backlogItemPosition: input.backlogItemPosition ?? null,
-      acceptanceCriteria: {
-        create: input.acceptanceCriteria.map((text, position) => ({ position, text })),
-      },
       documentReferences: {
         create: input.documentReferences.map((path, position) => ({ position, path })),
       },
-      validationCommands: {
-        create: input.validationCommands.map((command, position) => ({ position, command })),
-      },
+      ...(input.verificationPlan === undefined
+        ? {
+            acceptanceCriteria: {
+              // Sans classification explicite, un critere est `HUMAN` — le defaut
+              // sur, celui qui n'autorise aucune completion automatique — et porte
+              // l'instruction neutre qui dit exactement cela. Un critere `HUMAN`
+              // sans instruction serait un plan incomplet, refuse par
+              // `Mark ready` ; ce defaut evite de produire une tache inutilisable,
+              // sans rien ouvrir.
+              create: input.acceptanceCriteria.map((text, position) => ({
+                position,
+                text,
+                verificationMode: VERIFICATION_MODE.HUMAN,
+                humanInstructions: DEFAULT_HUMAN_INSTRUCTIONS,
+              })),
+            },
+            validationCommands: {
+              create: input.validationCommands.map((command, position) => ({
+                position,
+                command,
+              })),
+            },
+          }
+        : {}),
     },
     include: DETAIL_INCLUDE,
   });
 
-  return toDetail(row);
+  if (input.verificationPlan === undefined) {
+    return toDetail(row);
+  }
+
+  // Le plan explicite passe par l'ecriture unique de TASK-027 : criteres,
+  // commandes et liens sont ecrits par le meme code que l'editeur de tache, et
+  // il n'existe donc pas de seconde facon d'ecrire une classification.
+  await writeVerificationPlan(tx, row.id, input.verificationPlan);
+
+  const written = await tx.task.findUnique({ where: { id: row.id }, include: DETAIL_INCLUDE });
+  if (written === null) {
+    throw new Error(`Tache ${row.id} introuvable juste apres son ecriture.`);
+  }
+  return toDetail(written);
 }
 
 export type UpdateTaskStatusResult =
   | { ok: true; task: DevelopmentTaskDetail; dequeued: boolean }
-  | { ok: false; reason: "not_found" | "forbidden_transition" | "queued" };
+  | {
+      ok: false;
+      reason:
+        | "not_found"
+        | "forbidden_transition"
+        | "queued"
+        | "already_decided"
+        | "plan_invalid";
+      /** Defauts du plan, lorsque `Mark ready` a ete refuse pour cette raison. */
+      issues?: readonly VerificationPlanIssue[];
+    };
+
+/**
+ * Comment une acceptation a ete decidee, enregistree avec la transition.
+ *
+ * Optionnel : `Reopen`, `Retry` et les autres transitions n'en portent pas. Il
+ * n'existe que pour l'acceptation d'un travail, ou la question « qui a valide,
+ * et sur quelle base ? » se pose vraiment.
+ */
+export type ReviewDecisionInput = {
+  runId: string;
+  source: ReviewDecisionSource;
+  /** Raison d'un passage en force. Obligatoire pour `HUMAN_OVERRIDE`. */
+  overrideReason: string | null;
+  /** Criteres humains explicitement confirmes, avec leur texte d'alors. */
+  confirmations: readonly { criterionId: string | null; criterionText: string }[];
+};
+
+/** Levee dans la transaction pour annuler une seconde acceptation. */
+class ReviewAlreadyDecidedError extends Error {
+  constructor() {
+    super("Cette execution porte deja une decision de review.");
+    this.name = "ReviewAlreadyDecidedError";
+  }
+}
+
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2002"
+  );
+}
 
 /**
  * Change le statut d'une tache, si la transition est autorisee.
@@ -422,62 +523,117 @@ export async function updateTaskStatus(
   taskId: string,
   projectId: string,
   status: TaskStatus,
+  options: { decision?: ReviewDecisionInput } = {},
 ): Promise<UpdateTaskStatusResult> {
-  return db.$transaction(async (tx): Promise<UpdateTaskStatusResult> => {
-    const current = await tx.task.findFirst({
-      where: { id: taskId, projectId },
-      select: { id: true, status: true },
-    });
+  return db
+    .$transaction(async (tx): Promise<UpdateTaskStatusResult> => {
+      const current = await tx.task.findFirst({
+        where: { id: taskId, projectId },
+        select: { id: true, status: true },
+      });
 
-    if (current === null) {
-      return { ok: false, reason: "not_found" };
-    }
-
-    if (!canTransitionTaskStatus(readStatus(current), status)) {
-      return { ok: false, reason: "forbidden_transition" };
-    }
-
-    const queued = await tx.taskQueueEntry.findUnique({
-      where: { taskId },
-      select: { id: true },
-    });
-
-    // Une tache inscrite dans la file ne se met pas de cote a la main. `DRAFT`
-    // et `BLOCKED` sont les deux facons de la retirer du jeu ; les poser sans
-    // sortir de la file contredirait l'autorisation d'executer sans la lever.
-    // Les autres transitions restent ouvertes : `Approve`, `Reopen` et `Retry`
-    // font partie du travail que la file attend.
-    if (queued !== null && isQueueLockedStatusChange(status)) {
-      return { ok: false, reason: "queued" };
-    }
-
-    const row = await tx.task.update({
-      where: { id: taskId },
-      data: { status },
-      include: DETAIL_INCLUDE,
-    });
-
-    // Une tache acceptee quitte la file. C'est `COMPLETED` qui fait avancer la
-    // file, jamais la fin technique d'une execution : un run `COMPLETED` mene a
-    // `REVIEW`, et une review n'est pas une acceptation.
-    let dequeued = false;
-    if (queued !== null && status === TASK_STATUS.COMPLETED) {
-      await tx.taskQueueEntry.delete({ where: { id: queued.id } });
-      dequeued = true;
-
-      const remaining = await tx.taskQueueEntry.count({ where: { projectId } });
-      if (remaining === 0) {
-        // Une file vide ne conserve aucune autorisation dormante : la prochaine
-        // inscription devra passer par un nouveau `Start queue`.
-        await tx.project.update({
-          where: { id: projectId },
-          data: { executionQueueActive: false },
-        });
+      if (current === null) {
+        return { ok: false, reason: "not_found" };
       }
-    }
 
-    return { ok: true, task: toDetail(row), dequeued };
-  });
+      if (!canTransitionTaskStatus(readStatus(current), status)) {
+        return { ok: false, reason: "forbidden_transition" };
+      }
+
+      const queued = await tx.taskQueueEntry.findUnique({
+        where: { taskId },
+        select: { id: true },
+      });
+
+      // Une tache inscrite dans la file ne se met pas de cote a la main. `DRAFT`
+      // et `BLOCKED` sont les deux facons de la retirer du jeu ; les poser sans
+      // sortir de la file contredirait l'autorisation d'executer sans la lever.
+      // Les autres transitions restent ouvertes : `Approve`, `Reopen` et `Retry`
+      // font partie du travail que la file attend.
+      if (queued !== null && isQueueLockedStatusChange(status)) {
+        return { ok: false, reason: "queued" };
+      }
+
+      // Passer une tache en `READY`, c'est accepter son contrat de verification :
+      // a partir de la, elle peut etre inscrite dans une file et lancee. Le plan
+      // est donc verifie **ici**, dans la transition, et pas seulement dans le
+      // formulaire — le navigateur ne doit pas pouvoir forger un plan invalide
+      // puis le declarer pret.
+      if (status === TASK_STATUS.READY) {
+        const plan = await readVerificationPlan(tx, taskId);
+        const check = checkVerificationPlan(plan);
+        if (!check.ok) {
+          return { ok: false, reason: "plan_invalid", issues: check.issues };
+        }
+      }
+
+      const row = await tx.task.update({
+        where: { id: taskId },
+        data: { status },
+        include: DETAIL_INCLUDE,
+      });
+
+      // Une tache acceptee quitte la file. C'est `COMPLETED` qui fait avancer la
+      // file, jamais la fin technique d'une execution : un run `COMPLETED` mene a
+      // `REVIEW`, et une review n'est pas une acceptation.
+      let dequeued = false;
+      if (queued !== null && status === TASK_STATUS.COMPLETED) {
+        await tx.taskQueueEntry.delete({ where: { id: queued.id } });
+        dequeued = true;
+
+        const remaining = await tx.taskQueueEntry.count({ where: { projectId } });
+        if (remaining === 0) {
+          // Une file vide ne conserve aucune autorisation dormante : la prochaine
+          // inscription devra passer par un nouveau `Start queue`.
+          await tx.project.update({
+            where: { id: projectId },
+            data: { executionQueueActive: false },
+          });
+        }
+      }
+
+      // La decision est ecrite **dans** la transition, jamais a cote. Deux
+      // acceptations concurrentes — un humain qui clique pendant qu'une
+      // completion automatique conclut — visent la meme ligne unique par
+      // execution : la seconde echoue et son travail entier est annule. Rien ne
+      // se termine deux fois, et la file n'avance pas deux fois.
+      if (options.decision !== undefined && status === TASK_STATUS.COMPLETED) {
+        const decision = options.decision;
+        const created = await tx.runReviewDecision
+          .create({
+            data: {
+              runId: decision.runId,
+              source: decision.source,
+              overrideReason: decision.overrideReason,
+            },
+            select: { id: true },
+          })
+          .catch((error: unknown) => {
+            if (isUniqueConstraintViolation(error)) {
+              throw new ReviewAlreadyDecidedError();
+            }
+            throw error;
+          });
+
+        for (const confirmation of decision.confirmations) {
+          await tx.runHumanCriterionConfirmation.create({
+            data: {
+              decisionId: created.id,
+              criterionId: confirmation.criterionId,
+              criterionText: confirmation.criterionText,
+            },
+          });
+        }
+      }
+
+      return { ok: true, task: toDetail(row), dequeued };
+    })
+    .catch((error: unknown): UpdateTaskStatusResult => {
+      if (error instanceof ReviewAlreadyDecidedError) {
+        return { ok: false, reason: "already_decided" };
+      }
+      throw error;
+    });
 }
 
 /** Une tache qui en attend une autre, nommee dans un refus de suppression. */

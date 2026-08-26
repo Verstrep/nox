@@ -6,9 +6,24 @@ import { useActionState, useId } from "react";
 import { decideReviewAction } from "./actions";
 import { INITIAL_REVIEW_DECISION_STATE } from "./form-state";
 
+/** Un critere que seul un humain peut confirmer. */
+export type HumanCheck = { id: string; text: string; instructions: string };
+
 type ReviewDecisionFormProps = {
   projectId: string;
   taskId: string;
+  runId: string;
+  /**
+   * Criteres humains a confirmer avant toute acceptation.
+   *
+   * La liste vient du serveur, qui la revalide de toute facon a la soumission :
+   * cocher ici est une commodite, pas une autorisation.
+   */
+  humanChecks: readonly HumanCheck[];
+  /** La validation automatisee a echoue : seul un passage en force reste. */
+  overrideRequired: boolean;
+  /** Un lot de validation tourne encore : aucune decision n'est possible. */
+  validationRunning: boolean;
   /**
    * Lien vers la demande de corrections, ou `null` si elle est indisponible.
    *
@@ -36,6 +51,10 @@ type ReviewDecisionFormProps = {
 export function ReviewDecisionForm({
   projectId,
   taskId,
+  runId,
+  humanChecks,
+  overrideRequired,
+  validationRunning,
   requestChangesHref,
   requestChangesReason,
 }: ReviewDecisionFormProps) {
@@ -68,6 +87,71 @@ export function ReviewDecisionForm({
     <form action={formAction} className="flex flex-col gap-4">
       <input type="hidden" name="projectId" value={projectId} />
       <input type="hidden" name="taskId" value={taskId} />
+      <input type="hidden" name="runId" value={runId} />
+
+      {validationRunning ? (
+        <p
+          role="status"
+          className="rounded-md border border-zinc-700 bg-zinc-900/60 px-4 py-3 text-sm leading-relaxed text-zinc-300"
+        >
+          La validation automatique de NOX est encore en cours. Aucune decision n&apos;est possible
+          avant son resultat.
+        </p>
+      ) : null}
+
+      {humanChecks.length === 0 ? null : (
+        <fieldset className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-4">
+          <legend className="px-1 text-sm font-medium text-zinc-200">
+            Human validation required
+          </legend>
+          {/* Chaque case dit **quoi** tester. Demander a l'utilisateur de relire
+              tout le diff quand seuls deux points le concernent est la façon la
+              plus sure de n'obtenir ni l'un ni l'autre. */}
+          <p className="text-xs leading-relaxed text-zinc-500">
+            NOX ne peut pas verifier ces criteres. Confirmez-les un par un : l&apos;acceptation
+            est refusee tant qu&apos;il en reste un.
+          </p>
+          {humanChecks.map((check) => (
+            <label key={check.id} className="flex items-start gap-3 text-sm text-zinc-300">
+              <input
+                type="checkbox"
+                name="humanCriterion"
+                value={check.id}
+                className="mt-1 h-4 w-4 shrink-0 accent-teal-400"
+              />
+              <span className="flex flex-col gap-1">
+                <span>{check.text}</span>
+                <span className="text-xs leading-relaxed text-zinc-500">{check.instructions}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      )}
+
+      {overrideRequired || state.overrideRequired === true ? (
+        <fieldset className="flex flex-col gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+          <legend className="px-1 text-sm font-medium text-amber-200">
+            Approve with validation override
+          </legend>
+          {/* Le passage en force ne reecrit rien : le resultat automatise reste
+              affiche tel quel, juste au-dessus. Ce champ enregistre seulement
+              qu'un humain a accepte malgre lui, et pourquoi. */}
+          <p className="text-xs leading-relaxed text-amber-200/80">
+            Une validation automatisee n&apos;est pas passee. Vous restez l&apos;autorite finale,
+            mais la raison sera conservee avec la decision — et le resultat automatise ne sera pas
+            reecrit.
+          </p>
+          <input type="hidden" name="override" value="1" />
+          <textarea
+            name="overrideReason"
+            rows={3}
+            maxLength={1000}
+            required
+            placeholder="Pourquoi acceptez-vous malgre ce resultat ?"
+            className="rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
+          />
+        </fieldset>
+      ) : null}
 
       {state.error === null ? null : (
         <p
@@ -87,7 +171,9 @@ export function ReviewDecisionForm({
           aria-describedby={noticeId}
           className="rounded-md border border-teal-400/40 bg-teal-400/10 px-4 py-2 text-sm font-medium text-teal-100 transition-colors hover:border-teal-300/60 hover:bg-teal-400/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Approve
+          {overrideRequired || state.overrideRequired === true
+            ? "Approve with validation override"
+            : "Approve"}
         </button>
 
         {requestChangesHref === null ? null : (

@@ -4822,3 +4822,286 @@ se décide sur la page de la tâche, par son workflow habituel.
 Corollaire assumé : le refus du lancement manuel épargne cette tâche-là, et elle seule. Ce refus
 vise ce qui **doublerait** un ordre préparé ; relancer la tâche que la file attend n'est pas ce
 cas, et le maintenir aurait rendu cette tâche injoignable jusqu'à son retrait de la file.
+
+## Décisions de TASK-027 — Validation autonome et classification des critères
+
+### D-322 — La classification appartient au contrat, pas au résultat
+
+**Décision.** Chaque critère d'acceptation déclare, **avant l'exécution**, comment il se vérifie :
+`AUTOMATED` ou `HUMAN`. Le mode est écrit avec la tâche, il entre dans son document Markdown, et il
+est transmis à Claude Code dans le prompt.
+
+**Justification.** Le raisonnement inverse — « Claude a fini, regardons ce qui est passé, appelons
+ça une validation » — produit une classification qui s'adapte au résultat. Elle ne prouve donc
+rien : un critère devient automatisé exactement quand cela arrange, et le jour où une commande
+échoue, il redevient humain. C'est la seule façon d'obtenir une vérification qui ne dise jamais non.
+
+Poser la question à l'écriture de la tâche a un coût réel : il faut décider avant de savoir. C'est
+précisément ce qui rend la réponse utile. « Cette commande précise échouerait-elle si ce critère
+précis n'était pas satisfait ? » est une question qu'on peut se poser sur une spécification ; « ce
+résultat me convient-il ? » n'en est pas une.
+
+Conséquence directe : deux modes fermés, et pas trois. Un `MAYBE` ou un `UNKNOWN` serait, en
+pratique, l'endroit où l'on rangerait ce qu'on n'a pas su trancher — et il faudrait bien le
+trancher au moment de décider si la tâche peut se terminer seule.
+
+### D-323 — Seule une commande que NOX exécute lui-même peut prouver un critère
+
+**Décision.** Le compte rendu de Claude Code n'est jamais une preuve. Une commande porte un
+`executionMode` : `AGENT_ONLY` — elle est autorisée à Claude pendant son travail, NOX ne la lance
+jamais — ou `AUTONOMOUS` — NOX l'exécute lui-même **après** l'exécution, et son résultat peut
+soutenir un critère.
+
+**Justification.** « J'ai lancé `npm test` et tout passe » est une information utile ; ce n'est pas
+une preuve indépendante. Elle vient de la partie évaluée, elle n'est pas reproductible, et rien ne
+garantit que la commande annoncée est celle qui a tourné — ni qu'elle a tourné.
+
+La distinction est donc structurelle, pas déclarative : `VALIDATION_EVIDENCE_SOURCE` porte deux
+valeurs, les deux sont conservées et affichées, et **une seule** entre dans la dérivation d'un
+résultat de critère. Un test fonctionnel vérifie le cas qui compte : Claude annonce une réussite,
+la commande échoue, et c'est la commande qui fait foi.
+
+`AGENT_ONLY` reste le défaut. `AUTONOMOUS` ajoute une permission, il n'en retire aucune : une
+tâche antérieure à TASK-027 ne gagne donc rien après coup.
+
+### D-324 — La politique des commandes autonomes est distincte de celle de l'amorçage
+
+**Décision.** `AUTONOMOUS_VALIDATION_PROGRAMS` est une liste fermée, **séparée** de celle de
+`TASK-023`. Les refus supplémentaires, eux, sont **réutilisés** : `CLAUDE_BOOTSTRAP_DENIED_COMMANDS`
+est importée, jamais recopiée.
+
+**Justification.** Les deux listes se ressemblent parce que les écosystèmes sont les mêmes, mais
+elles répondent à deux questions différentes. `TASK-023` demande « cette tâche exceptionnelle
+peut-elle installer sa fondation ? » ; celle-ci demande « NOX peut-il lancer ceci tout seul, sans
+surveillance, après chaque exécution ? ». Les fusionner aurait fait qu'une tâche `NORMAL` gagnerait
+un jour, sans qu'on l'ait voulu, les droits de `TASK-000`.
+
+Les refus, à l'inverse, doivent rester uniques. Deux grandes listes de choses interdites finissent
+par diverger, et c'est toujours celle qu'on a oublié de mettre à jour qui laisse passer quelque
+chose. Élévation de privilèges, machines distantes, déploiement, publication : ce qui est refusé à
+l'amorçage l'est ici aussi, par construction.
+
+Trois familles s'y ajoutent, propres à l'exécution autonome : les installations — préparer un
+repository n'est pas le valider, et installer avant de tester masquerait une fondation absente
+derrière un test vert —, les processus qui ne se terminent pas, et les commandes Git. Le contrôle
+porte sur le **jeton entier**, jamais sur une sous-chaîne : `npm run test-server` n'est pas un
+serveur, et refuser sur `server` aurait produit un refus impossible à expliquer.
+
+### D-325 — Aucun interprète de commandes, jamais
+
+**Décision.** Une commande autonome est découpée en programme et arguments, puis lancée avec
+`shell: false`. Ni `cmd /c`, ni `powershell -Command`, ni `bash -c`, ni `sh -c`.
+
+**Justification.** Le découpage est trivial **parce que** `checkValidationCommand` a déjà refusé
+tout ce qui le rendrait difficile : guillemets, chaînage, redirection, substitution. Une commande
+acceptée est une suite de jetons séparés par une espace, et rien d'autre. Il n'y a donc aucune
+syntaxe à interpréter, et donner un shell reviendrait à rouvrir volontairement la porte qu'on vient
+de fermer.
+
+C'est ce qui rend la garantie vérifiable : un test lit la **source** du module et refuse d'y
+trouver `shell: true`, `cmd /c` ou `bash -c`. Une absence ne s'observe pas en lançant le code une
+fois.
+
+Le répertoire de travail suit la même règle : il est la racine canonique résolue à partir de
+l'identifiant du projet, jamais une valeur reçue. Le navigateur n'envoie ni commande, ni chemin, ni
+délai, ni environnement.
+
+### D-326 — L'instantané Git du runner reste celui du travail de Claude
+
+**Décision.** La review Git est capturée par le runner à la fin du processus, **avant** toute
+validation autonome, et n'est pas retouchée. Les validations enregistrent séparément deux
+empreintes de l'état suivi du repository : `trackedStateBefore` et `trackedStateAfter`.
+
+**Justification.** L'ordre inverse — valider, puis capturer — aurait paru plus simple : un seul
+instantané, pris après tout. Il aurait cassé trois choses à la fois.
+
+D'abord l'immuabilité de TASK-011 : un instantané finalisé ne bouge plus, et c'est la couche
+d'écriture qui le garantit. Ensuite l'indépendance du runner : la capture a lieu même si personne
+n'ouvre jamais la page, et la faire dépendre d'un lot déclenché par le web aurait rendu le runner
+tributaire de l'application. Enfin la lisibilité de ce qu'on relit : la review répond à « qu'a fait
+Claude Code ? », et y mélanger l'effet des validations aurait rendu cette question sans réponse.
+
+Les deux empreintes répondent à l'autre question — « la preuve a-t-elle modifié ce qu'elle
+évaluait ? » — et elles ignorent délibérément les fichiers non suivis : `dist/` et `coverage/`
+apparaissent légitimement pendant une validation, et les compter ferait refuser toutes les
+complétions automatiques. Une divergence sur un fichier suivi, elle, refuse la complétion
+automatique et rend la main à un humain.
+
+Deux empreintes **inconnues** ne disent rien, et « ne pas savoir » n'autorise jamais une complétion
+automatique.
+
+### D-327 — Un dépassement de délai est un échec de validation, pas une panne
+
+**Décision.** `TIMED_OUT` compte comme un échec. `ERROR` est réservé aux cas où NOX n'a pas pu
+obtenir de preuve : runner injoignable, processus impossible à démarrer.
+
+**Justification.** La commande a bien démarré ; elle n'a simplement pas prouvé ce qu'elle devait
+prouver dans le temps imparti. Une suite de tests qui boucle est un problème du code, pas de
+l'infrastructure, et la ranger dans les pannes aurait proposé une reprise là où il faut une
+correction.
+
+La distinction n'est pas cosmétique : elle décide de ce que l'écran propose. Une panne offre
+`Retry` ; un échec offre une correction ou un passage en force motivé. Confondre les deux
+inviterait à relancer jusqu'à obtenir le résultat voulu.
+
+« Je n'ai pas pu regarder » et « j'ai regardé et c'est faux » restent donc deux faits distincts, du
+statut d'une commande jusqu'à la phrase affichée par la file.
+
+### D-328 — Une reprise n'existe que sur une panne
+
+**Décision.** `Retry automated validation` n'apparaît que lorsque le lot est `ERROR`. Une commande
+qui a réellement échoué ne se relance pas.
+
+**Justification.** Le code n'a pas bougé entre les deux tentatives : relancer ne changerait que le
+hasard. Offrir le bouton quand même aurait transformé la validation en tirage — on relance jusqu'à
+ce que ça passe, et la preuve ne prouve plus rien.
+
+La garantie vit dans `reserveValidationBatch`, pas dans l'interface : la réservation est une mise à
+jour conditionnelle qui refuse tout ce qui n'est pas un lot `ERROR`. Un bouton désactivé côté
+client n'est pas une règle ; c'est une politesse.
+
+Chaque reprise crée une **nouvelle** tentative, numérotée, et conserve la précédente. L'index unique
+`(runId, attempt)` fait que deux clics simultanés n'en ouvrent qu'une.
+
+### D-329 — La complétion automatique n'a aucun contournement
+
+**Décision.** `checkAutoCompletion` ne prend aucun paramètre `force`, `override` ou
+`ignoreFailure`. Le chemin automatique n'a qu'une issue favorable — tous les critères sont
+automatisés et tous sont prouvés — et toutes les autres mènent à une relecture humaine.
+
+**Justification.** Un paramètre de contournement finit toujours par être passé. Il commence comme
+une commodité de test, devient une option d'urgence, puis le chemin normal d'un cas particulier —
+et le jour où on cherche pourquoi une tâche s'est terminée sans preuve, on trouve un `true` posé
+deux ans plus tôt.
+
+L'amorçage est refusé **en premier**, avant tout autre test : une tâche `BOOTSTRAP` ne se termine
+jamais seule, quelle que soit la classification de ses critères, parce qu'elle installe la fondation
+sur laquelle tout le reste sera vérifié.
+
+Un passage en force existe, mais il est **humain** et explicite : il porte une raison, il est
+enregistré comme `HUMAN_OVERRIDE`, et il ne réécrit jamais le résultat automatisé. C'est un fait
+supplémentaire dans l'historique, pas une réécriture de la preuve.
+
+### D-330 — Une seule ligne de décision par exécution
+
+**Décision.** `RunReviewDecision.runId` est unique, et la ligne est écrite **dans** la transaction
+de transition de la tâche.
+
+**Justification.** Une acceptation humaine et une complétion automatique peuvent viser la même
+exécution au même instant : l'utilisateur clique pendant que le lot se conclut. Vérifier avant
+d'écrire aurait laissé les deux passer, et la tâche serait terminée deux fois, avec deux sources
+différentes dans l'historique.
+
+Écrire la décision dans la transition règle la question sans verrou explicite : les deux chemins
+visent la même ligne unique, un seul aboutit, et le second reçoit un refus lisible. C'est la même
+forme que le premier état final d'une exécution (D-124) et que la prise d'une proposition de
+backlog (D-268).
+
+La source est persistée telle qu'elle a été : `AUTOMATED`, `HUMAN`, `HUMAN_OVERRIDE`. Écrire
+« approuvé par l'utilisateur » quand personne n'a cliqué serait le mensonge qu'on découvre six mois
+plus tard en cherchant qui a validé quoi.
+
+### D-331 — Le lot est déclenché par la finalisation, jamais par un rendu
+
+**Décision.** `runAutonomousValidation` est appelée depuis `reconcileRun`, au moment où une
+exécution devient `COMPLETED`. Aucun rendu de page ne la déclenche.
+
+**Justification.** `reconcileRun` est une transition de service, pas un rendu : elle constate qu'une
+exécution s'est terminée, et elle ne le constate qu'une fois. Placer le déclenchement ailleurs
+aurait demandé un worker, un minuteur ou une file — trois choses que NOX n'a pas et dont la
+propriété « rien ne s'exécute au boot » dépend.
+
+L'idempotence ne vient pas de là, cependant, mais de la réservation persistante : dix
+rafraîchissements de page produisent zéro processus supplémentaire parce que l'index unique
+`(runId, attempt)` refuse la deuxième réservation, pas parce qu'on a compté les appels.
+
+Une tâche entièrement humaine ne produit **aucun** lot. Un lot vide aurait été un artefact : l'écran
+dit « aucune validation autonome configurée », ce qui est une information, là où une liste vide
+n'en est pas une.
+
+### D-332 — Le plan de vérification entre dans le contrat de la tâche
+
+**Décision.** La revision optimiste de TASK-024 couvre désormais le plan : mode de chaque critère,
+instruction humaine, mode d'exécution de chaque commande, et liens critère-commande. Sa version
+passe à `task-contract/2`.
+
+**Justification.** Passer un critère de `HUMAN` à `AUTOMATED` change ce que NOX fera de la tâche —
+jusqu'à la terminer sans personne. C'est donc une modification du contrat au même titre qu'un
+objectif réécrit, et elle doit ramener une tâche `READY` en `DRAFT` : la validation humaine qui
+l'avait rendue prête ne porte plus sur la même chose.
+
+Les liens sont des **identifiants de ligne**, jamais des textes ni des positions. Corriger une
+faute de frappe dans une commande ne doit pas casser une preuve, et deux commandes identiques
+doivent rester deux lignes distinctes. Dans la revision, ils sont sérialisés en positions — les
+identifiants de base changent à chaque enregistrement, et une empreinte qui en dépendrait bougerait
+sans que rien n'ait changé.
+
+Une forme canonique unique, `normalizeTaskEditSnapshot`, définit ce que « le contrat n'a pas
+changé » veut dire : instruction effacée sur un critère automatisé, preuves effacées sur un critère
+humain, positions dédoublonnées et triées. Sans elle, rouvrir un formulaire aurait suffi à le
+périmer.
+
+### D-333 — `backlog/2` plutôt qu'un champ de plus
+
+**Décision.** Un nouveau contrat versionné remplace `backlog/1` pour les générations à venir. Les
+propositions déjà enregistrées gardent leur version : elles restent lisibles et applicables, avec
+les défauts sûrs.
+
+**Justification.** Un `providerJson` écrit hier raconte ce que le fournisseur avait rendu ce
+jour-là. Le relire avec les règles d'aujourd'hui le rendrait faux — et NOX conserve précisément ces
+documents pour pouvoir les relire. La version est donc portée **dans** le document, et c'est elle
+qui décide comment le lire.
+
+La relecture relève une proposition `backlog/1` vers la forme courante, sans jamais réécrire le
+document : chaque critère devient `HUMAN` avec l'instruction neutre, chaque commande devient
+`AGENT_ONLY`. Une proposition d'avant TASK-027 ne peut donc pas gagner après coup le droit de
+terminer une tâche toute seule.
+
+Le planificateur est prié d'être **conservateur** : dans le doute, `HUMAN`. L'existence d'une suite
+de tests ne rend pas un critère automatisé, et la qualité visuelle, le rendu responsive, la clarté
+d'un texte ou l'ergonomie ne s'automatisent pas — même si `npm test` existe. Cette instruction vit
+dans le prompt ; la garantie, elle, vit dans la revue humaine qui précède toute application.
+
+### D-334 — L'humain corrige la classification avant d'appliquer
+
+**Décision.** La revue d'un backlog permet de changer le mode d'un critère, son instruction, le
+mode d'exécution d'une commande et les liens de preuve. `providerJson` reste immuable ;
+`appliedJson` porte ce qui a été retenu.
+
+**Justification.** C'est le seul endroit où la classification proposée par un modèle rencontre un
+humain avant d'engager quoi que ce soit. Sans lui, une proposition `AUTOMATED` mal classée
+deviendrait une tâche qui se termine seule sur une preuve qui ne prouve rien — et personne ne
+l'aurait vue passer.
+
+Les deux artefacts restent distincts pour la même raison qu'en TASK-022 : « ce que le modèle a
+proposé » et « ce que j'ai retenu » sont deux informations, et l'écart entre les deux est
+exactement ce qu'on veut pouvoir relire.
+
+### D-335 — Un seul éditeur de plan, partagé par deux surfaces
+
+**Décision.** L'éditeur de tâche future et la revue d'un backlog utilisent le **même** composant et
+le **même** lecteur de champs, à un préfixe près.
+
+**Justification.** Les deux décrivent le même contrat. Deux implémentations auraient fini par
+proposer deux jeux de modes, deux bornes, ou deux façons de nommer les preuves — et le jour où
+elles auraient divergé, personne n'aurait su laquelle faisait autorité.
+
+Ce composant vit dans `components/`, et les types et fabriques de lignes vivent dans un module
+**pur**, séparé de celui qui calcule la revision. Ce n'est pas un rangement : `lib/task-edit.ts`
+dépend de `node:crypto` et du paquet de données, et un Client Component qui l'importerait pour une
+fabrique de ligne vide entraînerait le client Prisma dans le bundle du navigateur. La frontière
+d'architecture est ici tenue par la structure des modules, et un test la vérifie sur les imports.
+
+### D-336 — Les faits de NOX ne rejoignent pas la timeline de Claude
+
+**Décision.** Les validations autonomes s'affichent dans une section distincte de la page
+d'exécution. Aucun événement NOX n'entre dans `ClaudeRunEvent`.
+
+**Justification.** Le contrat de TASK-010 dit que le runner décide chaque champ d'un événement, et
+que le type est fermé. Y glisser des lignes produites par le web aurait cassé cette garantie pour
+un gain d'affichage.
+
+Mais surtout : « Claude dit avoir lancé `npm test` » et « NOX a lancé `npm test` » ne sont pas la
+même information. La première est un récit, la seconde est une preuve. Les mélanger dans un seul fil
+chronologique rendrait impossible de savoir laquelle on lit — ce qui annulerait tout l'intérêt de
+TASK-027.

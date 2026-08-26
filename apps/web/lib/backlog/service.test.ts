@@ -28,8 +28,11 @@ import { fileURLToPath } from "node:url";
 import {
   ARCHITECT_BACKLOG_LIMITS,
   ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS,
-  ARCHITECT_BACKLOG_SCHEMA_NAME,
+  ARCHITECT_BACKLOG_SCHEMA_NAME_2,
   ARCHITECT_BACKLOG_SCHEMA_VERSION,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  COMMAND_EXECUTION_MODE,
+  VERIFICATION_MODE,
   ARCHITECT_ERROR,
   PROJECT_MEMORY_STATUS,
   TASK_PRIORITY,
@@ -53,6 +56,7 @@ import {
   toDatabaseFilePath,
   toSqliteUrl,
   type DatabaseClient,
+  readVerificationPlan,
 } from "@nox/database";
 
 import {
@@ -62,7 +66,7 @@ import {
 } from "../architect/provider.ts";
 import type { ArchitectRepositoryPorts } from "../architect/service.ts";
 import { projectPlanTools } from "../project-plan.ts";
-import type { TaskFormValues } from "../task-input.ts";
+import type { TaskEditFormValues } from "../task-edit.ts";
 import {
   applyProjectBacklog,
   backlogProposalToFormValues,
@@ -215,6 +219,35 @@ function backlogPayload(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+    message: "Ce decoupage couvre les deux etapes du plan.",
+    tasks: titles.map((title) => ({
+      title,
+      priority: TASK_PRIORITY.MEDIUM,
+      objective: `Objectif de ${title}.`,
+      context: null,
+      acceptanceCriteria: [
+        {
+          text: `${title} est verifiable`,
+          verificationMode: VERIFICATION_MODE.HUMAN,
+          humanInstructions: "Verifier a la main.",
+          validationCommandIndexes: [],
+        },
+      ],
+      outOfScope: [],
+      documentReferences: [],
+      validationCommands: [],
+    })),
+    ...overrides,
+  };
+}
+
+/** Le meme backlog, ecrit dans le contrat historique `backlog/1`. */
+function backlogPayloadV1(
+  titles: readonly string[],
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
     schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
     message: "Ce decoupage couvre les deux etapes du plan.",
     tasks: titles.map((title) => ({
@@ -236,7 +269,10 @@ function respond(raw: unknown): ArchitectProviderResult {
 }
 
 /** Valeurs de formulaire pour un titre donne, sans rien d'autre. */
-function item(title: string, overrides: Partial<TaskFormValues> = {}): TaskFormValues {
+function item(
+  title: string,
+  overrides: Partial<TaskEditFormValues> = {},
+): TaskEditFormValues {
   return {
     title,
     priority: TASK_PRIORITY.MEDIUM,
@@ -244,10 +280,28 @@ function item(title: string, overrides: Partial<TaskFormValues> = {}): TaskFormV
     context: "",
     outOfScope: "",
     documents: "",
-    criteria: `${title} est verifiable`,
-    commands: "",
+    criteria: [
+      {
+        key: "c0",
+        text: `${title} est verifiable`,
+        verificationMode: VERIFICATION_MODE.HUMAN,
+        humanInstructions: "Verifier a la main.",
+        commandKeys: [],
+      },
+    ],
+    commands: [],
+    dependsOnTaskIds: [],
     ...overrides,
   };
+}
+
+/** Une ligne de commande de formulaire. */
+function commandRow(
+  key: string,
+  command: string,
+  executionMode: string,
+): TaskEditFormValues["commands"][number] {
+  return { key, command, executionMode };
 }
 
 before(async () => {
@@ -351,6 +405,175 @@ describe("un Generate = au plus un appel", () => {
       provider: retry,
     });
     assert.ok(again.ok, "Generate redevient possible");
+  });
+});
+
+describe("contrat backlog/2", () => {
+  it("refuse une reponse ecrite dans le contrat historique", async () => {
+    // Une generation d'aujourd'hui demande `backlog/2`. Une reponse en
+    // `backlog/1` n'est pas relevee au vol : elle ne porte aucune
+    // classification, et l'accepter reviendrait a en inventer une.
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([respond(backlogPayloadV1(["A"]))]);
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+
+    assert.equal(generated.ok, false);
+    assert.ok(
+      !generated.ok &&
+        "code" in generated &&
+        generated.code === ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+    );
+    assert.equal((await loadProjectBacklog(db, project.id)).pending, null, "rien de persiste");
+  });
+
+  it("conserve la classification jusqu'aux taches creees", async () => {
+    const project = await newProject();
+    const payload = backlogPayload(["A"]);
+    const tasks = payload["tasks"] as Record<string, unknown>[];
+    const first = tasks[0];
+    assert.ok(first !== undefined);
+    first["validationCommands"] = [
+      { command: "npm test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+    ];
+    first["acceptanceCriteria"] = [
+      {
+        text: "La suite de tests passe.",
+        verificationMode: VERIFICATION_MODE.AUTOMATED,
+        humanInstructions: null,
+        validationCommandIndexes: [0],
+      },
+    ];
+
+    const provider = new FakeArchitectProvider([respond(payload)]);
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    assert.ok(generated.ok);
+
+    const applied = await applyProjectBacklog(db, {
+      ...(await inputFor(project)),
+      proposalId: generated.proposal.id,
+      items: backlogProposalToFormValues(generated.proposal.provided),
+    });
+    assert.ok(applied.ok);
+
+    const created = applied.tasks[0];
+    assert.ok(created !== undefined);
+    const plan = await readVerificationPlan(db, created.id);
+    assert.equal(plan.criteria[0]?.verificationMode, VERIFICATION_MODE.AUTOMATED);
+    assert.equal(plan.commands[0]?.executionMode, COMMAND_EXECUTION_MODE.AUTONOMOUS);
+    assert.deepEqual(plan.criteria[0]?.commandIds, [plan.commands[0]?.id]);
+  });
+
+  it("applique la correction humaine, pas la proposition du fournisseur", async () => {
+    // Le fournisseur declare le critere automatise ; l'humain le ramene a la
+    // main. C'est sa version qui doit atteindre la base.
+    const project = await newProject();
+    const payload = backlogPayload(["A"]);
+    const tasks = payload["tasks"] as Record<string, unknown>[];
+    const first = tasks[0];
+    assert.ok(first !== undefined);
+    first["validationCommands"] = [
+      { command: "npm test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+    ];
+    first["acceptanceCriteria"] = [
+      {
+        text: "L'ecran est lisible.",
+        verificationMode: VERIFICATION_MODE.AUTOMATED,
+        humanInstructions: null,
+        validationCommandIndexes: [0],
+      },
+    ];
+
+    const provider = new FakeArchitectProvider([respond(payload)]);
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    assert.ok(generated.ok);
+
+    const corrected = backlogProposalToFormValues(generated.proposal.provided).map((values) => ({
+      ...values,
+      criteria: values.criteria.map((row) => ({
+        ...row,
+        verificationMode: VERIFICATION_MODE.HUMAN,
+        humanInstructions: "Ouvrir la page et regarder.",
+        commandKeys: [],
+      })),
+    }));
+
+    const applied = await applyProjectBacklog(db, {
+      ...(await inputFor(project)),
+      proposalId: generated.proposal.id,
+      items: corrected,
+    });
+    assert.ok(applied.ok);
+
+    const created = applied.tasks[0];
+    assert.ok(created !== undefined);
+    const plan = await readVerificationPlan(db, created.id);
+    assert.equal(plan.criteria[0]?.verificationMode, VERIFICATION_MODE.HUMAN);
+    assert.equal(plan.criteria[0]?.humanInstructions, "Ouvrir la page et regarder.");
+    assert.deepEqual(plan.criteria[0]?.commandIds, []);
+
+    // La proposition du fournisseur reste ce qu'elle etait ; ce qui a ete
+    // retenu est enregistre a cote.
+    assert.equal(
+      applied.proposal.provided.tasks[0]?.acceptanceCriteria[0]?.verificationMode,
+      VERIFICATION_MODE.AUTOMATED,
+    );
+    assert.equal(
+      applied.proposal.applied?.tasks[0]?.acceptanceCriteria[0]?.verificationMode,
+      VERIFICATION_MODE.HUMAN,
+    );
+  });
+
+  it("refuse une preuve qui n'est pas une commande autonome", async () => {
+    const project = await newProject();
+    const payload = backlogPayload(["A"]);
+    const tasks = payload["tasks"] as Record<string, unknown>[];
+    const first = tasks[0];
+    assert.ok(first !== undefined);
+    first["validationCommands"] = [
+      { command: "npm test", executionMode: COMMAND_EXECUTION_MODE.AGENT_ONLY },
+    ];
+    first["acceptanceCriteria"] = [
+      {
+        text: "La suite passe.",
+        verificationMode: VERIFICATION_MODE.AUTOMATED,
+        humanInstructions: null,
+        validationCommandIndexes: [0],
+      },
+    ];
+
+    const provider = new FakeArchitectProvider([respond(payload)]);
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    assert.equal(generated.ok, false);
+  });
+
+  it("refuse une commande autonome que NOX n'a pas le droit de lancer", async () => {
+    const project = await newProject();
+    const payload = backlogPayload(["A"]);
+    const tasks = payload["tasks"] as Record<string, unknown>[];
+    const first = tasks[0];
+    assert.ok(first !== undefined);
+    first["validationCommands"] = [
+      { command: "npm install", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+    ];
+
+    const provider = new FakeArchitectProvider([respond(payload)]);
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    assert.equal(generated.ok, false);
   });
 });
 
@@ -474,7 +697,7 @@ describe("ce qui est transmis au fournisseur", () => {
 
     const call = provider.backlogCalls[0];
     assert.ok(call !== undefined);
-    assert.equal(call.schemaName, ARCHITECT_BACKLOG_SCHEMA_NAME);
+    assert.equal(call.schemaName, ARCHITECT_BACKLOG_SCHEMA_NAME_2);
     assert.equal(call.maxOutputTokens, ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS);
     assert.equal("tools" in call, false, "aucun outil n'est declare");
   });
@@ -561,7 +784,7 @@ describe("application par un humain", () => {
     const applied = await applyProjectBacklog(db, {
       ...(await inputFor(project)),
       proposalId: generated.proposal.id,
-      items: [item("A"), item("B", { criteria: "" })],
+      items: [item("A"), item("B", { criteria: [] })],
     });
 
     assert.equal(applied.ok, false);
@@ -581,7 +804,7 @@ describe("application par un humain", () => {
     const applied = await applyProjectBacklog(db, {
       ...(await inputFor(project)),
       proposalId: generated.proposal.id,
-      items: [item("A", { commands: "npm test && rm -rf ." })],
+      items: [item("A", { commands: [commandRow("v0", "npm test && rm -rf .", COMMAND_EXECUTION_MODE.AGENT_ONLY)] })],
     });
     assert.equal(applied.ok, false);
     assert.equal((await listTasksByProject(db, project.id)).length, 0);
@@ -856,7 +1079,7 @@ describe("planifier le travail restant", () => {
 describe("conversion en valeurs de formulaire", () => {
   it("rend une ligne par entree de liste", () => {
     const values = backlogProposalToFormValues({
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
       message: "m",
       tasks: [
         {
@@ -864,24 +1087,46 @@ describe("conversion en valeurs de formulaire", () => {
           priority: TASK_PRIORITY.HIGH,
           objective: "Objectif.",
           context: "Contexte.",
-          acceptanceCriteria: ["Un", "Deux"],
+          acceptanceCriteria: [
+            {
+              text: "Un",
+              verificationMode: VERIFICATION_MODE.AUTOMATED,
+              humanInstructions: null,
+              validationCommandIndexes: [0],
+            },
+            {
+              text: "Deux",
+              verificationMode: VERIFICATION_MODE.HUMAN,
+              humanInstructions: "Regarder.",
+              validationCommandIndexes: [],
+            },
+          ],
           outOfScope: ["Trois"],
           documentReferences: ["docs/A.md"],
-          validationCommands: ["npm test"],
+          validationCommands: [
+            { command: "npm test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
+          ],
         },
       ],
     });
 
     assert.equal(values.length, 1);
-    assert.equal(values[0]?.criteria, "Un\nDeux");
+    assert.equal(values[0]?.criteria.length, 2);
+    assert.equal(values[0]?.criteria[0]?.verificationMode, VERIFICATION_MODE.AUTOMATED);
+    // La preuve designe la **ligne** de commande, pas son texte.
+    assert.deepEqual(values[0]?.criteria[0]?.commandKeys, [values[0]?.commands[0]?.key]);
+    assert.deepEqual(values[0]?.criteria[1]?.commandKeys, []);
     assert.equal(values[0]?.outOfScope, "Trois");
     assert.equal(values[0]?.documents, "docs/A.md");
-    assert.equal(values[0]?.commands, "npm test");
+    assert.equal(values[0]?.commands[0]?.command, "npm test");
+    assert.equal(values[0]?.commands[0]?.executionMode, COMMAND_EXECUTION_MODE.AUTONOMOUS);
   });
 
-  it("ramene un contexte absent a une chaine vide", () => {
+  it("donne des cles distinctes a deux taches du meme backlog", () => {
+    // Elles vivent dans un seul formulaire : deux cles identiques y feraient
+    // partager leurs champs.
     const values = backlogProposalToFormValues({
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
       message: "m",
       tasks: [
         {
@@ -889,7 +1134,59 @@ describe("conversion en valeurs de formulaire", () => {
           priority: TASK_PRIORITY.LOW,
           objective: "Objectif.",
           context: null,
-          acceptanceCriteria: ["Un"],
+          acceptanceCriteria: [
+            {
+              text: "Un",
+              verificationMode: VERIFICATION_MODE.HUMAN,
+              humanInstructions: "Regarder.",
+              validationCommandIndexes: [],
+            },
+          ],
+          outOfScope: [],
+          documentReferences: [],
+          validationCommands: [],
+        },
+        {
+          title: "B",
+          priority: TASK_PRIORITY.LOW,
+          objective: "Objectif.",
+          context: null,
+          acceptanceCriteria: [
+            {
+              text: "Un",
+              verificationMode: VERIFICATION_MODE.HUMAN,
+              humanInstructions: "Regarder.",
+              validationCommandIndexes: [],
+            },
+          ],
+          outOfScope: [],
+          documentReferences: [],
+          validationCommands: [],
+        },
+      ],
+    });
+
+    assert.notEqual(values[0]?.criteria[0]?.key, values[1]?.criteria[0]?.key);
+  });
+
+  it("ramene un contexte absent a une chaine vide", () => {
+    const values = backlogProposalToFormValues({
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+      message: "m",
+      tasks: [
+        {
+          title: "A",
+          priority: TASK_PRIORITY.LOW,
+          objective: "Objectif.",
+          context: null,
+          acceptanceCriteria: [
+            {
+              text: "Un",
+              verificationMode: VERIFICATION_MODE.HUMAN,
+              humanInstructions: "Regarder.",
+              validationCommandIndexes: [],
+            },
+          ],
           outOfScope: [],
           documentReferences: [],
           validationCommands: [],

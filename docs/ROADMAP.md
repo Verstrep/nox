@@ -44,6 +44,7 @@ vide à une exécution relue.
 | 24 | Dépendances et tâches futures | Graphe acyclique explicite, édition avant première exécution |
 | 25 | Tableau de bord et cycle de vie | Accueil centrée projets, suppression d'un projet de NOX, repository préservé |
 | 26 | File d'exécution | Intention persistée, autorisation explicite, sélection déterministe |
+| 27 | Validation autonome | Classification écrite avant l'exécution, preuves obtenues par NOX lui-même |
 
 **Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
 automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
@@ -176,13 +177,22 @@ humaine, ni l'unicité de l'exécution active, et un redémarrage du serveur ne 
 entrée reste en place jusqu'à ce que la tâche soit acceptée — une exécution terminée n'est pas un
 travail accepté.
 
-### `TASK-027` — Validation autonome et classification des tests humains — **suivante**
+### `TASK-027` — Validation autonome et classification des critères — terminée
 
-Distinguer ce qu'une commande prouve, ce que l'Architecte peut établir, et ce qui exige réellement
-un test humain — pour ne solliciter l'humain que dans le troisième cas. C'est la suite naturelle de
-la file : aujourd'hui, chaque tâche exécutée l'interrompt.
+Chaque critère d'acceptation déclare **avant l'exécution** comment il se vérifie : par une commande
+que NOX exécutera lui-même, ou par un humain. Une tâche dont tous les critères sont automatisés et
+tous prouvés se termine seule ; toutes les autres reviennent à un humain, avec une review qui ne
+montre que ce qui le concerne vraiment.
 
-### `TASK-028` — Boucle bornée de correction et de re-review
+La distinction centrale est celle entre un **récit** et une **preuve** : « Claude dit avoir lancé
+`npm test` » n'est pas « NOX a lancé `npm test` ». Seule la seconde soutient un critère, et elle est
+obtenue sans interprète de commandes, sans variable `NOX_*`, et sans jamais toucher à Git.
+
+Ce que cette étape **ne fait pas** : elle ne demande son avis à aucune IA — ni OpenAI, ni Claude
+Code —, ne transforme jamais un échec en réussite, et n'offre aucun contournement. Un passage en
+force existe, mais il est humain, motivé, et laisse le résultat automatisé intact.
+
+### `TASK-028` — Correction / re-review improvements — **suivante**
 
 Enchaîner correction et relecture, avec une borne explicite. Une boucle sans borne finit par
 tourner seule.

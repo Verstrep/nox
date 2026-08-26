@@ -735,6 +735,9 @@ model Run {
   validations      RunValidationResult[]
   architectReviews ArchitectRunReview[]
 
+  autonomousBatches AutonomousValidationBatch[]
+  reviewDecision    RunReviewDecision?
+
   feedbacks          ReviewFeedback[] @relation("ReviewFeedbackSource")
   triggeringFeedback ReviewFeedback?  @relation("ReviewFeedbackCorrection")
 
@@ -956,6 +959,16 @@ model RunEvent {
 /// Aucune case « terminee » : cette table decrit ce qui devra etre vrai a la
 /// fin, pas ce qui l'est deja. Le resultat d'une execution appartiendra a un
 /// autre modele, quand NOX saura lancer Claude Code.
+/// Un critere d'acceptation, et la facon dont il se verifie.
+///
+/// ## Pourquoi le mode vit ici
+///
+/// Parce que la classification appartient au **contrat**, pas au resultat.
+/// Decider apres l'execution qu'un critere etait automatisable produirait une
+/// classification qui s'adapte a ce qui est passe — donc qui ne prouve rien.
+///
+/// Le defaut est `HUMAN`, et c'est le defaut sur : une tache historique migree
+/// ne gagne jamais, en silence, le droit de se terminer toute seule.
 model TaskAcceptanceCriterion {
   id        String   @id @default(cuid())
   taskId    String
@@ -963,9 +976,52 @@ model TaskAcceptanceCriterion {
   text      String
   createdAt DateTime @default(now())
 
-  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// Valeur de `VerificationMode` : `AUTOMATED` ou `HUMAN`.
+  verificationMode String @default("HUMAN")
+
+  /// Ce que le testeur doit faire, pour un critere humain.
+  ///
+  /// Nullable, et pas seulement par commodite de migration : une tache
+  /// `DRAFT` a le droit d'etre incomplete, et c'est `Mark ready` qui exige
+  /// cette instruction. Remplir les lignes historiques d'un texte generique
+  /// aurait invente une consigne que personne n'a ecrite.
+  humanInstructions String?
+
+  task  Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  proofs TaskCriterionValidation[]
 
   @@unique([taskId, position])
+}
+
+/// Quelle commande prouve quel critere.
+///
+/// ## Pourquoi une table
+///
+/// Parce que la relation est un vrai plusieurs-a-plusieurs : `npm test` et
+/// `npm run typecheck` peuvent prouver ensemble un seul critere, et `npm test`
+/// peut en prouver trois. Forcer un critere a n'avoir qu'une commande aurait
+/// fait dupliquer des criteres pour contourner le modele.
+///
+/// ## Pourquoi des identifiants
+///
+/// Parce qu'une liste d'indices dans une chaine se decale au premier
+/// reordonnancement, et qu'un lien par texte de commande se casse a la premiere
+/// correction d'orthographe. `Cascade` des deux cotes : le lien ne decrit rien
+/// sans ses deux extremites.
+model TaskCriterionValidation {
+  id          String @id @default(cuid())
+  criterionId String
+  commandId   String
+
+  createdAt DateTime @default(now())
+
+  criterion TaskAcceptanceCriterion @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  command   TaskValidationCommand   @relation(fields: [commandId], references: [id], onDelete: Cascade)
+
+  /// Un lien au plus entre un critere et une commande : le declarer deux fois
+  /// est un double-clic, pas une double preuve.
+  @@unique([criterionId, commandId])
+  @@index([commandId])
 }
 
 /// Un document que l'agent devra lire avant d'implementer la tache.
@@ -990,6 +1046,13 @@ model TaskDocumentReference {
 /// Elle est stockee comme du texte et n'est **jamais** executee : NOX ne sait
 /// pas encore lancer de processus depuis une tache, et rien ici n'ouvre ce
 /// droit.
+/// Une commande de validation enregistree sur une tache.
+///
+/// `executionMode` dit ce que **NOX** a le droit d'en faire. Le defaut,
+/// `AGENT_ONLY`, est exactement le comportement d'avant TASK-027 : la commande
+/// est autorisee a Claude Code, et NOX ne la lance jamais lui-meme. Aucune
+/// commande historique ne devient donc executable sans surveillance du seul
+/// fait d'une migration — `npm run dev` en est la raison la plus evidente.
 model TaskValidationCommand {
   id        String   @id @default(cuid())
   taskId    String
@@ -997,7 +1060,11 @@ model TaskValidationCommand {
   command   String
   createdAt DateTime @default(now())
 
-  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// Valeur de `CommandExecutionMode` : `AGENT_ONLY` ou `AUTONOMOUS`.
+  executionMode String @default("AGENT_ONLY")
+
+  task   Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  proofs TaskCriterionValidation[]
 
   @@unique([taskId, position])
 }
@@ -1452,4 +1519,158 @@ model TaskQueueEntry {
   @@unique([projectId, taskId])
   @@unique([taskId])
   @@index([projectId, sequence])
+}
+
+/// Un passage de NOX sur les validations autonomes d'une execution.
+///
+/// ## Pourquoi une table plutot qu'un drapeau sur `Run`
+///
+/// Parce qu'elle est la **reservation** qui rend le lot idempotent. Deux
+/// finalisations concurrentes de la meme execution passeraient toutes les deux
+/// une verification en memoire ; elles ne peuvent pas toutes les deux inserer
+/// une ligne active. L'unicite partielle vit dans l'index de la migration, ou
+/// un verrou de processus n'aurait survecu ni a un redemarrage, ni a deux
+/// serveurs.
+///
+/// ## Pourquoi `attempt`
+///
+/// Parce qu'une panne d'infrastructure merite une seconde tentative sans
+/// effacer la premiere. Une commande qui echoue vraiment, elle, n'a pas de
+/// seconde chance : le code n'a pas change, et c'est `Request changes` qui
+/// s'applique.
+model AutonomousValidationBatch {
+  id    String @id @default(cuid())
+  runId String
+
+  /// Numero de tentative, a partir de 1. Une nouvelle tentative n'efface rien.
+  attempt Int
+
+  /// Valeur de `ValidationBatchStatus`.
+  status String
+
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  /// Cause d'un lot `ERROR`, telle que NOX l'a constatee.
+  errorCode    String?
+  errorMessage String?
+
+  /// Etat Git suivi, releve avant et apres les validations.
+  ///
+  /// Sert a une seule question : la preuve a-t-elle modifie le travail qu'elle
+  /// evaluait ? Deux empreintes plutot qu'un diff — on cherche a savoir si
+  /// quelque chose a bouge, pas quoi.
+  trackedStateBefore String?
+  trackedStateAfter  String?
+
+  run     Run                         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  results AutonomousValidationResult[]
+
+  @@unique([runId, attempt])
+  @@index([runId])
+}
+
+/// Ce qu'une commande a rendu quand **NOX** l'a executee.
+///
+/// A ne pas confondre avec `RunValidationResult`, qui enregistre ce que Claude
+/// Code a rapporte avoir lance pendant son travail. Les deux tables coexistent
+/// volontairement : la premiere est une information, la seconde est une preuve.
+/// Les fusionner aurait fait disparaitre la distinction que TASK-027 existe pour
+/// etablir.
+model AutonomousValidationResult {
+  id      String @id @default(cuid())
+  batchId String
+
+  /// Rang d'execution dans le lot, deterministe.
+  position Int
+
+  /// Commande de la tache dont ce resultat est la preuve.
+  ///
+  /// Une colonne, pas une relation Prisma — meme raison que `parentRunId` sur
+  /// `Run`. Une tache future peut voir ses commandes reecrites ; l'histoire
+  /// d'une execution passee ne doit ni disparaitre, ni imposer un ordre de
+  /// suppression supplementaire. Le texte execute, lui, est recopie juste en
+  /// dessous et se suffit a la relecture.
+  commandId String?
+
+  /// Texte exact execute, recopie au lancement.
+  command String
+
+  /// Valeur de `AutonomousValidationStatus`.
+  status String
+
+  exitCode   Int?
+  durationMs Int?
+
+  /// Sorties bornees. La troncature est annoncee, jamais silencieuse.
+  stdout          String?
+  stdoutTruncated Boolean @default(false)
+  stderr          String?
+  stderrTruncated Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  batch AutonomousValidationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, position])
+  @@index([batchId])
+  @@index([commandId])
+}
+
+/// Comment la review d'une execution a ete conclue.
+///
+/// ## Pourquoi la source est enregistree
+///
+/// Parce qu'ecrire « approuve par l'utilisateur » quand personne n'a clique
+/// serait un mensonge dans l'historique — celui qu'on decouvre des mois plus
+/// tard en cherchant qui a valide quoi. Trois sources, et elles ne se
+/// remplacent pas : NOX, un humain, ou un humain **malgre** une validation en
+/// echec.
+///
+/// ## Ce qu'un passage en force ne fait pas
+///
+/// Il ne reecrit aucun resultat. Le lot reste `FAILED`, les commandes gardent
+/// leur code de sortie, et cette ligne enregistre seulement qu'un humain a
+/// accepte quand meme, avec sa raison.
+model RunReviewDecision {
+  id    String @id @default(cuid())
+  runId String @unique
+
+  /// Valeur de `ReviewDecisionSource`.
+  source String
+
+  /// Raison d'un passage en force. Obligatoire pour `HUMAN_OVERRIDE`, nulle sinon.
+  overrideReason String?
+
+  decidedAt DateTime @default(now())
+
+  run           Run                          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  confirmations RunHumanCriterionConfirmation[]
+
+  @@index([runId])
+}
+
+/// Un critere humain qu'une personne a explicitement confirme.
+///
+/// Le detail compte autant que le geste : « validation humaine confirmee » sans
+/// dire **quoi** ne se relit pas six mois plus tard. Le texte du critere est
+/// recopie parce qu'une tache future editee ne doit pas reecrire ce qui a ete
+/// confirme a l'epoque.
+model RunHumanCriterionConfirmation {
+  id         String @id @default(cuid())
+  decisionId String
+
+  /// Critere confirme, lorsqu'il existe encore.
+  criterionId String?
+
+  /// Texte du critere, recopie a la confirmation.
+  criterionText String
+
+  createdAt DateTime @default(now())
+
+  decision RunReviewDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@unique([decisionId, criterionText])
+  @@index([decisionId])
 }

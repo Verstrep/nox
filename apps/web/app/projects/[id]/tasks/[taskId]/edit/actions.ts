@@ -18,6 +18,7 @@ import {
   type TaskEditFormValues,
 } from "@/lib/task-edit";
 import { applyTaskDocumentResync } from "@/lib/tasks";
+import { readPlanRows } from "@/lib/verification-fields";
 
 import type { EditTaskState } from "./form-state";
 
@@ -36,7 +37,16 @@ function readField(formData: FormData, field: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function readStrings(formData: FormData, field: string): string[] {
+  return formData.getAll(field).filter((entry): entry is string => typeof entry === "string");
+}
+
 function readValues(formData: FormData): TaskEditFormValues {
+  // Le plan passe par le lecteur partage : l'editeur de tache et la revue d'un
+  // backlog envoient exactement les memes champs, et un second decodage aurait
+  // fini par accepter ce que l'autre refuse.
+  const plan = readPlanRows(formData, "");
+
   return {
     title: readField(formData, "title"),
     priority: readField(formData, "priority"),
@@ -44,13 +54,11 @@ function readValues(formData: FormData): TaskEditFormValues {
     context: readField(formData, "context"),
     outOfScope: readField(formData, "outOfScope"),
     documents: readField(formData, "documents"),
-    criteria: readField(formData, "criteria"),
-    commands: readField(formData, "commands"),
+    criteria: plan.criteria,
+    commands: plan.commands,
     // `getAll` plutot que `get` : les dependances sont des cases a cocher, et il
     // y en a autant que de cases cochees.
-    dependsOnTaskIds: formData
-      .getAll("dependsOnTaskIds")
-      .filter((entry): entry is string => typeof entry === "string"),
+    dependsOnTaskIds: readStrings(formData, "dependsOnTaskIds"),
   };
 }
 

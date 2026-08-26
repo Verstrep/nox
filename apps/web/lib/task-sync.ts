@@ -32,6 +32,7 @@ import {
   renderTaskMarkdown,
   type ProjectDocumentContent,
   type TaskMarkdownDependency,
+  type VerificationPlan,
   type TaskSpecification,
 } from "@nox/shared";
 
@@ -91,6 +92,13 @@ export type TaskSyncPorts = {
 export type SynchronizableTask = TaskSpecification & {
   documentPath: string;
   dependencies?: readonly TaskMarkdownDependency[];
+  /**
+   * Plan de verification, ecrit dans le document avec le reste du contrat.
+   *
+   * Facultatif pour les appelants qui n'en ont pas : le document se rend alors
+   * sans cette section, exactement comme avant TASK-027.
+   */
+  verificationPlan?: VerificationPlan | null;
 };
 
 const UNREADABLE_EXISTING_MESSAGE =
@@ -120,7 +128,7 @@ export async function synchronizeTaskDocument(
   task: SynchronizableTask,
   ports: TaskSyncPorts,
 ): Promise<TaskDocumentSyncOutcome> {
-  const expected = renderTaskMarkdown(task, task.dependencies ?? []);
+  const expected = renderTaskMarkdown(task, task.dependencies ?? [], task.verificationPlan ?? null);
 
   const created = await ports.createDocument(repositoryPath, task.code, expected);
   if (created.ok) {
@@ -180,7 +188,7 @@ export async function resynchronizeTaskDocument(
     return synchronizeTaskDocument(repositoryPath, task, ports);
   }
 
-  const expected = renderTaskMarkdown(task, task.dependencies ?? []);
+  const expected = renderTaskMarkdown(task, task.dependencies ?? [], task.verificationPlan ?? null);
   const updated = await update(repositoryPath, task.documentPath, expected, currentRevision);
   if (updated.ok) {
     return { kind: "synced", path: updated.value.path, revision: updated.value.revision };

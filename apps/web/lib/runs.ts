@@ -28,6 +28,7 @@ import {
 } from "@nox/database";
 import {
   RUNNER_ERROR,
+  RUN_STATUS,
   isFinalRunStatus,
   type ClaudePreflightSuccess,
   type DevelopmentRunDetail,
@@ -35,6 +36,7 @@ import {
 } from "@nox/shared";
 import { connection } from "next/server";
 
+import { runAutonomousValidation } from "./autonomous-validation.ts";
 import { toRunnerReport } from "./run-report.ts";
 import { claudePreflight, fetchClaudeRunStatus } from "./runner/client.ts";
 import { describeRunnerFailure, type RunnerFailure } from "./runner/errors.ts";
@@ -87,7 +89,29 @@ export async function reconcileRun(run: DevelopmentRunDetail): Promise<Developme
 
   if (status.ok) {
     const updated = await updateRunFromRunner(db, run.id, toRunnerReport(status.value));
-    return updated ?? run;
+    if (updated === null) {
+      return run;
+    }
+
+    // L'evenement de finalisation, et lui seul. `run` etait non final en entrant
+    // — la garde du haut le garantit —, donc arriver ici avec une execution
+    // terminee normalement signifie qu'elle vient de le devenir a l'instant.
+    //
+    // Ce n'est pas « un rendu declenche des commandes » : la reservation
+    // persistante refuse tout lot au-dela du premier, donc vingt
+    // rafraichissements ne produisent aucun processus supplementaire. Le
+    // declencheur est la transition, pas la consultation.
+    if (updated.status === RUN_STATUS.COMPLETED) {
+      await runAutonomousValidation(db, updated.id).catch((error: unknown) => {
+        // Une validation qui echoue a demarrer ne doit pas faire tomber la page
+        // d'une execution : le lot enregistrera son propre etat, et la review le
+        // dira. C'est la meme regle que pour la capture de review.
+        console.error("[nox] Echec du lot de validation autonome :", error);
+      });
+      return (await getRunById(db, updated.id)) ?? updated;
+    }
+
+    return updated;
   }
 
   // Le runner repond mais ne connait plus l'execution : le suivi est perdu, et

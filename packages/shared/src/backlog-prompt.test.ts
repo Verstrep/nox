@@ -1,5 +1,5 @@
 /**
- * Prompt de planification `backlog/1`.
+ * Prompt de planification `backlog/2`.
  *
  * ## Ce que ce fichier prouve
  *
@@ -94,9 +94,9 @@ function prompt(overrides: Partial<BacklogPromptInput> = {}) {
 }
 
 describe("version", () => {
-  it("est backlog/1, distincte du prompt conversationnel", () => {
-    assert.equal(BACKLOG_PROMPT_VERSION, "backlog/1");
-    assert.equal(prompt().version, "backlog/1");
+  it("est backlog/2, distincte du prompt conversationnel", () => {
+    assert.equal(BACKLOG_PROMPT_VERSION, "backlog/2");
+    assert.equal(prompt().version, "backlog/2");
     assert.equal(prompt().version.startsWith("architect/"), false);
   });
 });

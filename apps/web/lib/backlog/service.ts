@@ -38,15 +38,16 @@
 
 import {
   ARCHITECT_BACKLOG_GENERATION_STATUS,
-  ARCHITECT_BACKLOG_SCHEMA_NAME,
+  ARCHITECT_BACKLOG_SCHEMA_NAME_2,
   ARCHITECT_ERROR,
-  buildArchitectBacklogSchema,
+  VERIFICATION_MODE,
+  buildArchitectBacklogSchemaV2,
   checkValidationCommand,
   formatTaskCode,
-  readArchitectBacklogProposal,
+  readArchitectBacklogProposalV2,
   taskDocumentPath,
-  type ArchitectBacklogProposal,
-  type ArchitectBacklogTaskProposal,
+  type ArchitectBacklogProposalV2,
+  type ArchitectBacklogTaskProposalV2,
   type ArchitectErrorCode,
   type DevelopmentTaskDetail,
   type DevelopmentTaskSummary,
@@ -70,7 +71,7 @@ import { ARCHITECT_REQUEST_TIMEOUT_MS } from "../architect/config.ts";
 import { fetchArchitectContext, type ArchitectRepositoryPorts } from "../architect/service.ts";
 import type { ArchitectProvider } from "../architect/provider.ts";
 import { runnerArchitectPorts } from "../architect/service.ts";
-import { readTaskSubmission, type TaskFormValues } from "../task-input.ts";
+import { readTaskEditSubmission, type TaskEditFormValues } from "../task-edit.ts";
 import { prepareBacklogGeneration, type PreparedBacklogGeneration } from "./prepare.ts";
 
 /** Ce dont une planification a besoin, deja relu en base par l'appelant. */
@@ -228,8 +229,8 @@ export async function generateProjectBacklog(
       model: input.model,
       instructions: prepared.prepared.prompt.instructions,
       input: prepared.prepared.prompt.input,
-      schemaName: ARCHITECT_BACKLOG_SCHEMA_NAME,
-      schema: buildArchitectBacklogSchema(),
+      schemaName: ARCHITECT_BACKLOG_SCHEMA_NAME_2,
+      schema: buildArchitectBacklogSchemaV2(),
       timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
       maxOutputTokens: prepared.prepared.maxOutputTokens,
     });
@@ -244,7 +245,7 @@ export async function generateProjectBacklog(
     return fail(result.code);
   }
 
-  const validated = readArchitectBacklogProposal(
+  const validated = readArchitectBacklogProposalV2(
     result.value.raw,
     prepared.prepared.availableDocuments,
   );
@@ -288,12 +289,16 @@ export async function generateProjectBacklog(
 /**
  * Un element de backlog tel que le formulaire de revue le rend.
  *
- * Ce sont les memes valeurs qu'un formulaire de creation de tache — c'est le
- * meme type, `TaskFormValues` — parce que c'est la meme chose : une
- * specification saisie par un humain. Une seconde forme presque identique
- * aurait fini par accepter ce que l'autre refuse.
+ * Ce sont les memes valeurs qu'un formulaire d'edition de tache — c'est le meme
+ * type — parce que c'est la meme chose : une specification saisie par un humain,
+ * plan de verification compris. Une seconde forme presque identique aurait fini
+ * par accepter ce que l'autre refuse.
+ *
+ * Les dependances n'y figurent pas : le planificateur n'en propose aucune, et
+ * elles se posent a la main apres l'application. Le champ est present parce que
+ * le validateur est partage, et il vaut toujours la liste vide.
  */
-export type BacklogReviewItem = TaskFormValues;
+export type BacklogReviewItem = TaskEditFormValues;
 
 export type ApplyBacklogOutcome =
   | { ok: true; proposal: ArchitectBacklogProposalView; tasks: DevelopmentTaskDetail[] }
@@ -361,11 +366,11 @@ export async function applyProjectBacklog(
   //    propose : les deux sont revalides de zero.
   const validated: BacklogTaskToCreate[] = [];
   for (const [position, item] of input.items.entries()) {
-    const submission = readTaskSubmission(item);
+    const submission = readTaskEditSubmission({ ...item, dependsOnTaskIds: [] });
     if (!submission.ok) {
       return { ok: false, message: `Tache ${String(position + 1)} : ${submission.message}` };
     }
-    for (const command of submission.input.validationCommands) {
+    for (const { command } of submission.input.validationCommands) {
       const problem = checkValidationCommand(command);
       if (problem !== null) {
         return {
@@ -374,7 +379,23 @@ export async function applyProjectBacklog(
         };
       }
     }
-    validated.push(submission.input);
+    validated.push({
+      title: submission.input.title,
+      objective: submission.input.objective,
+      context: submission.input.context,
+      outOfScope: submission.input.outOfScope,
+      priority: submission.input.priority,
+      // Les deux listes plates restent le contrat de creation ; le plan porte la
+      // classification. Leurs textes viennent du meme endroit, donc ils ne
+      // peuvent pas diverger.
+      acceptanceCriteria: submission.input.acceptanceCriteria.map((criterion) => criterion.text),
+      documentReferences: [...submission.input.documentReferences],
+      validationCommands: submission.input.validationCommands.map((entry) => entry.command),
+      verificationPlan: {
+        criteria: submission.input.acceptanceCriteria,
+        commands: submission.input.validationCommands,
+      },
+    });
   }
 
   // 2. Le contexte est reconstruit maintenant — sans aucun appel au fournisseur
@@ -535,15 +556,24 @@ export async function isBacklogProposalStale(
 
 /** Convertit une proposition en valeurs de formulaire, dans son ordre. */
 export function backlogProposalToFormValues(
-  proposal: ArchitectBacklogProposal,
+  proposal: ArchitectBacklogProposalV2,
 ): BacklogReviewItem[] {
-  return proposal.tasks.map(backlogTaskToFormValues);
+  return proposal.tasks.map((task, position) => backlogTaskToFormValues(task, position));
 }
 
-/** Convertit un element de backlog en valeurs de formulaire de tache. */
+/**
+ * Convertit un element de backlog en valeurs de formulaire de tache.
+ *
+ * `position` sert uniquement a rendre les cles de ligne distinctes d'une tache a
+ * l'autre : deux taches d'un meme backlog vivent dans le meme formulaire, et
+ * deux cles identiques y feraient partager leurs champs.
+ */
 export function backlogTaskToFormValues(
-  task: ArchitectBacklogTaskProposal,
+  task: ArchitectBacklogTaskProposalV2,
+  position = 0,
 ): BacklogReviewItem {
+  const commandKey = (index: number): string => `t${String(position)}v${String(index)}`;
+
   return {
     title: task.title,
     priority: task.priority,
@@ -554,7 +584,25 @@ export function backlogTaskToFormValues(
     // inventer de separateur que la relecture aurait a deviner.
     outOfScope: task.outOfScope.join("\n"),
     documents: task.documentReferences.join("\n"),
-    criteria: task.acceptanceCriteria.join("\n"),
-    commands: task.validationCommands.join("\n"),
+    criteria: task.acceptanceCriteria.map((criterion, index) => ({
+      key: `t${String(position)}c${String(index)}`,
+      text: criterion.text,
+      verificationMode: criterion.verificationMode,
+      humanInstructions: criterion.humanInstructions ?? "",
+      // Le lien designe une **ligne**, jamais un texte : deux commandes
+      // identiques restent deux lignes distinctes.
+      commandKeys:
+        criterion.verificationMode === VERIFICATION_MODE.AUTOMATED
+          ? criterion.validationCommandIndexes
+              .filter((entry) => entry >= 0 && entry < task.validationCommands.length)
+              .map(commandKey)
+          : [],
+    })),
+    commands: task.validationCommands.map((command, index) => ({
+      key: commandKey(index),
+      command: command.command,
+      executionMode: command.executionMode,
+    })),
+    dependsOnTaskIds: [],
   };
 }

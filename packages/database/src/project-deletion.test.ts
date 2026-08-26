@@ -318,6 +318,44 @@ async function populate(projectId: string): Promise<{ taskId: string; bootstrapI
   const activated = await setQueueActive(db, projectId, true);
   assert.ok(activated.ok);
 
+  // Un plan de verification, un lot de validation autonome et une decision de
+  // review : meme raison que pour la file, ces tables doivent etre **remplies**
+  // avant la suppression pour que le test prouve quelque chose sur elles.
+  const criterion = await db.taskAcceptanceCriterion.findFirst({
+    where: { taskId },
+    select: { id: true },
+  });
+  const command = await db.taskValidationCommand.findFirst({
+    where: { taskId },
+    select: { id: true },
+  });
+  assert.ok(criterion !== null && command !== null);
+  await db.taskCriterionValidation.create({
+    data: { criterionId: criterion.id, commandId: command.id },
+  });
+
+  const batch = await db.autonomousValidationBatch.create({
+    data: { runId: run.id, attempt: 1, status: "PASSED" },
+    select: { id: true },
+  });
+  await db.autonomousValidationResult.create({
+    data: {
+      batchId: batch.id,
+      position: 0,
+      commandId: command.id,
+      command: "npm test",
+      status: "PASSED",
+      exitCode: 0,
+    },
+  });
+  const decision = await db.runReviewDecision.create({
+    data: { runId: run.id, source: "HUMAN_OVERRIDE", overrideReason: "Faux negatif connu." },
+    select: { id: true },
+  });
+  await db.runHumanCriterionConfirmation.create({
+    data: { decisionId: decision.id, criterionId: criterion.id, criterionText: "Un critere" },
+  });
+
   return { taskId, bootstrapId: bootstrap.id };
 }
 
@@ -330,6 +368,14 @@ async function countAll(projectId: string): Promise<Record<string, number>> {
     runEvent: await db.runEvent.count({ where: byRun }),
     runFileChange: await db.runFileChange.count({ where: byRun }),
     runValidationResult: await db.runValidationResult.count({ where: byRun }),
+    autonomousValidationResult: await db.autonomousValidationResult.count({
+      where: { batch: { run: byTask } },
+    }),
+    autonomousValidationBatch: await db.autonomousValidationBatch.count({ where: byRun }),
+    runHumanCriterionConfirmation: await db.runHumanCriterionConfirmation.count({
+      where: { decision: { run: byTask } },
+    }),
+    runReviewDecision: await db.runReviewDecision.count({ where: byRun }),
     architectRunReview: await db.architectRunReview.count({ where: byRun }),
     reviewFeedback: await db.reviewFeedback.count({ where: byTask }),
     run: await db.run.count({ where: byTask }),
@@ -339,6 +385,9 @@ async function countAll(projectId: string): Promise<Record<string, number>> {
     architectMessage: await db.architectMessage.count({ where: { session: { projectId } } }),
     architectGeneration: await db.architectGeneration.count({ where: { session: { projectId } } }),
     architectSession: await db.architectSession.count({ where: { projectId } }),
+    taskCriterionValidation: await db.taskCriterionValidation.count({
+      where: { criterion: { task: { projectId } } },
+    }),
     taskAcceptanceCriterion: await db.taskAcceptanceCriterion.count({ where: byTask }),
     taskDocumentReference: await db.taskDocumentReference.count({ where: byTask }),
     taskValidationCommand: await db.taskValidationCommand.count({ where: byTask }),
@@ -394,6 +443,10 @@ describe("deleteProjectState", () => {
         runEvent: 0,
         runFileChange: 0,
         runValidationResult: 0,
+        autonomousValidationResult: 0,
+        autonomousValidationBatch: 0,
+        runHumanCriterionConfirmation: 0,
+        runReviewDecision: 0,
         architectRunReview: 0,
         reviewFeedback: 0,
         run: 0,
@@ -403,6 +456,7 @@ describe("deleteProjectState", () => {
         architectMessage: 0,
         architectGeneration: 0,
         architectSession: 0,
+        taskCriterionValidation: 0,
         taskAcceptanceCriterion: 0,
         taskDocumentReference: 0,
         taskValidationCommand: 0,
@@ -509,6 +563,12 @@ describe("deleteProjectState", () => {
       runEvent: 0,
       runFileChange: 0,
       runValidationResult: 0,
+      // Ni plan de verification, ni preuve, ni decision de review : le nouveau
+      // projet ne herite d'aucune classification de l'ancien.
+      autonomousValidationResult: 0,
+      autonomousValidationBatch: 0,
+      runHumanCriterionConfirmation: 0,
+      runReviewDecision: 0,
       architectRunReview: 0,
       reviewFeedback: 0,
       run: 0,
@@ -518,6 +578,7 @@ describe("deleteProjectState", () => {
       architectMessage: 0,
       architectGeneration: 0,
       architectSession: 0,
+      taskCriterionValidation: 0,
       taskAcceptanceCriterion: 0,
       taskDocumentReference: 0,
       taskValidationCommand: 0,

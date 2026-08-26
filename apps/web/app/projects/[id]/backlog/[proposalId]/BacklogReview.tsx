@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 
-import { TASK_PRIORITIES } from "@nox/shared";
+import { TASK_PRIORITIES, VERIFICATION_MODE } from "@nox/shared";
 
 import { useUnsavedChanges } from "@/components/useUnsavedChanges";
+import { VerificationPlanFields } from "@/components/VerificationPlanFields";
 import {
   BACKLOG_STALE_MESSAGE,
   moveBacklogItem,
@@ -15,8 +16,16 @@ import {
   backlogReviewValues,
   createBacklogReviewItems,
   setBacklogItemField,
+  updateBacklogItem,
+  type BacklogItemTextField,
 } from "@/lib/backlog/review-items";
 import { taskPriorityLabel } from "@/lib/labels";
+import {
+  emptyCommandRow,
+  emptyCriterionRow,
+  type TaskEditCommandRow,
+  type TaskEditCriterionRow,
+} from "@/lib/verification-fields";
 
 import { applyBacklogAction } from "../actions";
 import type { BacklogApplyState, BacklogItemValues } from "../form-state";
@@ -60,15 +69,32 @@ function Field({
   );
 }
 
+/** Resume de la classification d'un element, visible carte repliee. */
+function planSummary(item: BacklogItemValues): string {
+  const automated = item.criteria.filter(
+    (row) => row.verificationMode === VERIFICATION_MODE.AUTOMATED,
+  ).length;
+  const human = item.criteria.length - automated;
+  return `${String(automated)} automatise(s) · ${String(human)} humain(s)`;
+}
+
 /**
  * Revue d'un backlog propose.
  *
  * ## Compact d'abord, detail a la demande
  *
  * Vingt taches et leurs criteres feraient une page que personne ne lirait. Les
- * cartes montrent donc le titre, la priorite et l'objectif ; le reste s'ouvre
- * tache par tache. Tout reste inspectable avant application — c'est le point de
- * la revue — mais rien n'est impose d'un bloc.
+ * cartes montrent donc le titre, la priorite, l'objectif et **comment la tache
+ * se verifiera** ; le reste s'ouvre tache par tache. Tout reste inspectable
+ * avant application — c'est le point de la revue — mais rien n'est impose d'un
+ * bloc.
+ *
+ * ## La classification se corrige ici, et nulle part ailleurs
+ *
+ * Le fournisseur propose ; l'humain tranche. Un critere que le modele a declare
+ * automatise peut redevenir humain d'un clic, une commande peut perdre le droit
+ * d'etre executee par NOX, et une preuve peut etre decochee. Ce qui est applique
+ * est ce que l'ecran montre — jamais ce que le modele avait dit.
  *
  * ## L'ordre affiche est l'ordre applique
  *
@@ -124,13 +150,21 @@ export function BacklogReview({
   // sinon un deplacement ouvrirait la carte du voisin.
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  // Un compteur, pas la longueur d'une liste : supprimer puis ajouter ne doit
+  // jamais reattribuer une cle deja vue, sous peine de melanger deux lignes.
+  const nextKey = useRef(0);
+  const makeKey = (): string => {
+    nextKey.current += 1;
+    return `n${String(nextKey.current)}`;
+  };
+
   const dirty = JSON.stringify(backlogReviewValues(items)) !== JSON.stringify(initialItems);
   const stopped = blocked || state.stale;
 
   useUnsavedChanges(dirty && !pending && !stopped);
 
   const setField =
-    (index: number, field: keyof BacklogItemValues) =>
+    (index: number, field: BacklogItemTextField) =>
     (next: string): void => {
       setItems((current) => setBacklogItemField(current, index, field, next));
     };
@@ -142,6 +176,81 @@ export function BacklogReview({
   const remove = (index: number): void => {
     setItems((current) => removeBacklogItem(current, index));
   };
+
+  /** Les sept gestes du plan, rattaches a un element precis. */
+  const planHandlers = (index: number) => ({
+    updateCriterion: (key: string, patch: Partial<TaskEditCriterionRow>): void => {
+      setItems((current) =>
+        updateBacklogItem(current, index, (values) => ({
+          ...values,
+          criteria: values.criteria.map((row) => (row.key === key ? { ...row, ...patch } : row)),
+        })),
+      );
+    },
+    updateCommand: (key: string, patch: Partial<TaskEditCommandRow>): void => {
+      setItems((current) =>
+        updateBacklogItem(current, index, (values) => ({
+          ...values,
+          commands: values.commands.map((row) => (row.key === key ? { ...row, ...patch } : row)),
+        })),
+      );
+    },
+    toggleProof: (criterionKey: string, commandKey: string): void => {
+      setItems((current) =>
+        updateBacklogItem(current, index, (values) => ({
+          ...values,
+          criteria: values.criteria.map((row) =>
+            row.key === criterionKey
+              ? {
+                  ...row,
+                  commandKeys: row.commandKeys.includes(commandKey)
+                    ? row.commandKeys.filter((entry) => entry !== commandKey)
+                    : [...row.commandKeys, commandKey],
+                }
+              : row,
+          ),
+        })),
+      );
+    },
+    addCriterion: (): void => {
+      setItems((current) =>
+        updateBacklogItem(current, index, (values) => ({
+          ...values,
+          criteria: [...values.criteria, emptyCriterionRow(makeKey())],
+        })),
+      );
+    },
+    removeCriterion: (key: string): void => {
+      setItems((current) =>
+        updateBacklogItem(current, index, (values) => ({
+          ...values,
+          criteria: values.criteria.filter((row) => row.key !== key),
+        })),
+      );
+    },
+    addCommand: (): void => {
+      setItems((current) =>
+        updateBacklogItem(current, index, (values) => ({
+          ...values,
+          commands: [...values.commands, emptyCommandRow(makeKey())],
+        })),
+      );
+    },
+    // Retirer une commande retire aussi les preuves qui la designaient : un lien
+    // vers une ligne disparue ne veut plus rien dire.
+    removeCommand: (key: string): void => {
+      setItems((current) =>
+        updateBacklogItem(current, index, (values) => ({
+          ...values,
+          commands: values.commands.filter((row) => row.key !== key),
+          criteria: values.criteria.map((row) => ({
+            ...row,
+            commandKeys: row.commandKeys.filter((entry) => entry !== key),
+          })),
+        })),
+      );
+    },
+  });
 
   return (
     <form action={formAction} className="flex flex-col gap-6">
@@ -176,7 +285,8 @@ export function BacklogReview({
 
       <ol className="flex flex-col gap-4">
         {items.map(({ uid, values: item }, index) => {
-          const at = (field: string): string => `items.${String(index)}.${field}`;
+          const prefix = `items.${String(index)}.`;
+          const at = (field: string): string => `${prefix}${field}`;
           const open = expanded === uid;
 
           return (
@@ -200,6 +310,9 @@ export function BacklogReview({
                   />
                   <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-zinc-500">
                     {item.objective}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    Verification : {planSummary(item)}
                   </p>
                 </div>
 
@@ -287,14 +400,6 @@ export function BacklogReview({
                     onChange={setField(index, "context")}
                   />
                   <Field
-                    name={at("criteria")}
-                    label="Criteres d'acceptation"
-                    hint="Un par ligne. Au moins un est obligatoire."
-                    rows={4}
-                    value={item.criteria}
-                    onChange={setField(index, "criteria")}
-                  />
-                  <Field
                     name={at("outOfScope")}
                     label="Hors perimetre"
                     hint="Ce que l'implementeur ne doit pas faire."
@@ -310,23 +415,26 @@ export function BacklogReview({
                     value={item.documents}
                     onChange={setField(index, "documents")}
                   />
-                  <Field
-                    name={at("commands")}
-                    label="Commandes de validation"
-                    hint="Une par ligne, sans operateur shell."
-                    rows={3}
-                    value={item.commands}
-                    onChange={setField(index, "commands")}
+                  <VerificationPlanFields
+                    prefix={prefix}
+                    rows={{ criteria: item.criteria, commands: item.commands }}
+                    handlers={planHandlers(index)}
+                    disabled={stopped}
                   />
                 </div>
               ) : (
                 <>
                   <input type="hidden" name={at("objective")} value={item.objective} />
                   <input type="hidden" name={at("context")} value={item.context} />
-                  <input type="hidden" name={at("criteria")} value={item.criteria} />
                   <input type="hidden" name={at("outOfScope")} value={item.outOfScope} />
                   <input type="hidden" name={at("documents")} value={item.documents} />
-                  <input type="hidden" name={at("commands")} value={item.commands} />
+                  <VerificationPlanFields
+                    prefix={prefix}
+                    rows={{ criteria: item.criteria, commands: item.commands }}
+                    handlers={planHandlers(index)}
+                    disabled={stopped}
+                    hidden
+                  />
                 </>
               )}
             </li>
@@ -353,7 +461,8 @@ export function BacklogReview({
       <p className="text-xs leading-relaxed text-zinc-600">
         Appliquer ne rappelle pas l&apos;Architecte : aucun appel au fournisseur, aucune execution
         de Claude Code, aucun commit, aucun push. Les taches sont creees en{" "}
-        <span className="font-mono">DRAFT</span>, dans l&apos;ordre affiche ci-dessus.
+        <span className="font-mono">DRAFT</span>, dans l&apos;ordre affiche ci-dessus, avec la
+        classification que vous voyez.
       </p>
     </form>
   );

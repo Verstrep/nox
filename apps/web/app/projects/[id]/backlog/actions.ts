@@ -21,6 +21,7 @@ import {
 } from "@/lib/backlog/service";
 import { loadProject } from "@/lib/projects";
 import { applyTaskDocumentSync } from "@/lib/tasks";
+import { readPlanRows } from "@/lib/verification-fields";
 
 import type {
   BacklogApplyState,
@@ -127,7 +128,11 @@ function readItems(formData: FormData): BacklogItemValues[] {
 
   const items: BacklogItemValues[] = [];
   for (let index = 0; index < Math.min(declared, 100); index += 1) {
-    const at = (field: string): string => readField(formData, `items.${String(index)}.${field}`);
+    const prefix = `items.${String(index)}.`;
+    const at = (field: string): string => readField(formData, `${prefix}${field}`);
+    // Le plan passe par le lecteur partage : l'editeur de tache et cette revue
+    // envoient exactement les memes champs, a leur prefixe pres.
+    const plan = readPlanRows(formData, prefix);
     items.push({
       title: at("title"),
       priority: at("priority"),
@@ -135,8 +140,11 @@ function readItems(formData: FormData): BacklogItemValues[] {
       context: at("context"),
       outOfScope: at("outOfScope"),
       documents: at("documents"),
-      criteria: at("criteria"),
-      commands: at("commands"),
+      criteria: plan.criteria,
+      commands: plan.commands,
+      // Le planificateur ne propose aucune dependance, et cette revue n'en pose
+      // aucune : elles se placent a la main, apres l'application.
+      dependsOnTaskIds: [],
     });
   }
   return items;

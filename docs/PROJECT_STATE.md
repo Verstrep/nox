@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 23 août 2026, à l'issue de `TASK-026`.
+**Dernière mise à jour** : 24 août 2026, à l'issue de `TASK-027`.
 
 ---
 
@@ -38,15 +38,20 @@ arrière-plan, aucune exécution automatique de l'étape recommandée, aucune m�
 automatiquement, aucun commit, aucun push, aucune estimation de coût, aucun backlog généré
 sans clic.
 
+Une exception, et une seule, a été ajoutée par `TASK-027` : une tâche dont **tous** les critères
+sont automatisés et **tous** prouvés par des commandes que NOX a exécutées lui-même se termine sans
+clic. Ce n'est pas une boucle autonome — c'est un contrat écrit avant l'exécution, vérifié par des
+codes de sortie, et refusé dès qu'une preuve manque.
+
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 22 |
-| Migrations appliquées | 19 |
-| Routes du runner | 18, dont une seule publique (`GET /health`) |
+| Modèles Prisma | 27 |
+| Migrations appliquées | 20 |
+| Routes du runner | 20, dont une seule publique (`GET /health`) |
 | Pages de l'application web | 34 |
-| Tests automatisés | 3 658, dont 6 ignorés sous Windows |
-| Décisions consignées | 321 |
+| Tests automatisés | 3 879, dont 6 ignorés sous Windows |
+| Décisions consignées | 336 |
 
 ---
 
@@ -251,6 +256,62 @@ finalisé est immuable, et la garantie vit dans la couche d'écriture. Aucun con
 dans un patch — `.env` et variantes, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`,
 `credentials.json`, `secrets.json` : chemin et statistiques visibles, contenu jamais. Aucun
 blob binaire en base. Un patch est du texte, jamais du HTML. Aucune validation n'est relancée.
+
+### 2.6 bis Validation autonome et classification des critères
+
+**Disponible.** Chaque critère d'acceptation déclare, **avant l'exécution**, comment il se
+vérifie : `AUTOMATED` — une ou plusieurs commandes de la tâche suffisent à le prouver — ou
+`HUMAN` — un jugement ou une observation humaine est réellement nécessaire, et une instruction
+dit quoi regarder. Chaque commande de validation déclare de son côté ce que NOX a le droit d'en
+faire : `AGENT_ONLY`, transmise à Claude Code et jamais lancée par NOX, ou `AUTONOMOUS`, que NOX
+exécutera lui-même après l'exécution.
+
+Ces deux classifications s'écrivent dans l'éditeur de tâche future, se proposent par le
+planificateur de backlog (`backlog/2`) et se corrigent avant application. Elles figurent dans le
+document `tasks/TASK-xxx.md` et dans le prompt transmis à Claude Code, qui sait donc que NOX
+relancera lui-même ces commandes.
+
+Quand une exécution se termine normalement, NOX exécute les commandes autonomes réclamées par au
+moins un critère — **chacune une fois**, dans l'ordre de la tâche, séquentiellement. Le résultat
+de chaque commande est enregistré avec son code de sortie, sa durée et ses sorties bornées. Un
+critère automatisé est prouvé quand toutes ses preuves passent.
+
+Si tous les critères sont automatisés et tous prouvés, la tâche passe à `Done` sans intervention,
+la file d'exécution avance, et la décision est enregistrée comme `AUTOMATED`. Dans tous les autres
+cas, la review revient à un humain, avec une liste de cases à cocher qui ne contient **que** les
+critères qui le concernent vraiment.
+
+**Limites.**
+
+- **Le résultat des commandes n'est pas analysé.** NOX lit un code de sortie, pas un nombre de
+  tests ni une couverture. Une commande qui rend zéro sans rien vérifier est un contrat mal écrit,
+  et NOX ne peut pas le savoir.
+- **Aucune reprise sur un échec réel.** `Retry` n'existe que lorsque NOX n'a **pas pu** obtenir de
+  preuve. Une commande qui a échoué ne se relance pas : le code n'a pas bougé.
+- **Un dépassement de délai est un échec**, pas une panne. La limite est de cinq minutes par
+  commande, et c'est une constante — jamais une variable d'environnement.
+- **Vingt commandes autonomes au maximum** par exécution.
+- **Aucune classification automatique.** Le planificateur propose ; c'est un humain qui tranche
+  avant d'appliquer. Une tâche créée sans classification explicite reçoit les défauts sûrs —
+  `HUMAN` et `AGENT_ONLY` — et ne peut donc pas se terminer seule.
+- **Les sorties sont bornées à 16 Kio par flux**, et la troncature est annoncée. La commande, elle,
+  continue de tourner.
+
+**Frontières.** Aucun appel à OpenAI, à aucune étape. NOX ne demande jamais à Claude Code « est-ce
+que c'est bon ? » : il exécute des commandes et lit des codes de sortie. Aucun interprète de
+commandes n'est impliqué — pas de `shell: true`, pas de `cmd /c`, pas de `bash -c` : une commande
+validée est une suite de jetons, et c'est ce découpage qui part au système. Le répertoire de
+travail est la racine canonique du repository, relue à partir de l'identifiant du projet ; aucune
+variable `NOX_*` n'atteint le processus. Aucun `git add`, aucun commit, aucun push, aucun `reset`,
+aucun `restore`, aucun `clean`.
+
+Le navigateur n'envoie ni commande, ni chemin, ni délai, ni environnement : un formulaire forgé ne
+peut pas transformer `npm test` en autre chose. L'instantané Git du runner reste celui du travail
+de Claude Code ; les validations enregistrent séparément deux empreintes de l'état suivi, et une
+divergence refuse la complétion automatique plutôt que de la masquer.
+
+Un passage en force existe, mais il est humain : il exige une raison, il est enregistré comme
+`HUMAN_OVERRIDE`, et il ne réécrit jamais le résultat automatisé.
 
 ### 2.7 Corrections ciblées
 
@@ -579,15 +640,27 @@ Le cycle de `TASK-021` — proposer, relire, corriger, appliquer — a été ré
 quel, à une différence près qui compte : ce qui s'applique n'est plus un état, c'est un
 **lot**. D'où l'atomicité de la transaction, et la franchise sur ce qu'elle ne couvre pas.
 
-### 3.4 Ce qui reste à faire
+### 3.4 Résolu par `TASK-023` à `TASK-027`
 
-- **Une spécification ne se modifie pas après création.** Un plan vivant suppose de pouvoir
-  réécrire ce qui n'a pas encore été lancé.
-- **Aucune dépendance entre tâches**, aucune replanification structurée.
-- **Aucun amorçage d'un projet vide.**
-- **Aucune file d'exécution.** Les tâches d'un backlog se lancent une par une.
+Quatre limitations de cette liste n'existent plus. Une spécification **se modifie** tant qu'elle
+n'a jamais été exécutée ; les **dépendances** entre tâches sont un graphe acyclique explicite ; un
+projet vide **s'amorce** par `TASK-000` ; et une **file d'exécution** enchaîne les tâches inscrites
+sans jamais contourner le préflight Git ni la review humaine.
 
-Voir [ROADMAP.md](ROADMAP.md), `TASK-023` à `TASK-026`.
+`TASK-027` ferme la boucle que la file avait ouverte : jusqu'ici, chaque tâche exécutée
+interrompait la progression pour une relecture, y compris quand une commande suffisait à répondre.
+Désormais, l'humain n'est sollicité que là où il apporte quelque chose — et la review lui montre
+exactement ce qui le concerne.
+
+### 3.5 Ce qui reste à faire
+
+- **La correction et la re-review ne s'enchaînent pas.** Chaque reprise se déclenche à la main,
+  sans borne explicite.
+- **Aucune livraison Git depuis NOX.** Le commit reste un geste fait dans le terminal.
+- **Une seule exécution active, tous projets confondus.**
+- **Aucune replanification structurée** depuis la conversation du projet.
+
+Voir [ROADMAP.md](ROADMAP.md), `TASK-028` à `TASK-032`.
 
 ---
 

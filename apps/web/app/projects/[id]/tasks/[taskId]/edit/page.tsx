@@ -1,4 +1,4 @@
-import { getDatabaseClient, listDependencyIds } from "@nox/database";
+import { getDatabaseClient, listDependencyIds, readVerificationPlan } from "@nox/database";
 import { checkTaskEditable } from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -84,6 +84,10 @@ export default async function EditTaskPage({
 
   const db = getDatabaseClient();
   const dependsOnTaskIds = await listDependencyIds(db, task.id);
+  // Le plan est relu ici, et il est la source des criteres et des commandes
+  // affiches : les listes de `DevelopmentTaskDetail` disent les memes textes,
+  // mais pas leur classification. Deux sources auraient fini par diverger.
+  const plan = await readVerificationPlan(db, task.id);
   const candidates = (await loadDependencyCandidates(project.id)).filter(
     (candidate) => candidate.id !== task.id,
   );
@@ -117,8 +121,8 @@ export default async function EditTaskPage({
           projectId={project.id}
           taskId={task.id}
           taskCode={task.code}
-          initialValues={taskEditFormValues(task, dependsOnTaskIds)}
-          revision={taskRevisionOf(task, dependsOnTaskIds)}
+          initialValues={taskEditFormValues(task, plan, dependsOnTaskIds)}
+          revision={taskRevisionOf(task, plan, dependsOnTaskIds)}
           candidates={candidates}
           cancelHref={backHref}
         />

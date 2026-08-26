@@ -666,6 +666,60 @@ Fin d'exécution  →  capture Git (runner)  →  instantané immuable  →  SQL
   sur le disque : il n'existe aucun chemin de code entre ce paramètre et un système de fichiers.
 - **Aucune validation n'est relancée**, et aucun commit n'est créé par une review.
 
+### 6.5 bis Validation autonome et classification des critères
+
+```text
+Contrat de la tache                 Fin d'execution
+  criteres : AUTOMATED | HUMAN        (reconcileRun)
+  commandes : AGENT_ONLY | AUTONOMOUS       |
+  liens critere <-> commandes               v
+            |                       lot reserve (runId, attempt) unique
+            |                               |
+            +------- plan relu en base ---> | commandes autonomes, une fois chacune
+                                            |    runner : spawn sans shell
+                                            v
+                             empreinte suivie avant / apres
+                                            |
+                                            v
+                        resultat par critere -> issue de la tache
+                                            |
+                     +----------------------+----------------------+
+                     |                                             |
+        tout automatise et prouve                        tout le reste
+                     |                                             |
+              Done, source AUTOMATED                    REVIEW, decision humaine
+```
+
+Le plan de vérification est **persisté avec la tâche** : `TaskAcceptanceCriterion.verificationMode`,
+`TaskValidationCommand.executionMode`, et une table de liens `TaskCriterionValidation` qui rattache
+un critère automatisé aux commandes qui le prouvent — par identifiants, jamais par position ni par
+texte. Il entre dans la revision optimiste du contrat (§ 6.2 bis), dans le document Markdown de la
+tâche, et dans le prompt transmis à Claude Code.
+
+- **La classification existe avant l'exécution.** Décider après coup qu'un critère était
+  automatisable produirait une classification qui s'adapte au résultat.
+- **Seule une commande exécutée par NOX prouve un critère.** Le compte rendu de Claude Code est
+  conservé et affiché, mais il n'entre dans aucune dérivation de résultat.
+- **La politique des commandes autonomes est distincte de celle de l'amorçage**, et rejouée par le
+  runner : il ne fait pas confiance au web.
+- **Aucun interprète de commandes.** `shell: false`, jamais `cmd /c`, `bash -c` ni `sh -c`. Le
+  découpage est trivial parce que `checkValidationCommand` a déjà refusé tout ce qui le rendrait
+  difficile.
+- **Le répertoire de travail est la racine canonique**, relue à partir de l'identifiant du projet.
+  Aucune variable `NOX_*` n'atteint le processus.
+- **Le lot est réservé par un index unique `(runId, attempt)`.** Dix rafraîchissements de page
+  produisent zéro processus supplémentaire, et deux finalisations concurrentes n'ouvrent qu'un lot.
+- **Une commande partagée par deux critères n'est exécutée qu'une fois.**
+- **Un dépassement de délai est un échec de validation ; une panne d'infrastructure ne l'est pas.**
+  Seule la seconde propose une reprise, et la reprise crée une nouvelle tentative sans effacer la
+  précédente.
+- **L'instantané Git du runner n'est pas retouché.** Deux empreintes de l'état suivi, avant et
+  après le lot, disent si la preuve a modifié ce qu'elle évaluait ; une divergence refuse la
+  complétion automatique.
+- **La décision de review est unique par exécution**, écrite dans la transaction de transition :
+  une acceptation humaine et une complétion automatique visent la même ligne, et une seule aboutit.
+- **Aucun appel à un fournisseur**, à aucune étape. NOX exécute et lit des codes de sortie.
+
 ### 6.6 Correction ciblée
 
 ```text
@@ -1186,3 +1240,5 @@ serait un changement d'architecture.
 | Les libellés sont centralisés | Un mapping concurrent dans un composant isolé finirait par diverger |
 | Un modèle ne décide de rien | Sa sortie est revalidée, et aucune de ses réponses ne change un statut |
 | Les tests n'appellent jamais un vrai fournisseur | Ni OpenAI, ni le vrai binaire Claude Code : faux fournisseur et faux Claude, toujours |
+| Une preuve vient de NOX, jamais d'un récit | Ce qu'un agent dit avoir lancé est affiché ; ce que NOX a lancé fait foi |
+| Un Client Component n'importe jamais un module serveur | Les types et fabriques de formulaire vivent dans des modules purs, séparés de ceux qui calculent ou lisent |

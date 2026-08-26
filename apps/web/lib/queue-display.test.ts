@@ -17,7 +17,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { EXECUTION_QUEUE_ERROR, QUEUE_DISPATCH, QUEUE_STATE, QUEUE_STATES } from "@nox/shared";
+import {
+  EXECUTION_QUEUE_ERROR,
+  QUEUE_DISPATCH,
+  QUEUE_STATE,
+  QUEUE_STATES,
+  REVIEW_WAIT,
+  type ReviewWait,
+} from "@nox/shared";
 
 import {
   QUEUE_ENQUEUE_ACTIVE_NOTICE,
@@ -29,6 +36,8 @@ import {
   dispatchMessage,
   dispatchStarted,
   queueErrorMessage,
+  queueReviewExplanation,
+  queueReviewLabel,
   queueStateExplanation,
   queueStateLabel,
   queuedCountLabel,
@@ -168,5 +177,63 @@ describe("attente de la tache courante", () => {
   it("traduit l'issue du dispatcher sans la confondre avec un demarrage", () => {
     assert.equal(dispatchStarted(QUEUE_DISPATCH.WAITING_CURRENT_TASK), false);
     assert.match(dispatchMessage(QUEUE_DISPATCH.WAITING_CURRENT_TASK), /rouvert/iu);
+  });
+});
+
+describe("ce que la review fait attendre", () => {
+  const wait = (kind: ReviewWait["kind"], humanCheckCount = 0): ReviewWait => ({
+    kind,
+    humanCheckCount,
+  });
+
+  it("distingue les quatre situations", () => {
+    // « Waiting for review » couvrait quatre etats qui n'appellent pas le meme
+    // geste : attendre, corriger, relancer, cocher. Les confondre laisse
+    // l'utilisateur devant une file qui ne bouge pas sans lui dire pourquoi.
+    const labels = new Set(
+      [
+        REVIEW_WAIT.VALIDATION_RUNNING,
+        REVIEW_WAIT.VALIDATION_FAILED,
+        REVIEW_WAIT.VALIDATION_ERROR,
+        REVIEW_WAIT.HUMAN_CHECKS,
+      ].map((kind) => queueReviewLabel(wait(kind, 2))),
+    );
+    assert.equal(labels.size, 4);
+  });
+
+  it("ne confond pas un echec et une panne", () => {
+    assert.notEqual(
+      queueReviewLabel(wait(REVIEW_WAIT.VALIDATION_FAILED)),
+      queueReviewLabel(wait(REVIEW_WAIT.VALIDATION_ERROR)),
+    );
+  });
+
+  it("compte les verifications humaines restantes", () => {
+    assert.match(queueReviewLabel(wait(REVIEW_WAIT.HUMAN_CHECKS, 1)), /1 check$/u);
+    assert.match(queueReviewLabel(wait(REVIEW_WAIT.HUMAN_CHECKS, 3)), /3 checks$/u);
+  });
+
+  it("retombe sur le libelle generique quand rien de particulier n'attend", () => {
+    assert.equal(
+      queueReviewLabel(wait(REVIEW_WAIT.REVIEW)),
+      queueStateLabel(QUEUE_STATE.WAITING_REVIEW),
+    );
+    assert.equal(
+      queueReviewExplanation(wait(REVIEW_WAIT.REVIEW)),
+      queueStateExplanation(QUEUE_STATE.WAITING_REVIEW),
+    );
+  });
+
+  it("explique chaque situation par un geste", () => {
+    for (const kind of [
+      REVIEW_WAIT.VALIDATION_RUNNING,
+      REVIEW_WAIT.VALIDATION_FAILED,
+      REVIEW_WAIT.VALIDATION_ERROR,
+      REVIEW_WAIT.HUMAN_CHECKS,
+    ]) {
+      const text = queueReviewExplanation(wait(kind, 2));
+      assert.ok(text.length > 60, kind);
+      assert.ok(!text.includes("_"), kind);
+    }
   });
 });

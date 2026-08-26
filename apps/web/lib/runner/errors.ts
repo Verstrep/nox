@@ -226,6 +226,13 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
   [RUNNER_ERROR.DOCUMENT_PATH_INVALID]: "Ce chemin de document n'est pas valide.",
   [RUNNER_ERROR.DOCUMENT_OUTSIDE_REPOSITORY]:
     "Ce document se trouve hors du repository du projet : NOX refuse de le lire.",
+  [RUNNER_ERROR.VALIDATION_COMMAND_REFUSED]:
+    "Le runner a refuse d'executer cette commande de validation. Elle a change, ou la politique " +
+    "des commandes autonomes ne l'autorise pas : verifiez le plan de verification de la tache.",
+  [RUNNER_ERROR.VALIDATION_SPAWN_FAILED]:
+    "La commande de validation n'a pas pu demarrer : programme introuvable, ou droits " +
+    "insuffisants. Aucune preuve n'a ete obtenue.",
+
   [RUNNER_ERROR.INTERNAL_ERROR]:
     "Le runner a rencontre une erreur interne. Consultez ses logs pour le detail.",
 };

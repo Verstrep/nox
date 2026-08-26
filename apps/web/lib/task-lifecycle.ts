@@ -17,7 +17,13 @@
  * une exception.
  */
 
-import { getDatabaseClient, updateTaskStatus, type DatabaseClient } from "@nox/database";
+import {
+  getDatabaseClient,
+  updateTaskStatus,
+  type DatabaseClient,
+  type ReviewDecisionInput,
+} from "@nox/database";
+import type { VerificationPlanIssue } from "@nox/shared";
 import { TASK_STATUS, type TaskStatus } from "@nox/shared";
 
 import { advanceQueue, type AdvanceQueueResult } from "./queue.ts";
@@ -53,9 +59,24 @@ export type TaskTransitionOutcome =
  */
 export async function applyTaskTransition(
   db: DatabaseClient,
-  input: { projectId: string; taskId: string; status: TaskStatus },
+  input: {
+    projectId: string;
+    taskId: string;
+    status: TaskStatus;
+    /**
+     * Comment l'acceptation a ete decidee.
+     *
+     * Transmise a `updateTaskStatus`, qui l'ecrit **dans** la transition. C'est
+     * ce qui rend impossible qu'une acceptation humaine et une completion
+     * automatique aboutissent toutes les deux : elles visent la meme ligne
+     * unique par execution.
+     */
+    decision?: ReviewDecisionInput;
+  },
 ): Promise<TaskTransitionOutcome> {
-  const result = await updateTaskStatus(db, input.taskId, input.projectId, input.status);
+  const result = await updateTaskStatus(db, input.taskId, input.projectId, input.status, {
+    decision: input.decision,
+  });
 
   if (!result.ok) {
     switch (result.reason) {
@@ -63,6 +84,10 @@ export async function applyTaskTransition(
         return { ok: false, message: UNKNOWN_TASK_MESSAGE };
       case "queued":
         return { ok: false, message: QUEUED_TRANSITION_MESSAGE };
+      case "already_decided":
+        return { ok: false, message: ALREADY_DECIDED_MESSAGE };
+      case "plan_invalid":
+        return { ok: false, message: planIssuesMessage(result.issues ?? []) };
       case "forbidden_transition":
         return { ok: false, message: FORBIDDEN_TRANSITION_MESSAGE };
     }
@@ -84,6 +109,7 @@ export function applyTaskTransitionWithDefaultClient(input: {
   projectId: string;
   taskId: string;
   status: TaskStatus;
+  decision?: ReviewDecisionInput;
 }): Promise<TaskTransitionOutcome> {
   return applyTaskTransition(getDatabaseClient(), input);
 }
@@ -92,4 +118,25 @@ const QUEUED_TRANSITION_MESSAGE =
   "Cette tache est inscrite dans la file d'execution : elle ne peut pas etre remise en brouillon " +
   "ni bloquee tant qu'elle y figure. Retirez-la de la file, puis reessayez.";
 
-export { QUEUED_TRANSITION_MESSAGE };
+/**
+ * Traduit les defauts d'un plan de verification.
+ *
+ * Tous, pas seulement le premier : corriger un critere pour en decouvrir un
+ * autre au clic suivant serait une facon lente de dire la meme chose.
+ */
+function planIssuesMessage(issues: readonly VerificationPlanIssue[]): string {
+  if (issues.length === 0) {
+    return PLAN_INVALID_MESSAGE;
+  }
+  return `${PLAN_INVALID_MESSAGE} ${issues.map((issue) => issue.detail).join(" ")}`;
+}
+
+const PLAN_INVALID_MESSAGE =
+  "Le plan de verification de cette tache n'est pas complet : chaque critere doit etre soit " +
+  "automatise et prouve par une commande autonome, soit humain et accompagne d'une instruction.";
+
+const ALREADY_DECIDED_MESSAGE =
+  "Cette execution a deja ete conclue — par vous dans un autre onglet, ou par la validation " +
+  "automatique de NOX. Rechargez la page pour voir la decision qui a ete enregistree.";
+
+export { ALREADY_DECIDED_MESSAGE, PLAN_INVALID_MESSAGE, QUEUED_TRANSITION_MESSAGE };

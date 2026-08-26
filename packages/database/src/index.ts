@@ -73,6 +73,7 @@ export {
   type DeleteTaskResult,
   type TaskRowInput,
   type TaskWriteClient,
+  type ReviewDecisionInput,
   type UpdateTaskStatusResult,
 } from "./tasks.js";
 
@@ -92,9 +93,13 @@ export {
 } from "./task-dependencies.js";
 
 export {
+  normalizeTaskEditSnapshot,
   readTaskCode,
   taskContractChanged,
+  taskEditSnapshotOf,
   updateFutureTask,
+  type TaskEditCommandInput,
+  type TaskEditCriterionInput,
   type TaskEditInput,
   type TaskEditResult,
   type TaskEditRevision,
@@ -316,3 +321,25 @@ export type {
   ProjectUpdateActionResult,
   ProjectUpdateBase,
 } from "./architect-project-update.js";
+
+export {
+  completeValidationBatch,
+  getLatestValidationBatch,
+  listValidationBatches,
+  recordValidationResult,
+  reserveValidationBatch,
+  startValidationBatch,
+  summarizeBatchStatus,
+  type AutonomousValidationBatchRow,
+  type AutonomousValidationResultRow,
+  type ReserveBatchResult,
+} from "./autonomous-validation.js";
+
+export {
+  readVerificationPlan,
+  readVerificationPlans,
+  writeVerificationPlan,
+  type VerificationCommandInput,
+  type VerificationCriterionInput,
+  type VerificationPlanClient,
+} from "./verification-plan.js";

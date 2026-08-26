@@ -23,6 +23,7 @@ import {
   markTaskDocumentConflict,
   markTaskDocumentError,
   markTaskDocumentSynced,
+  readVerificationPlan,
   type ProjectDependencyCounts,
 } from "@nox/database";
 import {
@@ -175,8 +176,14 @@ export async function applyTaskDocumentSync(
   repositoryPath: string,
   ports: TaskSyncPorts = RUNNER_PORTS,
 ): Promise<DevelopmentTaskDetail> {
-  const outcome = await synchronizeTaskDocument(repositoryPath, task, ports);
   const db = getDatabaseClient();
+  // Le plan de verification fait partie du contrat ecrit dans le document.
+  const verificationPlan = await readVerificationPlan(db, task.id);
+  const outcome = await synchronizeTaskDocument(
+    repositoryPath,
+    { ...task, verificationPlan },
+    ports,
+  );
 
   switch (outcome.kind) {
     case "synced":
@@ -201,14 +208,15 @@ export async function applyTaskDocumentResync(
   dependencies: readonly TaskMarkdownDependency[],
   ports: TaskSyncPorts = RUNNER_PORTS,
 ): Promise<DevelopmentTaskDetail> {
-  const synchronizable: SynchronizableTask = { ...task, dependencies };
+  const db = getDatabaseClient();
+  const verificationPlan = await readVerificationPlan(db, task.id);
+  const synchronizable: SynchronizableTask = { ...task, dependencies, verificationPlan };
   const outcome = await resynchronizeTaskDocument(
     repositoryPath,
     synchronizable,
     task.documentRevision,
     ports,
   );
-  const db = getDatabaseClient();
 
   switch (outcome.kind) {
     case "synced":

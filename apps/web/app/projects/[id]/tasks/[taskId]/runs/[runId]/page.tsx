@@ -31,6 +31,11 @@ import { loadTask } from "@/lib/tasks";
 
 import { CancelRunForm } from "./CancelRunForm";
 import { RunPoller } from "./RunPoller";
+import { getDatabaseClient } from "@nox/database";
+
+import { AutomatedValidationSection } from "@/components/VerificationPanels";
+import { loadVerificationReview } from "@/lib/verification-review";
+
 import { RunTimeline } from "./RunTimeline";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -140,6 +145,13 @@ export default async function RunPage({
   // Une reconciliation au rendu : rouvrir la page apres avoir ferme le
   // navigateur suffit a recuperer un resultat produit entre-temps.
   const run = await reconcileRun(stored);
+
+  // Lecture seule. Le lot autonome est declenche par la finalisation de
+  // l'execution, jamais par l'ouverture d'une page : consulter ne demarre rien.
+  const verification = await loadVerificationReview(getDatabaseClient(), {
+    runId: run.id,
+    taskId: task.id,
+  });
   const active = !isFinalRunStatus(run.status);
 
   // Rattrapage avant l'affichage : tout ce que le runner sait et que la base
@@ -265,6 +277,20 @@ export default async function RunPage({
           initialEvents={events}
           active={active}
         />
+
+        {/*
+          Une section a part, et pas une ligne de la timeline. Ce que Claude Code
+          raconte avoir lance et ce que NOX a execute lui-meme ne sont pas la
+          meme information : les melanger dans un seul fil rendrait impossible de
+          savoir laquelle on lit. La timeline reste ce que le runner a produit,
+          et rien d'autre — c'est ce que garantit `ClaudeRunEvent`.
+        */}
+        <SectionCard
+          title="NOX validation"
+          description="Ce que NOX a execute lui-meme, apres l'execution. Aucun evenement de Claude Code n'y figure."
+        >
+          <AutomatedValidationSection review={verification} retry={null} />
+        </SectionCard>
 
         {active ? (
           <SectionCard

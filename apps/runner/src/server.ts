@@ -36,6 +36,8 @@ import {
   parseListProjectDocumentsRequest,
   parseReadProjectDocumentRequest,
   parseResolveRepositoryRequest,
+  parseRunValidationRequest,
+  parseTrackedStateRequest,
   parseStartClaudeRunRequest,
   parseUpdateProjectDocumentRequest,
   type ClaudeCorrectionPreflightSuccess,
@@ -67,6 +69,7 @@ import {
   createDocument,
   type CreateDocumentResult,
 } from "./repositories/documents/create-document.ts";
+import { readTrackedState, runRepositoryValidation } from "./repositories/run-validation.ts";
 import {
   deleteDocument,
   type DeleteDocumentResult,
@@ -169,6 +172,8 @@ const DOCUMENTS_DELETE_ROUTE = "/repositories/documents/delete";
 const TASKS_CREATE_DOCUMENT_ROUTE = "/repositories/tasks/create-document";
 const TASKS_DELETE_DOCUMENT_ROUTE = "/repositories/tasks/delete-document";
 const TASKS_DELETE_PROJECT_DOCUMENTS_ROUTE = "/repositories/tasks/delete-project-documents";
+const VALIDATIONS_RUN_ROUTE = "/repositories/validations/run";
+const VALIDATIONS_STATE_ROUTE = "/repositories/validations/state";
 const CLAUDE_PREFLIGHT_ROUTE = "/claude/preflight";
 const CLAUDE_RUNS_START_ROUTE = "/claude/runs/start";
 const CLAUDE_RUNS_STATUS_ROUTE = "/claude/runs/status";
@@ -621,6 +626,64 @@ export function createRunnerServer(
 
         const payload: DeleteProjectDocumentsSuccess = { ok: true, documents: result.documents };
         sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === VALIDATIONS_STATE_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, VALIDATIONS_STATE_ROUTE, log,
+          parseTrackedStateRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Strictement en lecture. Elle rend une empreinte, jamais une liste de
+        // fichiers ni un chemin : la question posee est binaire, et le detail
+        // appartient a la review Git.
+        const state = await readTrackedState(parsed.repositoryPath);
+        if (!state.ok) {
+          logRefusal(requestId, VALIDATIONS_STATE_ROUTE, state.code);
+          sendRunnerError(response, state.code, requestId);
+          return;
+        }
+
+        sendJson(response, 200, { ok: true, digest: state.digest }, requestId);
+        return;
+      }
+
+      if (pathname === VALIDATIONS_RUN_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, VALIDATIONS_RUN_ROUTE, log,
+          parseRunValidationRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Le corps ne porte que deux chaines : un repository et une commande.
+        // Aucun `cwd`, aucun environnement, aucun delai, aucun vecteur
+        // d'arguments deja decoupe. La politique est **rejouee ici** — le
+        // serveur web l'a deja verifiee, et cette frontiere ne s'y fie pas :
+        // c'est elle qui touche reellement la machine.
+        const outcome = await runRepositoryValidation(parsed.repositoryPath, parsed.command);
+        if (!outcome.ok) {
+          logRefusal(requestId, VALIDATIONS_RUN_ROUTE, outcome.code);
+          sendRunnerError(response, outcome.code, requestId);
+          return;
+        }
+
+        sendJson(response, 200, outcome.result, requestId);
         return;
       }
 

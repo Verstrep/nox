@@ -53,6 +53,13 @@ import {
   validationSummaryTone,
 } from "@/lib/review-display";
 import { loadRunReview, syncRunReview } from "@/lib/run-review";
+import { requiresOverride, loadVerificationReview } from "@/lib/verification-review";
+import {
+  AcceptanceCriteriaSection,
+  AutomatedValidationSection,
+} from "@/components/VerificationPanels";
+
+import { RetryValidationForm } from "./RetryValidationForm";
 import { loadRun, reconcileRun } from "@/lib/runs";
 import { loadTask } from "@/lib/tasks";
 
@@ -188,6 +195,14 @@ export default async function ReviewPage({
   // Transfert du runner vers la base, s'il n'a pas deja eu lieu. Une review deja
   // enregistree n'est jamais redemandee : c'est ce qui la rend immuable.
   await syncRunReview(run.id, run.runnerRunId, run.status);
+
+  // Lecture seule : cet appel n'execute aucune commande. Le lot autonome est
+  // declenche par la finalisation de l'execution, jamais par l'ouverture d'une
+  // page — une consultation ne doit rien demarrer.
+  const verification = await loadVerificationReview(getDatabaseClient(), {
+    runId: run.id,
+    taskId: task.id,
+  });
 
   const review = await loadRunReview(run.id);
   const availability = reviewAvailability(
@@ -597,6 +612,27 @@ export default async function ReviewPage({
           )}
         </SectionCard>
 
+        <SectionCard
+          title="Automated validation"
+          description="Ce que NOX a execute lui-meme, apres l'execution. Pas ce que Claude Code raconte avoir lance."
+        >
+          <AutomatedValidationSection
+            review={verification}
+            retry={
+              verification.retryAvailable ? (
+                <RetryValidationForm projectId={project.id} taskId={task.id} runId={run.id} />
+              ) : null
+            }
+          />
+        </SectionCard>
+
+        <SectionCard
+          title="Acceptance criteria"
+          description="Comment chaque critere se verifie, ou il en est, et par quoi il est prouve."
+        >
+          <AcceptanceCriteriaSection review={verification} />
+        </SectionCard>
+
         {task.status === TASK_STATUS.REVIEW ? (
           <SectionCard
             title="Decision"
@@ -605,6 +641,14 @@ export default async function ReviewPage({
             <ReviewDecisionForm
               projectId={project.id}
               taskId={task.id}
+              runId={run.id}
+              humanChecks={verification.humanCriteria.map((criterion) => ({
+                id: criterion.id,
+                text: criterion.text,
+                instructions: criterion.humanInstructions ?? "",
+              }))}
+              overrideRequired={requiresOverride(verification)}
+              validationRunning={!verification.batchSettled}
               requestChangesHref={
                 resumeRefusal === null ? requestChangesUrl(project.id, task.id, run.id) : null
               }

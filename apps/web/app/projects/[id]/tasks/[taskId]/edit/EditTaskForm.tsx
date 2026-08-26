@@ -1,12 +1,19 @@
 "use client";
 
 import { TASK_PRIORITIES, type TaskDependencyRef } from "@nox/shared";
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 
 import { useUnsavedChanges } from "@/components/useUnsavedChanges";
+import { VerificationPlanFields } from "@/components/VerificationPlanFields";
 import { taskPriorityLabel, taskStatusLabel } from "@/lib/labels";
 import { readLines, TASK_LIMITS } from "@/lib/task-input";
-import type { TaskEditFormValues } from "@/lib/task-edit";
+import {
+  emptyCommandRow,
+  emptyCriterionRow,
+  type TaskEditCommandRow,
+  type TaskEditCriterionRow,
+  type TaskEditFormValues,
+} from "@/lib/verification-fields";
 
 import { editTaskAction } from "./actions";
 import { INITIAL_EDIT_TASK_STATE } from "./form-state";
@@ -68,15 +75,26 @@ function TextAreaField({
  *
  * ## Les identites de liste
  *
- * Les trois listes sont saisies en texte libre, une entree par ligne : il n'y a
- * donc aucune ligne a monter, descendre ou supprimer, et aucune cle a deriver
- * d'un texte editable. Les dependances, elles, sont des cases a cocher dont la
- * cle est l'**identifiant** de la tache — une valeur stable, qui ne change pas
- * quand on coche.
+ * Chaque critere et chaque commande porte une **cle d'interface** stable, qui ne
+ * vient ni du texte, ni de la position, ni de la base. Supprimer la premiere
+ * ligne ne doit pas faire glisser le contenu des suivantes dans les mauvais
+ * champs, et taper dans un critere ne doit pas remonter le champ.
  *
  * Ce n'est pas une precaution abstraite : une cle derivee d'un texte modifiable
  * a deja fait perdre le focus a chaque frappe dans le formulaire de backlog. Un
  * test structurel verifie qu'aucune cle de ce fichier ne vient d'un titre.
+ *
+ * ## Les liens critere-commande sont des cles, pas des textes
+ *
+ * Cocher « npm test » comme preuve enregistre la **ligne**, pas la chaine. Une
+ * faute de frappe corrigee ensuite ne casse aucun lien, et deux commandes
+ * identiques restent deux lignes distinctes.
+ *
+ * ## Ce formulaire ne juge pas la coherence du plan
+ *
+ * Un critere automatise sans preuve est enregistrable : un brouillon a le droit
+ * d'etre incomplet. C'est `Mark ready` qui refuse — une fois, au seul endroit
+ * qui fasse autorite.
  */
 export function EditTaskForm({
   projectId,
@@ -101,8 +119,81 @@ export function EditTaskForm({
   // parce qu'une dependance formait un cycle.
   const [values, setValues] = useState<TaskEditFormValues>(state.values ?? initialValues);
 
-  const update = (field: keyof TaskEditFormValues, value: string): void => {
+  // Un compteur, pas la longueur de la liste : supprimer puis ajouter ne doit
+  // jamais reattribuer une cle deja vue, sous peine de melanger deux lignes.
+  const nextKey = useRef(0);
+  const makeKey = (prefix: string): string => {
+    nextKey.current += 1;
+    return `${prefix}n${String(nextKey.current)}`;
+  };
+
+  const update = (field: "title" | "priority" | "objective" | "context" | "outOfScope" | "documents", value: string): void => {
     setValues((current) => ({ ...current, [field]: value }));
+  };
+
+  const updateCriterion = (key: string, patch: Partial<TaskEditCriterionRow>): void => {
+    setValues((current) => ({
+      ...current,
+      criteria: current.criteria.map((row) => (row.key === key ? { ...row, ...patch } : row)),
+    }));
+  };
+
+  const updateCommand = (key: string, patch: Partial<TaskEditCommandRow>): void => {
+    setValues((current) => ({
+      ...current,
+      commands: current.commands.map((row) => (row.key === key ? { ...row, ...patch } : row)),
+    }));
+  };
+
+  const toggleProof = (criterionKey: string, commandKey: string): void => {
+    setValues((current) => ({
+      ...current,
+      criteria: current.criteria.map((row) =>
+        row.key === criterionKey
+          ? {
+              ...row,
+              commandKeys: row.commandKeys.includes(commandKey)
+                ? row.commandKeys.filter((entry) => entry !== commandKey)
+                : [...row.commandKeys, commandKey],
+            }
+          : row,
+      ),
+    }));
+  };
+
+  const addCriterion = (): void => {
+    setValues((current) => ({
+      ...current,
+      criteria: [...current.criteria, emptyCriterionRow(makeKey("c"))],
+    }));
+  };
+
+  const removeCriterion = (key: string): void => {
+    setValues((current) => ({
+      ...current,
+      criteria: current.criteria.filter((row) => row.key !== key),
+    }));
+  };
+
+  const addCommand = (): void => {
+    setValues((current) => ({
+      ...current,
+      commands: [...current.commands, emptyCommandRow(makeKey("v"))],
+    }));
+  };
+
+  // Retirer une commande retire aussi les preuves qui la designaient : un lien
+  // vers une ligne disparue ne veut plus rien dire, et le laisser produirait un
+  // critere automatise silencieusement sans preuve.
+  const removeCommand = (key: string): void => {
+    setValues((current) => ({
+      ...current,
+      commands: current.commands.filter((row) => row.key !== key),
+      criteria: current.criteria.map((row) => ({
+        ...row,
+        commandKeys: row.commandKeys.filter((entry) => entry !== key),
+      })),
+    }));
   };
 
   const toggleDependency = (id: string): void => {
@@ -116,9 +207,7 @@ export function EditTaskForm({
 
   const leaveEdition = useUnsavedChanges(true);
 
-  const criteriaCount = readLines(values.criteria).length;
   const documentCount = readLines(values.documents).length;
-  const commandCount = readLines(values.commands).length;
 
   return (
     <form action={formAction} className="flex flex-col gap-6">
@@ -211,23 +300,19 @@ export function EditTaskForm({
         hint={`Un chemin relatif par ligne. ${String(documentCount)} document(s).`}
       />
 
-      <TextAreaField
-        id="criteria"
-        label="Criteres d'acceptation"
-        value={values.criteria}
-        onChange={(value) => { update("criteria", value); }}
-        readOnly={pending}
-        hint={`Un critere par ligne. Au moins un est obligatoire. ${String(criteriaCount)} critere(s).`}
-      />
-
-      <TextAreaField
-        id="commands"
-        label="Commandes de validation"
-        value={values.commands}
-        onChange={(value) => { update("commands", value); }}
-        readOnly={pending}
-        optional
-        hint={`Une commande par ligne. ${String(commandCount)} commande(s).`}
+      <VerificationPlanFields
+        prefix=""
+        rows={{ criteria: values.criteria, commands: values.commands }}
+        handlers={{
+          updateCriterion,
+          updateCommand,
+          toggleProof,
+          addCriterion,
+          removeCriterion,
+          addCommand,
+          removeCommand,
+        }}
+        disabled={pending}
       />
 
       <fieldset className="rounded-md border border-zinc-800 px-4 py-4">
@@ -278,7 +363,7 @@ export function EditTaskForm({
         Enregistrer ne lance rien : ni Claude Code, ni l&apos;Architecte, ni commit. Le document{" "}
         <code className="font-mono">tasks/{taskCode}.md</code> est reecrit uniquement si le
         contrat change. Une tache en file redevient un brouillon des lors que sa specification
-        est modifiee.
+        est modifiee — le plan de verification en fait partie.
       </p>
 
       <div className="flex flex-wrap items-center gap-3">

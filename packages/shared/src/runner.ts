@@ -291,6 +291,24 @@ export const RUNNER_ERROR = {
    */
   WORKSPACE_FINGERPRINT_UNAVAILABLE: "WORKSPACE_FINGERPRINT_UNAVAILABLE",
 
+  // --- Validation autonome ---------------------------------------------------
+
+  /**
+   * La commande recue ne peut pas etre executee sans surveillance.
+   *
+   * Le runner refait la verification que le web a deja faite. Ce n'est pas une
+   * redondance : c'est la frontiere qui execute reellement, et elle ne fait
+   * confiance a personne — pas meme au serveur web de NOX.
+   */
+  VALIDATION_COMMAND_REFUSED: "VALIDATION_COMMAND_REFUSED",
+  /**
+   * La commande n'a pas pu demarrer.
+   *
+   * Programme introuvable, droits insuffisants, `spawn` refuse. Distinct d'un
+   * code de sortie non nul : ici, aucune preuve n'a ete obtenue.
+   */
+  VALIDATION_SPAWN_FAILED: "VALIDATION_SPAWN_FAILED",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

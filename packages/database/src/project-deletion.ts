@@ -47,6 +47,14 @@ export const PROJECT_DELETION_ORDER = [
   "runEvent",
   "runFileChange",
   "runValidationResult",
+  // Les preuves de TASK-027 partent avec le reste de l'execution : resultats
+  // avant lots, confirmations avant decisions. Aucun de ces liens n'est
+  // `Restrict`, mais l'ordre explicite reste la seule facon de rendre la
+  // suppression lisible — et verifiable par un test.
+  "autonomousValidationResult",
+  "autonomousValidationBatch",
+  "runHumanCriterionConfirmation",
+  "runReviewDecision",
   "architectRunReview",
   "reviewFeedback",
   "run",
@@ -56,6 +64,8 @@ export const PROJECT_DELETION_ORDER = [
   "architectMessage",
   "architectGeneration",
   "architectSession",
+  // Les liens critere-commande avant les deux tables qu'ils joignent.
+  "taskCriterionValidation",
   "taskAcceptanceCriterion",
   "taskDocumentReference",
   "taskValidationCommand",
@@ -172,6 +182,19 @@ export async function deleteProjectState(
       runEvent: (await tx.runEvent.deleteMany({ where: byRun })).count,
       runFileChange: (await tx.runFileChange.deleteMany({ where: byRun })).count,
       runValidationResult: (await tx.runValidationResult.deleteMany({ where: byRun })).count,
+      // Preuves de TASK-027 : resultats avant lots, confirmations avant
+      // decisions. Ce que NOX a execute lui-meme disparait avec le projet,
+      // exactement comme ce que Claude a rapporte.
+      autonomousValidationResult: (
+        await tx.autonomousValidationResult.deleteMany({ where: { batch: { run: byTask } } })
+      ).count,
+      autonomousValidationBatch: (
+        await tx.autonomousValidationBatch.deleteMany({ where: byRun })
+      ).count,
+      runHumanCriterionConfirmation: (
+        await tx.runHumanCriterionConfirmation.deleteMany({ where: { decision: { run: byTask } } })
+      ).count,
+      runReviewDecision: (await tx.runReviewDecision.deleteMany({ where: byRun })).count,
       architectRunReview: (await tx.architectRunReview.deleteMany({ where: byRun })).count,
       // Un feedback reference une tache **et** deux executions : il part avant
       // les trois.
@@ -195,7 +218,11 @@ export async function deleteProjectState(
         await tx.architectGeneration.deleteMany({ where: { session: { projectId } } })
       ).count,
       architectSession: (await tx.architectSession.deleteMany({ where: { projectId } })).count,
-      // Listes enfant d'une tache.
+      // Listes enfant d'une tache. Les liens critere-commande partent avant les
+      // deux tables qu'ils joignent.
+      taskCriterionValidation: (
+        await tx.taskCriterionValidation.deleteMany({ where: { criterion: { task: { projectId } } } })
+      ).count,
       taskAcceptanceCriterion: (
         await tx.taskAcceptanceCriterion.deleteMany({ where: byTask })
       ).count,

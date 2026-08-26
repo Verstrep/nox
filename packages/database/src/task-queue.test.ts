@@ -36,6 +36,7 @@ import {
   TASK_KIND,
   TASK_PRIORITY,
   TASK_STATUS,
+  VERIFICATION_MODE,
 } from "@nox/shared";
 
 import {
@@ -631,7 +632,14 @@ describe("gel d'une tache inscrite", () => {
       context: current.context,
       outOfScope: current.outOfScope,
       priority: TASK_PRIORITY.MEDIUM,
-      acceptanceCriteria: ["A est verifiable"],
+      acceptanceCriteria: [
+        {
+          text: "A est verifiable",
+          verificationMode: VERIFICATION_MODE.HUMAN,
+          humanInstructions: "Verifier a la main.",
+          commandPositions: [],
+        },
+      ],
       documentReferences: [],
       validationCommands: [],
       dependsOnTaskIds: await listDependencyIds(db, taskId),

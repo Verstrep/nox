@@ -27,12 +27,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   ARCHITECT_BACKLOG_GENERATION_STATUS,
-  ARCHITECT_BACKLOG_SCHEMA_VERSION,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  VERIFICATION_MODE,
   BOOTSTRAP_TASK_CODE,
   TASK_KIND,
   TASK_PRIORITY,
   TASK_STATUS,
-  type ArchitectBacklogProposal,
+  type ArchitectBacklogProposalV2,
   type BacklogContextManifest,
 } from "@nox/shared";
 
@@ -118,15 +119,22 @@ async function newProject(): Promise<string> {
 
 /** Cree et applique un backlog, pour disposer de vraies taches produit. */
 async function applyBacklog(projectId: string, titles: readonly string[]): Promise<void> {
-  const proposal: ArchitectBacklogProposal = {
-    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION,
+  const proposal: ArchitectBacklogProposalV2 = {
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
     message: "Ce decoupage couvre le plan.",
     tasks: titles.map((title) => ({
       title,
       priority: TASK_PRIORITY.MEDIUM,
       objective: `Objectif de ${title}.`,
       context: null,
-      acceptanceCriteria: [`${title} est verifiable`],
+      acceptanceCriteria: [
+        {
+          text: `${title} est verifiable`,
+          verificationMode: VERIFICATION_MODE.HUMAN,
+          humanInstructions: "Verifier a la main.",
+          validationCommandIndexes: [],
+        },
+      ],
       outOfScope: [],
       documentReferences: [],
       validationCommands: [],

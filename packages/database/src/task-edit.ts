@@ -1,17 +1,25 @@
 /**
- * Edition d'une tache future : specification, dependances et statut, d'un bloc.
+ * Edition d'une tache future : contrat, plan de verification, dependances et
+ * statut, d'un bloc.
  *
  * ## Une seule operation logique
  *
- * Un enregistrement peut changer trois choses a la fois : le contrat, le graphe
- * de dependances, et le statut — `READY` redevient `DRAFT` des que le contrat
- * bouge. Les trois vivent dans la meme transaction, et la validation entiere
- * precede la premiere ecriture.
+ * Un enregistrement peut changer quatre choses a la fois : la specification, la
+ * facon dont chaque critere se verifie, le graphe de dependances, et le statut —
+ * `READY` redevient `DRAFT` des que le contrat bouge. Les quatre vivent dans la
+ * meme transaction, et la validation entiere precede la premiere ecriture.
  *
  * L'etat « objectif enregistre, dependance refusee, statut a moitie change »
  * n'existe pas. Il n'aurait pas ete rattrapable : l'utilisateur aurait vu un
  * message d'erreur devant une tache deja a moitie modifiee, sans savoir laquelle
  * des deux moities faisait foi.
+ *
+ * ## Le plan de verification fait partie du contrat
+ *
+ * Changer un critere de `HUMAN` a `AUTOMATED` change ce que NOX fera de la tache
+ * — jusqu'a la terminer sans personne. C'est donc une modification du contrat au
+ * meme titre qu'un objectif reecrit : elle entre dans la revision optimiste, et
+ * elle ramene une tache `READY` en `DRAFT`.
  *
  * ## La revision est injectee
  *
@@ -29,25 +37,55 @@
  */
 
 import {
+  COMMAND_EXECUTION_MODE,
   TASK_EDIT_ERROR,
   TASK_DEPENDENCY_ERROR,
+  VERIFICATION_MODE,
   checkTaskEditable,
   checkTaskDependencyPair,
   formatTaskCode,
+  isCommandExecutionMode,
   isTaskKind,
   isTaskStatus,
+  isVerificationMode,
   normalizeDependencyIds,
   sameDependencySet,
   taskStatusAfterEdit,
+  type CommandExecutionMode,
   type DevelopmentTaskDetail,
   type TaskDependencyErrorCode,
   type TaskEditErrorCode,
   type TaskPriority,
+  type VerificationMode,
+  type VerificationPlan,
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
 import { hasAnyCycle, readProjectDependencyEdges } from "./task-dependencies.js";
 import { getTaskById } from "./tasks.js";
+import { readVerificationPlan, writeVerificationPlan } from "./verification-plan.js";
+
+/**
+ * Un critere d'acceptation soumis, avec la facon dont il se verifie.
+ *
+ * `commandPositions` designe des **indices** dans `validationCommands`, jamais
+ * des identifiants de base : a l'enregistrement, les commandes sont recreees et
+ * changent d'identifiant. La position est la seule chose que le formulaire et la
+ * base partagent avant l'ecriture.
+ */
+export type TaskEditCriterionInput = {
+  text: string;
+  verificationMode: VerificationMode;
+  /** Consigne au testeur. N'a de sens que pour un critere humain. */
+  humanInstructions: string | null;
+  commandPositions: readonly number[];
+};
+
+/** Une commande de validation soumise, avec ce que NOX a le droit d'en faire. */
+export type TaskEditCommandInput = {
+  command: string;
+  executionMode: CommandExecutionMode;
+};
 
 /** Specification soumise, deja validee par le formulaire. */
 export type TaskEditInput = {
@@ -56,9 +94,9 @@ export type TaskEditInput = {
   context: string | null;
   outOfScope: string | null;
   priority: TaskPriority;
-  acceptanceCriteria: readonly string[];
+  acceptanceCriteria: readonly TaskEditCriterionInput[];
   documentReferences: readonly string[];
-  validationCommands: readonly string[];
+  validationCommands: readonly TaskEditCommandInput[];
   /** Identifiants des taches attendues, deja dedoublonnes. */
   dependsOnTaskIds: readonly string[];
 };
@@ -67,20 +105,11 @@ export type TaskEditInput = {
  * Etat de la tache tel qu'il compte pour une revision.
  *
  * Ni statut, ni dates, ni synchronisation du document : ce qui est compare est
- * le **contrat**. Sans quoi une resynchronisation de Markdown, qui touche
- * `updatedAt`, aurait perime tous les formulaires ouverts.
+ * le **contrat**, plan de verification compris. Sans quoi une resynchronisation
+ * de Markdown, qui touche `updatedAt`, aurait perime tous les formulaires
+ * ouverts.
  */
-export type TaskEditSnapshot = {
-  title: string;
-  objective: string;
-  context: string | null;
-  outOfScope: string | null;
-  priority: TaskPriority;
-  acceptanceCriteria: readonly string[];
-  documentReferences: readonly string[];
-  validationCommands: readonly string[];
-  dependsOnTaskIds: readonly string[];
-};
+export type TaskEditSnapshot = TaskEditInput;
 
 /** Fonction de revision, injectee depuis `apps/web`. */
 export type TaskEditRevision = (snapshot: TaskEditSnapshot) => string;
@@ -97,26 +126,142 @@ class EditCycleError extends Error {
   }
 }
 
-function snapshotOf(
-  task: DevelopmentTaskDetail,
+/**
+ * Met un contrat sous sa forme canonique.
+ *
+ * Deux saisies qui decrivent la meme chose doivent produire la meme empreinte,
+ * sinon un formulaire ouvert puis referme degraderait un `READY`. Trois regles,
+ * appliquees des deux cotes — a la lecture de la base comme a la soumission :
+ *
+ * - une instruction n'existe que pour un critere humain ;
+ * - une preuve n'existe que pour un critere automatise ;
+ * - les positions sont dedoublonnees, triees, et celles qui ne designent aucune
+ *   commande disparaissent.
+ *
+ * C'est cette fonction, et elle seule, qui definit ce que « le contrat n'a pas
+ * change » veut dire.
+ */
+export function normalizeTaskEditSnapshot(snapshot: TaskEditSnapshot): TaskEditSnapshot {
+  const commands = snapshot.validationCommands.map((entry) => ({
+    command: entry.command,
+    executionMode: isCommandExecutionMode(entry.executionMode)
+      ? entry.executionMode
+      : COMMAND_EXECUTION_MODE.AGENT_ONLY,
+  }));
+
+  const acceptanceCriteria = snapshot.acceptanceCriteria.map((criterion) => {
+    const mode = isVerificationMode(criterion.verificationMode)
+      ? criterion.verificationMode
+      : VERIFICATION_MODE.HUMAN;
+    const automated = mode === VERIFICATION_MODE.AUTOMATED;
+    return {
+      text: criterion.text,
+      verificationMode: mode,
+      humanInstructions: automated ? null : (criterion.humanInstructions ?? null),
+      commandPositions: automated
+        ? [...new Set(criterion.commandPositions)]
+            .filter((position) => position >= 0 && position < commands.length)
+            .sort((left, right) => left - right)
+        : [],
+    };
+  });
+
+  return {
+    title: snapshot.title,
+    objective: snapshot.objective,
+    context: snapshot.context,
+    outOfScope: snapshot.outOfScope,
+    priority: snapshot.priority,
+    acceptanceCriteria,
+    documentReferences: [...snapshot.documentReferences],
+    validationCommands: commands,
+    dependsOnTaskIds: [...snapshot.dependsOnTaskIds],
+  };
+}
+
+/**
+ * Contrat d'une tache enregistree, reconstruit depuis son plan.
+ *
+ * Le plan porte deja les textes des criteres et des commandes : les relire
+ * depuis `DevelopmentTaskDetail` donnerait la meme chose par un second chemin,
+ * qui pourrait diverger.
+ */
+export function taskEditSnapshotOf(
+  task: Pick<
+    DevelopmentTaskDetail,
+    "title" | "objective" | "context" | "outOfScope" | "priority" | "documentReferences"
+  >,
+  plan: VerificationPlan,
   dependsOnTaskIds: readonly string[],
 ): TaskEditSnapshot {
-  return {
+  const positionByCommandId = new Map(plan.commands.map((command, index) => [command.id, index]));
+
+  return normalizeTaskEditSnapshot({
     title: task.title,
     objective: task.objective,
     context: task.context,
     outOfScope: task.outOfScope,
     priority: task.priority,
-    acceptanceCriteria: task.acceptanceCriteria,
+    acceptanceCriteria: plan.criteria.map((criterion) => ({
+      text: criterion.text,
+      verificationMode: criterion.verificationMode,
+      humanInstructions: criterion.humanInstructions,
+      commandPositions: criterion.commandIds
+        .map((id) => positionByCommandId.get(id))
+        .filter((position): position is number => position !== undefined),
+    })),
     documentReferences: task.documentReferences,
-    validationCommands: task.validationCommands,
+    validationCommands: plan.commands.map((command) => ({
+      command: command.command,
+      executionMode: command.executionMode,
+    })),
     dependsOnTaskIds,
-  };
+  });
 }
 
 /** Les listes ordonnees sont comparees **dans l'ordre** : il fait partie du contrat. */
 function sameOrderedList(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+function sameNumbers(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+function sameCriteria(
+  left: readonly TaskEditCriterionInput[],
+  right: readonly TaskEditCriterionInput[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((criterion, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        criterion.text === other.text &&
+        criterion.verificationMode === other.verificationMode &&
+        (criterion.humanInstructions ?? "") === (other.humanInstructions ?? "") &&
+        sameNumbers(criterion.commandPositions, other.commandPositions)
+      );
+    })
+  );
+}
+
+function sameCommands(
+  left: readonly TaskEditCommandInput[],
+  right: readonly TaskEditCommandInput[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((command, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        command.command === other.command &&
+        command.executionMode === other.executionMode
+      );
+    })
+  );
 }
 
 /**
@@ -131,16 +276,19 @@ export function taskContractChanged(
   current: TaskEditSnapshot,
   next: TaskEditSnapshot,
 ): boolean {
+  const left = normalizeTaskEditSnapshot(current);
+  const right = normalizeTaskEditSnapshot(next);
+
   return !(
-    current.title === next.title &&
-    current.objective === next.objective &&
-    current.context === next.context &&
-    current.outOfScope === next.outOfScope &&
-    current.priority === next.priority &&
-    sameOrderedList(current.acceptanceCriteria, next.acceptanceCriteria) &&
-    sameOrderedList(current.documentReferences, next.documentReferences) &&
-    sameOrderedList(current.validationCommands, next.validationCommands) &&
-    sameDependencySet(current.dependsOnTaskIds, next.dependsOnTaskIds)
+    left.title === right.title &&
+    left.objective === right.objective &&
+    left.context === right.context &&
+    left.outOfScope === right.outOfScope &&
+    left.priority === right.priority &&
+    sameCriteria(left.acceptanceCriteria, right.acceptanceCriteria) &&
+    sameOrderedList(left.documentReferences, right.documentReferences) &&
+    sameCommands(left.validationCommands, right.validationCommands) &&
+    sameDependencySet(left.dependsOnTaskIds, right.dependsOnTaskIds)
   );
 }
 
@@ -149,9 +297,9 @@ export function taskContractChanged(
  *
  * ## L'ordre des refus
  *
- * Existence, gel, statut, peremption, puis dependances. Il est fixe et teste :
- * apprendre a l'utilisateur qu'une dependance forme un cycle alors que sa tache
- * est de toute facon figee lui ferait corriger la mauvaise chose.
+ * Existence, gel, statut, file, peremption, puis dependances. Il est fixe et
+ * teste : apprendre a l'utilisateur qu'une dependance forme un cycle alors que
+ * sa tache est de toute facon figee lui ferait corriger la mauvaise chose.
  */
 export async function updateFutureTask(
   db: DatabaseClient,
@@ -207,7 +355,8 @@ export async function updateFutureTask(
         })
       ).map((entry) => entry.dependsOnTaskId);
 
-      const currentSnapshot = snapshotOf(current, currentDependencyIds);
+      const currentPlan = await readVerificationPlan(tx, input.taskId);
+      const currentSnapshot = taskEditSnapshotOf(current, currentPlan, currentDependencyIds);
       const currentRevision = input.revision(currentSnapshot);
       if (currentRevision !== input.expectedRevision) {
         return {
@@ -250,20 +399,10 @@ export async function updateFutureTask(
         }
       }
 
-      const nextSnapshot = snapshotOf(
-        {
-          ...current,
-          title: input.values.title,
-          objective: input.values.objective,
-          context: input.values.context,
-          outOfScope: input.values.outOfScope,
-          priority: input.values.priority,
-          acceptanceCriteria: input.values.acceptanceCriteria,
-          documentReferences: input.values.documentReferences,
-          validationCommands: input.values.validationCommands,
-        },
+      const nextSnapshot = normalizeTaskEditSnapshot({
+        ...input.values,
         dependsOnTaskIds,
-      );
+      });
 
       const changed = taskContractChanged(currentSnapshot, nextSnapshot);
       if (!changed) {
@@ -273,36 +412,41 @@ export async function updateFutureTask(
       }
 
       // --- Ecritures ---------------------------------------------------------
-      await tx.taskAcceptanceCriterion.deleteMany({ where: { taskId: input.taskId } });
       await tx.taskDocumentReference.deleteMany({ where: { taskId: input.taskId } });
-      await tx.taskValidationCommand.deleteMany({ where: { taskId: input.taskId } });
       await tx.taskDependency.deleteMany({ where: { taskId: input.taskId } });
 
       await tx.task.update({
         where: { id: input.taskId },
         data: {
-          title: input.values.title,
-          objective: input.values.objective,
-          context: input.values.context,
-          outOfScope: input.values.outOfScope,
-          priority: input.values.priority,
+          title: nextSnapshot.title,
+          objective: nextSnapshot.objective,
+          context: nextSnapshot.context,
+          outOfScope: nextSnapshot.outOfScope,
+          priority: nextSnapshot.priority,
           status: taskStatusAfterEdit(row.status, true),
-          acceptanceCriteria: {
-            create: input.values.acceptanceCriteria.map((text, position) => ({ position, text })),
-          },
           documentReferences: {
-            create: input.values.documentReferences.map((path, position) => ({ position, path })),
-          },
-          validationCommands: {
-            create: input.values.validationCommands.map((command, position) => ({
-              position,
-              command,
-            })),
+            create: nextSnapshot.documentReferences.map((path, position) => ({ position, path })),
           },
           dependencies: {
             create: dependsOnTaskIds.map((dependsOnTaskId) => ({ dependsOnTaskId })),
           },
         },
+      });
+
+      // Criteres, commandes et liens passent par l'ecriture unique du plan : il
+      // n'existe pas de seconde facon d'ecrire une classification, et donc pas
+      // de seconde facon de se tromper.
+      await writeVerificationPlan(tx, input.taskId, {
+        criteria: nextSnapshot.acceptanceCriteria.map((criterion) => ({
+          text: criterion.text,
+          verificationMode: criterion.verificationMode,
+          humanInstructions: criterion.humanInstructions,
+          commandPositions: criterion.commandPositions,
+        })),
+        commands: nextSnapshot.validationCommands.map((command) => ({
+          command: command.command,
+          executionMode: command.executionMode,
+        })),
       });
 
       // Le cycle se juge sur le graphe **ecrit**, comme pour un ajout unitaire :

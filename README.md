@@ -38,6 +38,8 @@ base SQLite dans le dossier du projet.
 | **Dépendances** | Dire qu'une tâche en attend une autre, et modifier une tâche tant qu'elle n'a jamais été exécutée |
 | **Tableau de bord** | Voir d'un coup d'œil quels projets existent et où en est chacun, sans ouvrir une seule tâche |
 | **Cycle de vie** | Renommer un projet, ou le supprimer de NOX — le repository, son code et son `.git` restent intacts |
+| **File d'exécution** | Inscrire plusieurs tâches prêtes et laisser NOX les lancer une à une, sur une autorisation explicite |
+| **Validation autonome** | Dire avant l'exécution quels critères une commande peut prouver, et laisser NOX obtenir lui-même cette preuve |
 | **File d'exécution** | Inscrire plusieurs tâches prêtes, démarrer la file, et laisser NOX les lancer une à une — jamais sans autorisation explicite |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
@@ -272,7 +274,13 @@ Deux points à retenir avant un premier lancement :
 - **Le repository doit être propre et synchronisé.** Commitez et poussez avant de lancer :
   sans état de départ connu, il devient impossible de dire ce que l'agent a changé.
 - **Une réussite ne vaut pas validation.** Une exécution réussie place la tâche en `Review`,
-  jamais directement en `Done`.
+  jamais directement en `Done`. Une seule exception, écrite dans le contrat de la tâche avant son
+  lancement : si **tous** ses critères sont automatisés et que **toutes** les commandes que NOX
+  exécute lui-même passent, la tâche est marquée `Done` sans clic. Dans tous les autres cas, la
+  relecture reste humaine — et elle ne montre que les critères qui la demandent.
+- **Ce que Claude Code raconte n'est pas une preuve.** « J'ai lancé `npm test` » est affiché, et
+  conservé. Ce qui soutient un critère est ce que **NOX** a lancé, après coup, dans le même
+  repository.
 
 ## Convention de langue de l'interface
 

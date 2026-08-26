@@ -733,3 +733,65 @@ doit le dire explicitement et la justifier.
 - **Les actions de file autres que l'avancement n'appellent ni OpenAI, ni Claude Code**, et
   n'écrivent rien dans le repository — pas même dans `tasks/TASK-xxx.md`, qui ne porte aucune
   position de file.
+
+### 8.17 Validation autonome et classification des critères
+
+- **La classification appartient au contrat, jamais au résultat.** Un critère déclare
+  `AUTOMATED` ou `HUMAN` **avant** l'exécution, et il n'existe pas de troisième valeur. Décider
+  après coup qu'un critère était automatisable produirait une classification qui s'adapte au
+  résultat — donc qui ne prouve rien.
+- **Le compte rendu de Claude Code n'est jamais une preuve.** Seule une commande que **NOX** a
+  exécutée lui-même après le travail peut soutenir un critère automatisé. Les deux sources sont
+  conservées et affichées ; une seule entre dans une dérivation de résultat.
+- **`AGENT_ONLY` est le défaut sûr.** `AUTONOMOUS` ajoute une permission, il n'en retire aucune :
+  une tâche antérieure ne gagne rien après coup, et un mode illisible retombe toujours sur la
+  valeur qui n'autorise rien.
+- **La liste des programmes autonomes est fermée, et distincte de celle de l'amorçage.** Les
+  refus, eux, sont **réutilisés**, jamais recopiés. Installations, processus qui ne se terminent
+  pas et commandes Git s'y ajoutent, contrôlés sur le **jeton entier** — jamais sur une
+  sous-chaîne.
+- **Aucun interprète de commandes, sous aucune forme.** Ni `shell: true`, ni `cmd /c`, ni
+  `powershell -Command`, ni `bash -c`, ni `sh -c`. Une commande validée est une suite de jetons,
+  et c'est ce découpage qui part au système.
+- **Le répertoire de travail est la racine canonique du repository**, relue à partir de
+  l'identifiant du projet. Aucune variable `NOX_*` n'atteint le processus, et aucun secret n'est
+  transmis.
+- **Le navigateur n'envoie ni commande, ni chemin, ni délai, ni environnement.** Il transmet des
+  identifiants ; tout le reste est relu côté serveur.
+- **La politique est rejouée par le runner.** Il ne fait pas confiance au web, et refuse
+  lui-même ce qu'il n'a pas le droit de lancer.
+- **Un dépassement de délai est un échec de validation, pas une panne.** `ERROR` est réservé aux
+  cas où NOX n'a **pas pu** obtenir de preuve. « Je n'ai pas pu regarder » n'est jamais « j'ai
+  regardé et c'est faux ».
+- **Une reprise n'existe que sur une panne**, et la garantie vit dans la réservation, pas dans un
+  bouton. Chaque reprise crée une tentative nouvelle et conserve la précédente.
+- **Un lot est réservé par un index unique `(runId, attempt)`.** Jamais un verrou en mémoire :
+  il ne survivrait ni à un redémarrage, ni à deux processus. Aucun lot artificiel n'est créé
+  quand rien n'est à valider.
+- **Le lot est déclenché par la finalisation d'une exécution, jamais par un rendu de page.**
+  Consulter une review n'exécute rien.
+- **Une commande partagée par deux critères n'est exécutée qu'une fois.**
+- **L'instantané Git du runner reste celui du travail de Claude Code**, et n'est pas retouché.
+  Deux empreintes de l'état suivi, avant et après le lot, disent si la preuve a modifié ce
+  qu'elle évaluait ; deux empreintes inconnues ne disent **rien**, et ne pas savoir n'autorise
+  jamais une complétion automatique.
+- **`checkAutoCompletion` n'a aucun paramètre `force`, `override` ou `ignoreFailure`.** Un
+  amorçage est refusé en premier : il ne se termine jamais seul.
+- **Un passage en force est humain, motivé, et ne réécrit rien.** Le lot reste en échec, les
+  codes de sortie restent affichés, et la source est persistée comme `HUMAN_OVERRIDE`.
+- **Une décision de review est unique par exécution**, écrite dans la transaction de transition.
+  Une acceptation humaine et une complétion automatique visent la même ligne ; une seule aboutit.
+- **Les critères humains sont relus en base à chaque acceptation.** Le formulaire désigne des
+  identifiants ; il ne définit pas la liste, et un identifiant forgé est refusé.
+- **Le plan de vérification fait partie du contrat de la tâche.** Il entre dans la revision
+  optimiste, ramène une tâche `READY` en `DRAFT` quand il change, et les liens critère-commande
+  sont des identifiants de ligne — jamais des textes, jamais des positions d'affichage.
+- **`backlog/1` reste lisible et applicable.** Une proposition historique est **relevée** à la
+  lecture avec les défauts sûrs, et son `providerJson` n'est jamais réécrit. Le planificateur
+  actuel produit `backlog/2`, et une classification proposée reste une proposition : seul un
+  humain l'applique.
+- **Aucune IA ne participe à la validation autonome.** Ni OpenAI, ni Claude Code : NOX exécute
+  des commandes et lit des codes de sortie. Aucun `git add`, aucun commit, aucun push, aucun
+  `reset`, aucun `restore`, aucun `clean`.
+- **Les faits de NOX ne rejoignent pas la timeline de Claude Code.** `ClaudeRunEvent` reste
+  fermé et produit par le runner ; les validations s'affichent à part.

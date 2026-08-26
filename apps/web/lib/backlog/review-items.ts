@@ -31,7 +31,7 @@
  * Pur : ni React, ni base, ni reseau, ni aleatoire.
  */
 
-import type { TaskFormValues } from "../task-input.ts";
+import type { TaskEditFormValues } from "../verification-fields.ts";
 
 /** Un element de backlog en cours de revue, et son identite d'affichage. */
 export type BacklogReviewItem = {
@@ -43,12 +43,12 @@ export type BacklogReviewItem = {
    * n'apparait et aucune collision n'est possible.
    */
   uid: string;
-  values: TaskFormValues;
+  values: TaskEditFormValues;
 };
 
 /** Attribue une identite a chaque element, une fois pour toutes. */
 export function createBacklogReviewItems(
-  values: readonly TaskFormValues[],
+  values: readonly TaskEditFormValues[],
 ): BacklogReviewItem[] {
   return values.map((item, index) => ({
     uid: `backlog-item-${String(index)}`,
@@ -59,7 +59,7 @@ export function createBacklogReviewItems(
 /** Les valeurs seules, dans l'ordre courant. */
 export function backlogReviewValues(
   items: readonly BacklogReviewItem[],
-): TaskFormValues[] {
+): TaskEditFormValues[] {
   return items.map((item) => item.values);
 }
 
@@ -71,10 +71,35 @@ export function backlogReviewValues(
 export function setBacklogItemField(
   items: readonly BacklogReviewItem[],
   index: number,
-  field: keyof TaskFormValues,
+  field: BacklogItemTextField,
   next: string,
 ): BacklogReviewItem[] {
+  return updateBacklogItem(items, index, (values) => ({ ...values, [field]: next }));
+}
+
+/** Les champs de texte libre d'un element, par opposition a son plan. */
+export type BacklogItemTextField =
+  | "title"
+  | "priority"
+  | "objective"
+  | "context"
+  | "outOfScope"
+  | "documents";
+
+/**
+ * Applique une transformation aux valeurs d'un element, sans toucher a son
+ * identite.
+ *
+ * Sert au plan de verification, dont les lignes ne sont pas des champs de texte :
+ * ajouter un critere, cocher une preuve et retirer une commande passent tous par
+ * ici, donc par une seule facon de remplacer un element.
+ */
+export function updateBacklogItem(
+  items: readonly BacklogReviewItem[],
+  index: number,
+  transform: (values: TaskEditFormValues) => TaskEditFormValues,
+): BacklogReviewItem[] {
   return items.map((item, position) =>
-    position === index ? { uid: item.uid, values: { ...item.values, [field]: next } } : item,
+    position === index ? { uid: item.uid, values: transform(item.values) } : item,
   );
 }

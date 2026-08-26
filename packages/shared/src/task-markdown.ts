@@ -22,6 +22,7 @@
  */
 
 import type { TaskSpecification } from "./tasks.js";
+import { VERIFICATION_MODE, type VerificationPlan } from "./verification.js";
 
 /** Ramene toutes les conventions de fin de ligne a LF. */
 function toLineFeed(value: string): string {
@@ -111,6 +112,42 @@ const EXECUTION_RULES = [
 ].join("\n");
 
 /**
+ * Rend la section du plan de verification.
+ *
+ * Compacte et lisible : un critere par entree numerotee, son mode, puis ce qui
+ * le prouve — les commandes pour un critere automatise, l'instruction pour un
+ * critere humain.
+ */
+function renderVerificationPlan(plan: VerificationPlan): string {
+  const criteria = [...plan.criteria].sort((left, right) => left.position - right.position);
+  if (criteria.length === 0) {
+    return "";
+  }
+
+  const commandsById = new Map(plan.commands.map((command) => [command.id, command.command]));
+
+  return criteria
+    .map((criterion, index) => {
+      const rank = String(index + 1);
+      const text = toSingleLine(criterion.text);
+
+      if (criterion.verificationMode === VERIFICATION_MODE.AUTOMATED) {
+        const proofs = criterion.commandIds
+          .map((id) => commandsById.get(id))
+          .filter((command): command is string => command !== undefined && command !== "")
+          .map((command) => `   - ${inlineCode(command)}`);
+        return [`${rank}. Automatisé — ${text}`, ...proofs].join("\n");
+      }
+
+      const instructions = toSingleLine(criterion.humanInstructions ?? "");
+      return instructions === ""
+        ? `${rank}. Humain — ${text}`
+        : `${rank}. Humain — ${text}\n   - ${instructions}`;
+    })
+    .join("\n");
+}
+
+/**
  * Rend le document Markdown d'une tache.
  *
  * Les sections facultatives absentes ne laissent pas de titre vide : un document
@@ -120,6 +157,7 @@ const EXECUTION_RULES = [
 export function renderTaskMarkdown(
   task: TaskSpecification,
   dependencies: readonly TaskMarkdownDependency[] = [],
+  plan: VerificationPlan | null = null,
 ): string {
   const sections: Section[] = [];
 
@@ -157,6 +195,18 @@ export function renderTaskMarkdown(
       heading: "Commandes de validation",
       body: fencedBlock("bash", commands.join("\n")),
     });
+  }
+
+  // Le plan de verification fait partie du contrat : il dit **comment** ce qui
+  // est demande sera verifie, et par qui. Il est donc versionne avec le reste.
+  //
+  // Ce qu'il ne contient pas : aucun resultat. Ni « passe », ni « echoue », ni
+  // case cochee. Un document qui porterait le resultat d'une execution devrait
+  // etre reecrit a chaque run, et deux runs successifs se contrediraient dans
+  // l'historique Git.
+  const planBody = plan === null ? "" : renderVerificationPlan(plan);
+  if (planBody !== "") {
+    sections.push({ heading: "Plan de vérification", body: planBody });
   }
 
   const outOfScope = task.outOfScope === null ? "" : normalizeBlock(task.outOfScope);

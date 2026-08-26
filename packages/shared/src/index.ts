@@ -610,6 +610,12 @@ export {
   isArchitectBacklogProposalStatus,
   isBacklogContextManifest,
   readArchitectBacklogProposal,
+  ARCHITECT_BACKLOG_SCHEMA_NAME_2,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  buildArchitectBacklogSchemaV2,
+  readAnyArchitectBacklogProposal,
+  readArchitectBacklogProposalV2,
+  upgradeBacklogProposal,
 } from "./backlog.js";
 
 export type {
@@ -622,10 +628,16 @@ export type {
   BacklogContextManifest,
   BacklogContextSource,
   BacklogInventoryTask,
+  ArchitectBacklogCommandProposal,
+  ArchitectBacklogCriterionProposal,
+  ArchitectBacklogProposalV2,
+  ArchitectBacklogResultV2,
+  ArchitectBacklogTaskProposalV2,
 } from "./backlog.js";
 
 export {
   BACKLOG_PROMPT_VERSION,
+  BACKLOG_PROMPT_VERSION_1,
   EXISTING_TASK_CLOSE,
   EXISTING_TASK_OPEN,
   renderBacklogPrompt,
@@ -725,3 +737,93 @@ export type {
 
 /** Version courante du socle NOX, partagee par les workspaces. */
 export const NOX_VERSION = "0.1.0";
+
+export {
+  AUTONOMOUS_VALIDATION_OUTPUT_LIMIT,
+  AUTONOMOUS_VALIDATION_PROGRAMS,
+  AUTONOMOUS_VALIDATION_STATUS,
+  AUTONOMOUS_VALIDATION_STATUSES,
+  AUTONOMOUS_VALIDATION_TIMEOUT_MS,
+  AUTO_COMPLETION_REFUSAL,
+  COMMAND_EXECUTION_MODE,
+  COMMAND_EXECUTION_MODES,
+  CRITERION_VERIFICATION_RESULT,
+  DEFAULT_HUMAN_INSTRUCTIONS,
+  MAX_AUTONOMOUS_COMMANDS_PER_RUN,
+  MAX_HUMAN_INSTRUCTIONS_LENGTH,
+  MAX_OVERRIDE_REASON_LENGTH,
+  REVIEW_DECISION_SOURCE,
+  REVIEW_WAIT,
+  REVIEW_WAIT_KINDS,
+  REVIEW_DECISION_SOURCES,
+  TASK_VERIFICATION_OUTCOME,
+  TASK_VERIFICATION_OUTCOMES,
+  VALIDATION_BATCH_STATUS,
+  VALIDATION_BATCH_STATUSES,
+  VALIDATION_EVIDENCE_SOURCE,
+  VALIDATION_EVIDENCE_SOURCES,
+  VERIFICATION_MODE,
+  VERIFICATION_MODES,
+  VERIFICATION_PLAN_ERROR,
+  autonomousCommandsFor,
+  checkAutoCompletion,
+  checkAutonomousCommand,
+  checkVerificationPlan,
+  deriveCriterionResult,
+  deriveCriterionResults,
+  deriveTaskVerificationOutcome,
+  humanCriteriaOf,
+  isAutonomousValidationStatus,
+  isBatchFinal,
+  isCommandExecutionMode,
+  isReviewDecisionSource,
+  isTaskVerificationOutcome,
+  isValidationBatchStatus,
+  isValidationEvidenceSource,
+  isValidationFailure,
+  isVerificationMode,
+  parseValidationCommand,
+  planAllowsAutoCompletion,
+  planRequiresHuman,
+} from "./verification.js";
+
+export type {
+  AutoCompletionDecision,
+  AutoCompletionFacts,
+  AutoCompletionRefusalCode,
+  AutonomousCommandOutcome,
+  AutonomousValidationStatus,
+  CommandExecutionMode,
+  CriterionVerificationResult,
+  CriterionVerificationView,
+  ParsedCommand,
+  ReviewDecisionSource,
+  ReviewWait,
+  ReviewWaitKind,
+  TaskVerificationOutcome,
+  ValidationBatchStatus,
+  ValidationEvidenceSource,
+  VerificationMode,
+  VerificationPlan,
+  VerificationPlanCheck,
+  VerificationPlanCommand,
+  VerificationPlanCriterion,
+  VerificationPlanErrorCode,
+  VerificationPlanIssue,
+} from "./verification.js";
+
+export {
+  VALIDATION_OUTPUT_LIMIT,
+  boundOutput,
+  isRunValidationSuccess,
+  isTrackedStateSuccess,
+  parseRunValidationRequest,
+  parseTrackedStateRequest,
+} from "./validation-runner.js";
+
+export type {
+  RunValidationRequest,
+  RunValidationSuccess,
+  TrackedStateRequest,
+  TrackedStateSuccess,
+} from "./validation-runner.js";

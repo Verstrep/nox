@@ -14,6 +14,8 @@ import {
   RUN_EVENT_LIMITS,
   isClaudeCorrectionPreflightSuccess,
   isClaudePreflightSuccess,
+  isRunValidationSuccess,
+  isTrackedStateSuccess,
   isClaudeRunCancelSuccess,
   isClaudeRunEventsSuccess,
   isClaudeRunReviewSuccess,
@@ -35,6 +37,10 @@ import {
   type ClaudeCorrectionPreflightSuccess,
   type ClaudePreflightRequest,
   type ClaudePreflightSuccess,
+  type RunValidationRequest,
+  type RunValidationSuccess,
+  type TrackedStateRequest,
+  type TrackedStateSuccess,
   type ClaudeRunCancelRequest,
   type ClaudeRunCancelSuccess,
   type ClaudeRunEventsRequest,
@@ -671,5 +677,53 @@ export function createTaskDocument(
     (value) => (value as { document: ProjectDocumentContent }).document,
     options,
     201,
+  );
+}
+
+/**
+ * Fait executer une commande de validation par le runner.
+ *
+ * Le corps ne porte que deux chaines : le chemin du repository — relu en base a
+ * partir de l'identifiant du projet, jamais recu d'un formulaire — et la
+ * commande, deja verifiee par la politique cote serveur. Ni environnement, ni
+ * delai, ni vecteur d'arguments : le runner decoupe et reverifie lui-meme.
+ *
+ * Le navigateur n'appelle jamais cette fonction. Comme tout le client runner,
+ * elle vit cote serveur et le jeton ne la quitte pas.
+ */
+export function runValidationCommand(
+  request: RunValidationRequest,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<RunValidationSuccess>> {
+  return postAuthenticated(
+    "/repositories/validations/run",
+    "repositories/validations/run",
+    request,
+    isRunValidationSuccess,
+    (value) => value as RunValidationSuccess,
+    options,
+  );
+}
+
+/**
+ * Releve l'empreinte de l'etat suivi d'un repository.
+ *
+ * Appelee avant et apres un lot de validations. Deux empreintes identiques
+ * disent que la preuve n'a pas touche au travail qu'elle evaluait ; deux
+ * empreintes differentes refusent l'auto-completion.
+ */
+export function readRepositoryTrackedState(
+  repositoryPath: string,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<TrackedStateSuccess>> {
+  const payload: TrackedStateRequest = { repositoryPath };
+
+  return postAuthenticated(
+    "/repositories/validations/state",
+    "repositories/validations/state",
+    payload,
+    isTrackedStateSuccess,
+    (value) => value as TrackedStateSuccess,
+    options,
   );
 }

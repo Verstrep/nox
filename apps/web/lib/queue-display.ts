@@ -11,11 +11,13 @@
 
 import {
   EXECUTION_QUEUE_ERROR,
+  REVIEW_WAIT,
   QUEUE_DISPATCH,
   QUEUE_STATE,
   type ExecutionQueueErrorCode,
   type QueueDispatchOutcome,
   type QueueState,
+  type ReviewWait,
 } from "@nox/shared";
 
 /** Page de la file d'execution d'un projet. */
@@ -77,6 +79,50 @@ const QUEUE_STATE_EXPLANATIONS: Record<QueueState, string> = {
 
 export function queueStateExplanation(state: QueueState): string {
   return QUEUE_STATE_EXPLANATIONS[state];
+}
+
+/**
+ * Ce que la tache courante attend, dit precisement.
+ *
+ * « Waiting for review » couvrait quatre situations qui n'appellent pas le meme
+ * geste : attendre un resultat, corriger un echec, relancer une panne, ou
+ * cocher deux cases. Les confondre laisse l'utilisateur devant une file qui ne
+ * bouge pas sans lui dire pourquoi.
+ *
+ * Le decompte des criteres humains est affiche : « il vous reste deux choses a
+ * regarder » est actionnable la ou « relisez » ne l'est pas.
+ */
+export function queueReviewLabel(wait: ReviewWait): string {
+  switch (wait.kind) {
+    case REVIEW_WAIT.VALIDATION_RUNNING:
+      return "Automated validation running";
+    case REVIEW_WAIT.VALIDATION_FAILED:
+      return "Automated validation failed";
+    case REVIEW_WAIT.VALIDATION_ERROR:
+      return "Automated validation could not run";
+    case REVIEW_WAIT.HUMAN_CHECKS:
+      return wait.humanCheckCount === 1
+        ? "Waiting for human validation · 1 check"
+        : `Waiting for human validation · ${String(wait.humanCheckCount)} checks`;
+    default:
+      return QUEUE_STATE_LABELS[QUEUE_STATE.WAITING_REVIEW];
+  }
+}
+
+/** Ce que ce meme etat veut dire, et ce qu'il reste a faire. */
+export function queueReviewExplanation(wait: ReviewWait): string {
+  switch (wait.kind) {
+    case REVIEW_WAIT.VALIDATION_RUNNING:
+      return "NOX exécute lui-même les validations enregistrées sur cette tâche. Aucune décision n'est possible avant leur résultat — accepter maintenant reviendrait à conclure sans la preuve qu'on est en train d'obtenir.";
+    case REVIEW_WAIT.VALIDATION_FAILED:
+      return "Une validation exécutée par NOX a échoué. La file ne repartira pas : demandez une correction, ou acceptez explicitement malgré ce résultat depuis la review.";
+    case REVIEW_WAIT.VALIDATION_ERROR:
+      return "NOX n'a pas pu obtenir de preuve — le plus souvent parce que le runner ne répondait pas. Relancez la validation depuis la review : « je n'ai pas pu regarder » n'est pas « j'ai regardé et c'est faux ».";
+    case REVIEW_WAIT.HUMAN_CHECKS:
+      return "Cette tâche porte des critères que seul un humain peut vérifier. Confirmez-les un par un depuis la review : NOX ne peut pas le faire à votre place, et la file attend cette confirmation.";
+    default:
+      return QUEUE_STATE_EXPLANATIONS[QUEUE_STATE.WAITING_REVIEW];
+  }
 }
 
 /**

@@ -24,7 +24,9 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import type { TaskFormValues } from "../task-input.ts";
+import { VERIFICATION_MODE } from "@nox/shared";
+
+import type { TaskEditFormValues } from "../verification-fields.ts";
 
 import { moveBacklogItem, removeBacklogItem } from "./display.ts";
 import {
@@ -33,7 +35,7 @@ import {
   setBacklogItemField,
 } from "./review-items.ts";
 
-function values(title: string): TaskFormValues {
+function values(title: string): TaskEditFormValues {
   return {
     title,
     priority: "MEDIUM",
@@ -41,8 +43,17 @@ function values(title: string): TaskFormValues {
     context: "",
     outOfScope: "",
     documents: "",
-    criteria: "Un critere verifiable.",
-    commands: "",
+    criteria: [
+      {
+        key: "c0",
+        text: "Un critere verifiable.",
+        verificationMode: VERIFICATION_MODE.HUMAN,
+        humanInstructions: "Regarder l'ecran.",
+        commandKeys: [],
+      },
+    ],
+    commands: [],
+    dependsOnTaskIds: [],
   };
 }
 
@@ -104,7 +115,7 @@ describe("edition d'un champ", () => {
   it("ne modifie que le champ vise", () => {
     const items = setBacklogItemField(createBacklogReviewItems(THREE), 0, "title", "Autre");
     assert.equal(items[0]?.values.objective, "Objectif de Domaine.");
-    assert.equal(items[0]?.values.criteria, "Un critere verifiable.");
+    assert.equal(items[0]?.values.criteria[0]?.text, "Un critere verifiable.");
     assert.equal(items[0]?.values.priority, "MEDIUM");
   });
 
@@ -223,7 +234,8 @@ describe("le composant s'en sert reellement", () => {
     const source = await reviewSource();
     // L'identite sert au rendu ; elle ne doit pas fuir dans le formulaire, sous
     // peine de faire dependre l'ordre applique d'autre chose que l'ecran.
-    assert.ok(source.includes("`items.${String(index)}.${field}`"));
+    assert.ok(source.includes("`items.${String(index)}.`"));
+    assert.ok(source.includes("`${prefix}${field}`"));
     assert.ok(!source.includes('name={uid}'));
   });
 });

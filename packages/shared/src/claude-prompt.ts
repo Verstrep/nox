@@ -25,6 +25,7 @@
 import { boundText, RUN_LIMITS } from "./runs.js";
 import type { TaskDependencyRef } from "./task-dependencies.js";
 import { TASK_KIND, type TaskKind, type TaskSpecification } from "./tasks.js";
+import { VERIFICATION_MODE, type VerificationPlan } from "./verification.js";
 
 /** Ramene une valeur a une seule ligne, sans marges. */
 function toSingleLine(value: string): string {
@@ -222,9 +223,72 @@ function dependencyBlock(dependencies: readonly TaskDependencyRef[]): string | n
   ].join("\n");
 }
 
+/**
+ * Le plan de verification, tel qu'il est annonce a Claude Code.
+ *
+ * Il dit trois choses, et la troisieme est la plus importante : NOX executera
+ * ces commandes **lui-meme**. Les lancer pendant le travail reste utile — c'est
+ * la facon la plus simple de savoir ou on en est — mais leur resultat ne
+ * remplace pas la verification independante qui suivra.
+ */
+function verificationPlanBlock(plan: VerificationPlan): string | null {
+  const criteria = [...plan.criteria].sort((left, right) => left.position - right.position);
+  if (criteria.length === 0) {
+    return null;
+  }
+
+  const commandsById = new Map(plan.commands.map((command) => [command.id, command.command]));
+  const lines: string[] = ["Plan de vérification convenu avant cette exécution :"];
+
+  const automated = criteria.filter(
+    (criterion) => criterion.verificationMode === VERIFICATION_MODE.AUTOMATED,
+  );
+  const human = criteria.filter(
+    (criterion) => criterion.verificationMode === VERIFICATION_MODE.HUMAN,
+  );
+
+  if (automated.length > 0) {
+    lines.push("");
+    lines.push("Vérifié automatiquement par NOX après ton travail :");
+    for (const criterion of automated) {
+      lines.push(`- ${toSingleLine(criterion.text)}`);
+      for (const id of criterion.commandIds) {
+        const command = commandsById.get(id);
+        if (command !== undefined && command !== "") {
+          lines.push(`  - ${command}`);
+        }
+      }
+    }
+  }
+
+  if (human.length > 0) {
+    lines.push("");
+    lines.push("Validation humaine :");
+    for (const criterion of human) {
+      lines.push(`- ${toSingleLine(criterion.text)}`);
+      const instructions = toSingleLine(criterion.humanInstructions ?? "");
+      if (instructions !== "") {
+        lines.push(`  - ${instructions}`);
+      }
+    }
+  }
+
+  if (automated.length > 0) {
+    lines.push("");
+    lines.push(
+      "NOX exécutera lui-même les commandes ci-dessus après la fin de ton exécution. " +
+        "Tu peux les lancer pendant ton travail, et c'est recommandé — mais ce résultat ne " +
+        "remplace pas la vérification indépendante de NOX, qui seule fait foi.",
+    );
+  }
+
+  return lines.join("\n");
+}
+
 export function renderClaudeExecutionPrompt(
   task: TaskSpecification & { documentPath: string; kind: TaskKind },
   dependencies: readonly TaskDependencyRef[] = [],
+  plan: VerificationPlan | null = null,
 ): string {
   const code = task.code;
   const title = toSingleLine(task.title);
@@ -268,6 +332,17 @@ export function renderClaudeExecutionPrompt(
   const outOfScope = task.outOfScope === null ? "" : normalizeBlock(task.outOfScope);
   if (outOfScope !== "") {
     blocks.push(`Hors périmètre :\n${outOfScope}`);
+  }
+
+  // Le plan de verification convenu **avant** cette execution.
+  //
+  // Claude Code doit savoir ce que NOX verifiera lui-meme apres son travail, et
+  // ce qu'un humain testera encore. Le lui dire l'encourage a produire du code
+  // verifiable et des tests appropries — et lui retire toute raison de croire
+  // qu'un compte rendu optimiste suffirait.
+  const planBlock = plan === null ? null : verificationPlanBlock(plan);
+  if (planBlock !== null) {
+    blocks.push(planBlock);
   }
 
   const dependencyLines = dependencyBlock(dependencies);

@@ -11,7 +11,10 @@ import { notFound } from "next/navigation";
 
 import { GuidedWorkflow } from "@/components/GuidedWorkflow";
 import { TaskDependencies } from "@/components/TaskDependencies";
+import { getDatabaseClient, readVerificationPlan } from "@nox/database";
+
 import { TaskQueue } from "@/components/TaskQueue";
+import { VerificationPlanSummary } from "@/components/VerificationPlanSummary";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
@@ -297,6 +300,9 @@ export default async function TaskDetailPage({
   // La file est lue en base, sans sonder le repository : savoir qu'une tache est
   // inscrite ne demande pas d'interroger Git.
   const queue = await loadTaskQueueState(project.id, task.id);
+  // Lecture seule : afficher un contrat ne declenche aucune validation, et
+  // n'interroge ni le runner, ni un fournisseur.
+  const plan = await readVerificationPlan(getDatabaseClient(), task.id);
   // Une tache inscrite autorise l'execution de son contrat actuel : l'editeur
   // n'est donc pas propose tant qu'elle y figure. La Server Action refuse de
   // toute facon, et c'est elle qui fait autorite.
@@ -391,6 +397,8 @@ export default async function TaskDetailPage({
           <OrderedList entries={task.acceptanceCriteria} />
         </SectionCard>
 
+        <VerificationPlanSummary plan={plan} taskKind={task.kind} />
+
         {task.documentReferences.length === 0 ? null : (
           <SectionCard
             title="Documents a lire"
@@ -403,7 +411,7 @@ export default async function TaskDetailPage({
         {task.validationCommands.length === 0 ? null : (
           <SectionCard
             title="Commandes de validation"
-            description="Enregistrees avec la tache. NOX ne les execute pas."
+            description="Enregistrees avec la tache. NOX n'execute que celles declarees autonomes, et seulement apres l'execution."
           >
             <OrderedList entries={task.validationCommands} mono />
           </SectionCard>

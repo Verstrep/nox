@@ -32,6 +32,7 @@ import {
   getTaskById,
   listTaskDependencies,
   markRunRunning,
+  readVerificationPlan,
   seedRunValidations,
   startTaskExecution,
   type DatabaseClient,
@@ -140,7 +141,10 @@ export async function launchTaskRun(
 
   // Le prompt est regenere maintenant, a partir de la base : ce n'est pas celui
   // qu'affichait la page qui est envoye, meme s'il lui est identique.
-  const { prompt, sha256 } = buildExecutionPrompt(task, dependencies.dependsOn);
+  // Le plan de verification part avec le prompt : Claude Code doit savoir ce que
+  // NOX verifiera lui-meme apres son travail, et ce qu'un humain testera encore.
+  const plan = await readVerificationPlan(db, input.taskId);
+  const { prompt, sha256 } = buildExecutionPrompt(task, dependencies.dependsOn, plan);
 
   const runnerRunId = randomUUID();
   // La creation refuse s'il existe deja une execution active dans ce repository,

@@ -43,6 +43,20 @@
 import { checkValidationCommand } from "./claude-commands.js";
 import { createStatusGuard } from "./statuses.js";
 import { TASK_PRIORITIES, isTaskPriority, type TaskPriority } from "./tasks.js";
+import {
+  COMMAND_EXECUTION_MODE,
+  COMMAND_EXECUTION_MODES,
+  DEFAULT_HUMAN_INSTRUCTIONS,
+  MAX_AUTONOMOUS_COMMANDS_PER_RUN,
+  MAX_HUMAN_INSTRUCTIONS_LENGTH,
+  VERIFICATION_MODE,
+  VERIFICATION_MODES,
+  checkAutonomousCommand,
+  isCommandExecutionMode,
+  isVerificationMode,
+  type CommandExecutionMode,
+  type VerificationMode,
+} from "./verification.js";
 
 /** Version du contrat de proposition de backlog, transmise et persistee. */
 export const ARCHITECT_BACKLOG_SCHEMA_VERSION = 1;
@@ -567,6 +581,696 @@ export function buildArchitectBacklogSchema(): Record<string, unknown> {
       },
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Contrat `backlog/2` : le plan de verification entre dans la proposition
+// ---------------------------------------------------------------------------
+
+/**
+ * Version 2 du contrat de proposition de backlog.
+ *
+ * ## Pourquoi une version, plutot qu'un champ de plus
+ *
+ * Parce que les propositions deja enregistrees ne changent pas. Un
+ * `providerJson` ecrit en version 1 raconte ce que le fournisseur avait rendu ce
+ * jour-la ; le relire avec les regles d'aujourd'hui le rendrait faux. La version
+ * est donc portee **dans** le document, et c'est elle qui decide comment le
+ * lire.
+ *
+ * ## Ce que la version 2 ajoute
+ *
+ * Chaque critere declare comment il se verifie, chaque commande declare ce que
+ * NOX a le droit d'en faire, et un critere automatise **nomme** les commandes
+ * qui le prouvent. C'est exactement le plan de verification de TASK-027, propose
+ * au moment ou la tache est ecrite plutot que devine apres son execution.
+ */
+export const ARCHITECT_BACKLOG_SCHEMA_VERSION_2 = 2;
+
+/** Nom du format v2 transmis au fournisseur ; doit rester stable. */
+export const ARCHITECT_BACKLOG_SCHEMA_NAME_2 = "nox_v1_backlog_v2";
+
+/**
+ * Un critere d'acceptation propose, avec sa classification.
+ *
+ * `validationCommandIndexes` designe des positions dans `validationCommands` du
+ * meme element. Des indices, et pas des chaines : deux commandes identiques
+ * resteraient indistinguables, et une commande corrigee casserait le lien.
+ */
+export type ArchitectBacklogCriterionProposal = {
+  text: string;
+  verificationMode: VerificationMode;
+  /** Consigne au testeur. Obligatoire pour un critere humain, absente sinon. */
+  humanInstructions: string | null;
+  validationCommandIndexes: number[];
+};
+
+/** Une commande de validation proposee, avec ce que NOX a le droit d'en faire. */
+export type ArchitectBacklogCommandProposal = {
+  command: string;
+  executionMode: CommandExecutionMode;
+};
+
+/** Un element de backlog en version 2. */
+export type ArchitectBacklogTaskProposalV2 = {
+  title: string;
+  priority: TaskPriority;
+  objective: string;
+  context: string | null;
+  acceptanceCriteria: ArchitectBacklogCriterionProposal[];
+  outOfScope: string[];
+  documentReferences: string[];
+  validationCommands: ArchitectBacklogCommandProposal[];
+};
+
+/**
+ * Une proposition de backlog en version 2.
+ *
+ * C'est la **forme courante** de NOX : tout ce qui lit un backlog, quelle que
+ * soit la version dans laquelle il a ete ecrit, le recoit sous cette forme. Une
+ * proposition de version 1 est relevee par `upgradeBacklogProposal`, jamais
+ * reecrite en base.
+ */
+export type ArchitectBacklogProposalV2 = {
+  schemaVersion: typeof ARCHITECT_BACKLOG_SCHEMA_VERSION_2;
+  message: string;
+  tasks: ArchitectBacklogTaskProposalV2[];
+};
+
+export type ArchitectBacklogResultV2 =
+  | { ok: true; proposal: ArchitectBacklogProposalV2 }
+  | { ok: false; refusal: ArchitectBacklogRefusal };
+
+/**
+ * Releve une proposition de version 1 dans la forme courante.
+ *
+ * Les defauts appliques sont les **defauts surs**, les memes que partout
+ * ailleurs dans NOX : chaque critere devient `HUMAN` avec l'instruction neutre,
+ * chaque commande devient `AGENT_ONLY`. Une proposition ecrite avant TASK-027
+ * ne peut donc pas gagner apres coup le droit de terminer une tache toute seule.
+ *
+ * Rien n'est reecrit en base : `providerJson` reste le document d'origine.
+ */
+export function upgradeBacklogProposal(
+  proposal: ArchitectBacklogProposal,
+): ArchitectBacklogProposalV2 {
+  return {
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+    message: proposal.message,
+    tasks: proposal.tasks.map((task) => ({
+      title: task.title,
+      priority: task.priority,
+      objective: task.objective,
+      context: task.context,
+      acceptanceCriteria: task.acceptanceCriteria.map((text) => ({
+        text,
+        verificationMode: VERIFICATION_MODE.HUMAN,
+        humanInstructions: DEFAULT_HUMAN_INSTRUCTIONS,
+        validationCommandIndexes: [],
+      })),
+      outOfScope: [...task.outOfScope],
+      documentReferences: [...task.documentReferences],
+      validationCommands: task.validationCommands.map((command) => ({
+        command,
+        executionMode: COMMAND_EXECUTION_MODE.AGENT_ONLY,
+      })),
+    })),
+  };
+}
+
+/** Lit une liste d'entiers positifs, dedoublonnee et triee. */
+function readIndexes(value: unknown, count: number): number[] | null {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const seen = new Set<number>();
+  for (const raw of value) {
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0 || raw >= count) {
+      return null;
+    }
+    seen.add(raw);
+  }
+  return [...seen].sort((left, right) => left - right);
+}
+
+/** Valide les commandes d'un element de version 2. */
+function readBacklogCommands(
+  value: unknown,
+  label: string,
+  at: (field: string) => string,
+): { ok: true; commands: ArchitectBacklogCommandProposal[] } | { ok: false; refusal: ArchitectBacklogRefusal } {
+  if (value === undefined || value === null) {
+    return { ok: true, commands: [] };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      refusal: { field: at("validationCommands"), message: `Les commandes de ${label} ne sont pas lisibles.` },
+    };
+  }
+  if (value.length > ARCHITECT_BACKLOG_LIMITS.commands.max) {
+    return {
+      ok: false,
+      refusal: {
+        field: at("validationCommands"),
+        message: `Les commandes de ${label} sont trop nombreuses.`,
+      },
+    };
+  }
+
+  const commands: ArchitectBacklogCommandProposal[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) {
+      return {
+        ok: false,
+        refusal: { field: at("validationCommands"), message: `Une commande de ${label} n'est pas lisible.` },
+      };
+    }
+    const command = readRequiredText(raw["command"], ARCHITECT_BACKLOG_LIMITS.commands.length);
+    if (command === null) {
+      return {
+        ok: false,
+        refusal: { field: at("validationCommands"), message: `Une commande de ${label} est vide ou trop longue.` },
+      };
+    }
+
+    // Exactement la garde de TASK-008, sans adaptation : une commande proposee
+    // dans un backlog passe le meme controle qu'une commande saisie a la main.
+    const problem = checkValidationCommand(command);
+    if (problem !== null) {
+      return {
+        ok: false,
+        refusal: {
+          field: at("validationCommands"),
+          message: `${label} propose « ${command} », qui ne peut pas etre autorisee : ${problem}`,
+        },
+      };
+    }
+
+    const executionMode: unknown = raw["executionMode"];
+    if (!isCommandExecutionMode(executionMode)) {
+      return {
+        ok: false,
+        refusal: {
+          field: at("validationCommands"),
+          message: `${label} ne dit pas si NOX a le droit d'executer « ${command} ».`,
+        },
+      };
+    }
+
+    if (executionMode === COMMAND_EXECUTION_MODE.AUTONOMOUS) {
+      // Une commande declaree autonome doit l'etre reellement. La politique est
+      // celle de TASK-027, revalidee ici : le fournisseur ne l'elargit pas.
+      const refusal = checkAutonomousCommand(command);
+      if (refusal !== null) {
+        return {
+          ok: false,
+          refusal: {
+            field: at("validationCommands"),
+            message: `${label} demande a NOX d'executer « ${command} », ce qui est refuse : ${refusal}`,
+          },
+        };
+      }
+    }
+
+    if (commands.some((entry) => entry.command === command)) {
+      continue;
+    }
+    commands.push({ command, executionMode });
+  }
+
+  const autonomous = commands.filter(
+    (entry) => entry.executionMode === COMMAND_EXECUTION_MODE.AUTONOMOUS,
+  );
+  if (autonomous.length > MAX_AUTONOMOUS_COMMANDS_PER_RUN) {
+    return {
+      ok: false,
+      refusal: {
+        field: at("validationCommands"),
+        message: `${label} demande plus de ${String(MAX_AUTONOMOUS_COMMANDS_PER_RUN)} validations autonomes.`,
+      },
+    };
+  }
+
+  return { ok: true, commands };
+}
+
+/** Valide les criteres d'un element de version 2. */
+function readBacklogCriteria(
+  value: unknown,
+  label: string,
+  at: (field: string) => string,
+  commands: readonly ArchitectBacklogCommandProposal[],
+): { ok: true; criteria: ArchitectBacklogCriterionProposal[] } | { ok: false; refusal: ArchitectBacklogRefusal } {
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      refusal: { field: at("acceptanceCriteria"), message: `Les criteres de ${label} ne sont pas lisibles.` },
+    };
+  }
+  if (
+    value.length < ARCHITECT_BACKLOG_LIMITS.criteria.min ||
+    value.length > ARCHITECT_BACKLOG_LIMITS.criteria.max
+  ) {
+    return {
+      ok: false,
+      refusal: {
+        field: at("acceptanceCriteria"),
+        message: `${label} doit porter de ${String(ARCHITECT_BACKLOG_LIMITS.criteria.min)} a ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)} criteres d'acceptation.`,
+      },
+    };
+  }
+
+  const criteria: ArchitectBacklogCriterionProposal[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) {
+      return {
+        ok: false,
+        refusal: { field: at("acceptanceCriteria"), message: `Un critere de ${label} n'est pas lisible.` },
+      };
+    }
+
+    const text = readRequiredText(raw["text"], ARCHITECT_BACKLOG_LIMITS.criteria.length);
+    if (text === null) {
+      return {
+        ok: false,
+        refusal: { field: at("acceptanceCriteria"), message: `Un critere de ${label} est vide ou trop long.` },
+      };
+    }
+    if (criteria.some((entry) => entry.text === text)) {
+      continue;
+    }
+
+    const verificationMode: unknown = raw["verificationMode"];
+    if (!isVerificationMode(verificationMode)) {
+      return {
+        ok: false,
+        refusal: {
+          field: at("acceptanceCriteria"),
+          message: `${label} ne dit pas si « ${text} » se verifie automatiquement ou a la main.`,
+        },
+      };
+    }
+
+    const indexes = readIndexes(raw["validationCommandIndexes"], commands.length);
+    if (indexes === null) {
+      return {
+        ok: false,
+        refusal: {
+          field: at("acceptanceCriteria"),
+          message: `Les preuves de « ${text} » designent une commande qui n'existe pas dans ${label}.`,
+        },
+      };
+    }
+
+    if (verificationMode === VERIFICATION_MODE.HUMAN) {
+      const instructions = readRequiredText(
+        raw["humanInstructions"],
+        MAX_HUMAN_INSTRUCTIONS_LENGTH,
+      );
+      if (instructions === null) {
+        return {
+          ok: false,
+          refusal: {
+            field: at("acceptanceCriteria"),
+            message: `« ${text} » demande un humain sans dire ce qu'il doit verifier.`,
+          },
+        };
+      }
+      if (indexes.length > 0) {
+        return {
+          ok: false,
+          refusal: {
+            field: at("acceptanceCriteria"),
+            message: `« ${text} » demande un humain tout en nommant des commandes : s'il en avait, il serait automatise.`,
+          },
+        };
+      }
+      criteria.push({
+        text,
+        verificationMode,
+        humanInstructions: instructions,
+        validationCommandIndexes: [],
+      });
+      continue;
+    }
+
+    // AUTOMATED : au moins une preuve, et chaque preuve doit en etre une.
+    if (indexes.length === 0) {
+      return {
+        ok: false,
+        refusal: {
+          field: at("acceptanceCriteria"),
+          message: `« ${text} » est declare automatise sans nommer la moindre commande qui le prouve.`,
+        },
+      };
+    }
+    for (const index of indexes) {
+      const command = commands[index];
+      if (command === undefined) {
+        return {
+          ok: false,
+          refusal: {
+            field: at("acceptanceCriteria"),
+            message: `Les preuves de « ${text} » designent une commande qui n'existe pas dans ${label}.`,
+          },
+        };
+      }
+      if (command.executionMode !== COMMAND_EXECUTION_MODE.AUTONOMOUS) {
+        return {
+          ok: false,
+          refusal: {
+            field: at("acceptanceCriteria"),
+            message: `« ${text} » s'appuie sur « ${command.command} », que NOX n'executera pas : elle ne peut donc rien prouver.`,
+          },
+        };
+      }
+    }
+
+    criteria.push({
+      text,
+      verificationMode,
+      humanInstructions: null,
+      validationCommandIndexes: indexes,
+    });
+  }
+
+  if (criteria.length < ARCHITECT_BACKLOG_LIMITS.criteria.min) {
+    return {
+      ok: false,
+      refusal: {
+        field: at("acceptanceCriteria"),
+        message: `${label} ne porte aucun critere d'acceptation exploitable.`,
+      },
+    };
+  }
+
+  return { ok: true, criteria };
+}
+
+/** Valide un element de backlog en version 2. */
+function readBacklogTaskV2(
+  value: unknown,
+  position: number,
+  availableDocuments: readonly string[],
+): { ok: true; task: ArchitectBacklogTaskProposalV2 } | { ok: false; refusal: ArchitectBacklogRefusal } {
+  const at = (field: string): string => `tasks.${String(position)}.${field}`;
+  const label = `Tache ${String(position + 1)}`;
+
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      refusal: { field: `tasks.${String(position)}`, message: `${label} n'est pas lisible.` },
+    };
+  }
+
+  const title = readRequiredText(value["title"], ARCHITECT_BACKLOG_LIMITS.title);
+  if (title === null) {
+    return { ok: false, refusal: { field: at("title"), message: `${label} n'a pas de titre exploitable.` } };
+  }
+
+  const priority: unknown = value["priority"];
+  if (!isTaskPriority(priority)) {
+    return {
+      ok: false,
+      refusal: { field: at("priority"), message: `${label} porte une priorite inconnue.` },
+    };
+  }
+
+  const objective = readRequiredText(value["objective"], ARCHITECT_BACKLOG_LIMITS.objective);
+  if (objective === null) {
+    return {
+      ok: false,
+      refusal: { field: at("objective"), message: `${label} n'a pas d'objectif exploitable.` },
+    };
+  }
+
+  const context = readOptionalText(value["context"], ARCHITECT_BACKLOG_LIMITS.context);
+  if (context === undefined) {
+    return { ok: false, refusal: { field: at("context"), message: `Le contexte de ${label} est trop long.` } };
+  }
+
+  const outOfScope = readList(value["outOfScope"], ARCHITECT_BACKLOG_LIMITS.outOfScope);
+  if (outOfScope === null) {
+    return {
+      ok: false,
+      refusal: { field: at("outOfScope"), message: `Le hors perimetre de ${label} est trop long.` },
+    };
+  }
+
+  const documentReferences = readList(
+    value["documentReferences"],
+    ARCHITECT_BACKLOG_LIMITS.documents,
+  );
+  if (documentReferences === null) {
+    return {
+      ok: false,
+      refusal: {
+        field: at("documentReferences"),
+        message: `Les documents de ${label} sont trop nombreux ou trop longs.`,
+      },
+    };
+  }
+  for (const reference of documentReferences) {
+    if (!availableDocuments.includes(reference)) {
+      return {
+        ok: false,
+        refusal: {
+          field: at("documentReferences"),
+          message: `${label} reference « ${reference} », qui ne fait pas partie des documents du repository : l'architecte ne peut pas en inventer.`,
+        },
+      };
+    }
+  }
+
+  // Les commandes sont lues avant les criteres : un critere automatise se juge
+  // sur ce que ses preuves sont reellement, donc elles doivent exister d'abord.
+  const commands = readBacklogCommands(value["validationCommands"], label, at);
+  if (!commands.ok) {
+    return { ok: false, refusal: commands.refusal };
+  }
+
+  const criteria = readBacklogCriteria(
+    value["acceptanceCriteria"],
+    label,
+    at,
+    commands.commands,
+  );
+  if (!criteria.ok) {
+    return { ok: false, refusal: criteria.refusal };
+  }
+
+  return {
+    ok: true,
+    task: {
+      title,
+      priority,
+      objective,
+      context,
+      acceptanceCriteria: criteria.criteria,
+      outOfScope,
+      documentReferences,
+      validationCommands: commands.commands,
+    },
+  };
+}
+
+/**
+ * Valide une proposition de backlog en version 2.
+ *
+ * Meme discipline que la version 1 : aucune confiance au Structured Output, le
+ * premier probleme arrete la lecture, et **toute** la proposition est refusee.
+ * Un backlog est une unite.
+ */
+export function readArchitectBacklogProposalV2(
+  value: unknown,
+  availableDocuments: readonly string[],
+): ArchitectBacklogResultV2 {
+  if (!isRecord(value)) {
+    return { ok: false, refusal: { field: "backlog", message: "La reponse de planification n'est pas une structure lisible." } };
+  }
+
+  if (value["schemaVersion"] !== ARCHITECT_BACKLOG_SCHEMA_VERSION_2) {
+    return {
+      ok: false,
+      refusal: {
+        field: "schemaVersion",
+        message: "La reponse de planification ne suit pas la version de contrat attendue.",
+      },
+    };
+  }
+
+  const message = readRequiredText(value["message"], ARCHITECT_BACKLOG_LIMITS.message);
+  if (message === null) {
+    return {
+      ok: false,
+      refusal: { field: "message", message: "La reponse de planification ne porte aucun resume exploitable." },
+    };
+  }
+
+  const rawTasks: unknown = value["tasks"];
+  if (!Array.isArray(rawTasks)) {
+    return {
+      ok: false,
+      refusal: { field: "tasks", message: "La reponse de planification ne porte aucune liste de taches." },
+    };
+  }
+  if (rawTasks.length < ARCHITECT_BACKLOG_LIMITS.tasks.min) {
+    return {
+      ok: false,
+      refusal: { field: "tasks", message: "La reponse de planification ne propose aucune tache." },
+    };
+  }
+  if (rawTasks.length > ARCHITECT_BACKLOG_LIMITS.tasks.max) {
+    return {
+      ok: false,
+      refusal: {
+        field: "tasks",
+        message: `La reponse de planification propose ${String(rawTasks.length)} taches, au-dela du maximum de ${String(ARCHITECT_BACKLOG_LIMITS.tasks.max)}.`,
+      },
+    };
+  }
+
+  const tasks: ArchitectBacklogTaskProposalV2[] = [];
+  for (const [position, raw] of rawTasks.entries()) {
+    const read = readBacklogTaskV2(raw, position, availableDocuments);
+    if (!read.ok) {
+      return { ok: false, refusal: read.refusal };
+    }
+    tasks.push(read.task);
+  }
+
+  return {
+    ok: true,
+    proposal: { schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2, message, tasks },
+  };
+}
+
+/**
+ * Schema JSON strict de la version 2.
+ *
+ * Comme en version 1, **aucune borne de taille n'y figure** : le sous-ensemble
+ * de JSON Schema accepte en mode strict ignore `maxItems`, `minItems`,
+ * `maxLength` et `pattern`, et les declarer ferait echouer la requete entiere.
+ * Les bornes vivent donc dans le prompt, qui les annonce, et dans
+ * `readArchitectBacklogProposalV2`, qui les fait respecter.
+ */
+export function buildArchitectBacklogSchemaV2(): Record<string, unknown> {
+  const criterion: Record<string, unknown> = {
+    type: "object",
+    additionalProperties: false,
+    required: ["text", "verificationMode", "humanInstructions", "validationCommandIndexes"],
+    properties: {
+      text: { type: "string", description: "Critere verifiable, en une phrase." },
+      verificationMode: {
+        type: "string",
+        enum: [...VERIFICATION_MODES],
+        description:
+          "AUTOMATED seulement si une commande enregistree, executee par NOX apres le travail, suffit a prouver ce critere. HUMAN dans tous les autres cas.",
+      },
+      humanInstructions: {
+        type: ["string", "null"],
+        description:
+          "Ce qu'un humain doit verifier, et comment. Obligatoire pour HUMAN, null pour AUTOMATED.",
+      },
+      validationCommandIndexes: {
+        type: "array",
+        items: { type: "integer" },
+        description:
+          "Positions, dans validationCommands de cette meme tache, des commandes autonomes qui prouvent ce critere. Vide pour HUMAN, au moins une pour AUTOMATED.",
+      },
+    },
+  };
+
+  const command: Record<string, unknown> = {
+    type: "object",
+    additionalProperties: false,
+    required: ["command", "executionMode"],
+    properties: {
+      command: { type: "string", description: "Commande simple, sans operateur shell." },
+      executionMode: {
+        type: "string",
+        enum: [...COMMAND_EXECUTION_MODES],
+        description:
+          "AGENT_ONLY : seulement autorisee a l'implementeur. AUTONOMOUS : NOX l'executera lui-meme apres le travail, et elle pourra prouver un critere.",
+      },
+    },
+  };
+
+  const taskFields: Record<string, unknown> = {
+    title: { type: "string", description: "Titre court de la tache, sans code." },
+    priority: { type: "string", enum: [...TASK_PRIORITIES] },
+    objective: { type: "string", description: "Resultat observable attendu." },
+    context: { type: ["string", "null"], description: "Pourquoi cette tache existe." },
+    acceptanceCriteria: {
+      type: "array",
+      description: `Criteres verifiables, de ${String(ARCHITECT_BACKLOG_LIMITS.criteria.min)} a ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)}, chacun classe.`,
+      items: criterion,
+    },
+    outOfScope: shortStrings("Ce que l'implementeur ne doit pas faire dans cette tache."),
+    documentReferences: shortStrings("Chemins issus de la liste fermee fournie."),
+    validationCommands: {
+      type: "array",
+      description: "Commandes de validation de la tache, avec leur mode d'execution.",
+      items: command,
+    },
+  };
+
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["schemaVersion", "message", "tasks"],
+    properties: {
+      schemaVersion: { type: "integer", enum: [ARCHITECT_BACKLOG_SCHEMA_VERSION_2] },
+      message: {
+        type: "string",
+        description:
+          "Resume destine a l'utilisateur : ce que ce decoupage couvre du plan de V1, et ce qu'il laisse de cote. Jamais de raisonnement interne.",
+      },
+      tasks: {
+        type: "array",
+        description: `Backlog ordonne, de ${String(ARCHITECT_BACKLOG_LIMITS.tasks.min)} a ${String(ARCHITECT_BACKLOG_LIMITS.tasks.max)} elements. L'ordre du tableau est l'ordre recommande.`,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: Object.keys(taskFields),
+          properties: taskFields,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Relit une proposition enregistree, quelle que soit sa version.
+ *
+ * La version portee par le document decide : une proposition de version 1 est
+ * relevee avec les defauts surs, une proposition de version 2 est lue telle
+ * quelle. Aucun document n'est reecrit, et une version inconnue n'est pas
+ * devinee — elle est refusee.
+ */
+export function readAnyArchitectBacklogProposal(
+  value: unknown,
+  availableDocuments: readonly string[],
+): ArchitectBacklogResultV2 {
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      refusal: { field: "backlog", message: "La reponse de planification n'est pas une structure lisible." },
+    };
+  }
+
+  if (value["schemaVersion"] === ARCHITECT_BACKLOG_SCHEMA_VERSION) {
+    const read = readArchitectBacklogProposal(value, availableDocuments);
+    return read.ok
+      ? { ok: true, proposal: upgradeBacklogProposal(read.proposal) }
+      : { ok: false, refusal: read.refusal };
+  }
+
+  return readArchitectBacklogProposalV2(value, availableDocuments);
 }
 
 // --- Inventaire des taches existantes ----------------------------------------

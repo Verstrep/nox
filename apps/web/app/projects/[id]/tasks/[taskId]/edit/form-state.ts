@@ -1,4 +1,4 @@
-import type { TaskEditFormValues } from "@/lib/task-edit";
+import type { TaskEditFormValues } from "@/lib/verification-fields";
 
 /**
  * Etat du formulaire d'edition.

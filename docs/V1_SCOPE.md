@@ -142,22 +142,36 @@ Enchaîner n'est pas s'autonomiser. La sélection est déterministe et sans mod�
 restent autoritaires ; la review humaine reste une barrière ; le préflight Git aussi. Un échec ou
 une annulation met la file en pause. Un redémarrage du serveur ne lance jamais rien.
 
+### 1.16 Validation autonome et classification des critères
+
+Chaque critère d'acceptation dit **avant l'exécution** comment il se vérifie : par une commande
+que NOX exécutera lui-même, ou par un humain — avec, dans ce cas, l'instruction de ce qu'il faut
+regarder. Chaque commande dit de son côté si NOX a le droit de la lancer.
+
+Quand une exécution se termine, NOX obtient ses **propres** preuves : il exécute les commandes
+autonomes, une fois chacune, et lit leurs codes de sortie. Une tâche dont tous les critères sont
+automatisés et tous prouvés se termine seule ; toutes les autres reviennent à un humain, avec une
+review qui ne lui montre que ce qui le concerne.
+
+La distinction qui porte tout : « Claude dit avoir lancé `npm test` » est un récit, « NOX a lancé
+`npm test` » est une preuve. Seule la seconde soutient un critère. Aucune IA ne participe à cette
+vérification, aucun interprète de commandes n'est impliqué, et rien de tout cela ne touche à Git.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Validation intelligente
-
-Distinguer ce qu'une commande peut prouver, ce qu'une relecture par l'Architecte peut établir,
-et ce qui exige réellement un test humain — pour ne solliciter l'humain que dans le troisième
-cas.
-
-### 2.2 Livraison Git contrôlée
+### 2.1 Livraison Git contrôlée
 
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.
+
+### 2.2 Correction et re-review enchaînées
+
+Reprendre un travail refusé et le faire relire, avec une borne explicite. Aujourd'hui chaque
+reprise se déclenche à la main, et rien ne compte les tours.
 
 ---
 
