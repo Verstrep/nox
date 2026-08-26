@@ -643,9 +643,10 @@ export function createRunnerServer(
           return;
         }
 
-        // Strictement en lecture. Elle rend une empreinte, jamais une liste de
-        // fichiers ni un chemin : la question posee est binaire, et le detail
-        // appartient a la review Git.
+        // Strictement en lecture. L'empreinte reste la seule chose qui decide
+        // d'une completion automatique ; les chemins l'accompagnent pour nommer
+        // ce qui a bouge dans un contexte de correction. Ils sont **relatifs** au
+        // repository et bornes : aucun chemin absolu ne sort d'ici.
         const state = await readTrackedState(parsed.repositoryPath);
         if (!state.ok) {
           logRefusal(requestId, VALIDATIONS_STATE_ROUTE, state.code);
@@ -653,7 +654,12 @@ export function createRunnerServer(
           return;
         }
 
-        sendJson(response, 200, { ok: true, digest: state.digest }, requestId);
+        sendJson(
+          response,
+          200,
+          { ok: true, digest: state.digest, files: state.files },
+          requestId,
+        );
         return;
       }
 

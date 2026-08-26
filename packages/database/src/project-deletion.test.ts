@@ -308,6 +308,20 @@ async function populate(projectId: string): Promise<{ taskId: string; bootstrapI
     data: { taskId, sourceRunId: run.id, text: "A revoir." },
   });
 
+  // Une reservation de correction : deux liens `Restrict` vers `Run`, exactement
+  // comme `ReviewFeedback`. Sans une ligne reelle ici, le test qui verifie que
+  // toutes les tables sont videes ne prouverait rien sur celle-ci.
+  await db.correctionAttempt.create({
+    data: {
+      taskId,
+      sourceRunId: run.id,
+      source: "AUTOMATED_VALIDATION",
+      attempt: 1,
+      automatedAttempt: 1,
+      status: "RESERVED",
+    },
+  });
+
   // Une file d'execution active, avec une inscription : sans elle, le test qui
   // verifie que **toutes** les tables sont videes passerait sans rien prouver
   // sur celle-ci.
@@ -377,6 +391,7 @@ async function countAll(projectId: string): Promise<Record<string, number>> {
     }),
     runReviewDecision: await db.runReviewDecision.count({ where: byRun }),
     architectRunReview: await db.architectRunReview.count({ where: byRun }),
+    correctionAttempt: await db.correctionAttempt.count({ where: byTask }),
     reviewFeedback: await db.reviewFeedback.count({ where: byTask }),
     run: await db.run.count({ where: byTask }),
     taskQueueEntry: await db.taskQueueEntry.count({ where: { projectId } }),
@@ -448,6 +463,7 @@ describe("deleteProjectState", () => {
         runHumanCriterionConfirmation: 0,
         runReviewDecision: 0,
         architectRunReview: 0,
+        correctionAttempt: 0,
         reviewFeedback: 0,
         run: 0,
         taskQueueEntry: 0,
@@ -484,6 +500,9 @@ describe("deleteProjectState", () => {
     assert.equal(result.counts.taskDependency, 1);
     assert.equal(result.counts.run, 1);
     assert.equal(result.counts.reviewFeedback, 1);
+    // L'etat de TASK-028 disparait avec le reste : une reservation de correction
+    // n'a aucune raison de survivre au projet qu'elle documente.
+    assert.equal(result.counts.correctionAttempt, 1);
     assert.equal(result.counts.projectMemoryEntry, 2);
     // Chaque cle de l'ordre declare a bien ete rapportee.
     for (const table of PROJECT_DELETION_ORDER) {
@@ -570,6 +589,7 @@ describe("deleteProjectState", () => {
       runHumanCriterionConfirmation: 0,
       runReviewDecision: 0,
       architectRunReview: 0,
+      correctionAttempt: 0,
       reviewFeedback: 0,
       run: 0,
       taskQueueEntry: 0,

@@ -36,3 +36,15 @@ export type RetryValidationState = {
 };
 
 export const INITIAL_RETRY_VALIDATION_STATE: RetryValidationState = { error: null };
+
+/**
+ * Etat retourne par la reprise d'une correction restee en plan.
+ *
+ * Elle ne rend rien non plus : soit la correction demarre et la page suivante
+ * l'affiche, soit un refus nomme dit ce qui a change depuis la reservation.
+ */
+export type ResumeCorrectionState = {
+  error: string | null;
+};
+
+export const INITIAL_RESUME_CORRECTION_STATE: ResumeCorrectionState = { error: null };

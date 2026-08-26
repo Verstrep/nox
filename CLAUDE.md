@@ -795,3 +795,60 @@ doit le dire explicitement et la justifier.
   `reset`, aucun `restore`, aucun `clean`.
 - **Les faits de NOX ne rejoignent pas la timeline de Claude Code.** `ClaudeRunEvent` reste
   fermé et produit par le runner ; les validations s'affichent à part.
+
+### 8.18 Boucle de correction pilotée par la validation
+
+- **Une correction ne modifie jamais le contrat gelé de la tâche.** Ni les critères, ni leur mode
+  de vérification, ni les commandes, ni leur mode d'exécution, ni les liens entre les deux. Une
+  correction essaie de satisfaire ce contrat ; elle ne le renégocie pas. Si le contrat est
+  réellement mauvais, c'est un humain qui le dit — par un passage en force, ou en terminant le
+  cycle puis en éditant une tâche future.
+- **Une correction automatique n'est déclenchée que par une preuve de NOX.** `NOX_AUTONOMOUS`, et
+  jamais `CLAUDE_OBSERVED` : ce qu'un agent dit avoir lancé ne relance rien.
+- **Une panne d'infrastructure n'implique jamais une correction de code.** Un lot `ERROR` mène à
+  `Retry automated validation`. « Je n'ai pas pu regarder » n'est pas « j'ai regardé et c'est
+  faux », et TASK-028 ne dilue pas cette distinction.
+- **Une file `ACTIVE` est une autorisation permanente qui couvre un nombre borné de corrections.**
+  Le texte de `Start queue` l'annonce **avant** le clic ; une autorisation qui s'élargirait en
+  silence n'en serait plus une.
+- **Une tâche lancée à la main, ou dont la file est en pause, ne se corrige jamais toute seule.**
+  La correction est prête, ses preuves sont rassemblées, et elle attend un geste.
+- **`MAX_AUTOMATED_CORRECTION_ATTEMPTS` vaut deux, et c'est une constante.** Jamais un réglage
+  d'interface, jamais une variable d'environnement : une borne qu'on peut desserrer n'en est plus
+  une.
+- **Le cycle de travail courant est la chaîne des exécutions reliées par `parentRunId`**, jamais
+  `runCount`. Une tâche rouverte a une histoire ; la compter consommerait la borne du cycle
+  suivant.
+- **Une correction est réservée avant d'être lancée, et la réservation est persistée.** Aucun
+  verrou en mémoire ne fait autorité : il ne survivrait ni à un redémarrage, ni à deux processus.
+  L'index unique `(sourceRunId, attempt)` est le verrou.
+- **Un même échec de validation ne lance qu'une seule correction.** Dix constatations simultanées
+  n'en obtiennent qu'une, et un `Request changes` humain concurrent reçoit un refus **nommé**,
+  jamais une exception brute.
+- **Une réservation non consommée est rendue, avec sa raison.** « NOX a renoncé » et « NOX
+  corrige » sont deux états distincts, et l'écran doit pouvoir les distinguer.
+- **Toute correction réussie reçoit un lot de validations complet et neuf.** Pas seulement les
+  commandes qui avaient échoué : corriger `npm test` peut casser `npm run typecheck`.
+- **Aucune preuve ne traverse une tentative.** Combiner un résultat d'hier et un résultat
+  d'aujourd'hui décrirait un état qui n'a jamais existé.
+- **Aucune confirmation humaine ne traverse une correction.** Elles appartiennent à la décision de
+  review d'une exécution, et une exécution nouvelle en demande de nouvelles.
+- **Une correction automatique ne contourne jamais la review humaine** quand des critères humains
+  restent : une tâche mixte revient à un humain, réparée sur sa partie automatisée.
+- **Le moteur de correction est unique.** Le dispatcher choisit ; `correction-launch.ts` exécute.
+  Aucun second moteur Claude, aucune politique d'outils élargie : une correction `NORMAL` garde les
+  permissions `NORMAL`.
+- **Le contexte de correction est construit localement, et borné.** Aucun appel à OpenAI, jamais.
+  Toute troncature est annoncée, et le contrat de la tâche ne tombe jamais avant les sorties.
+- **Le navigateur n'envoie ni prompt, ni preuve, ni commande, ni chemin, ni numéro de tentative.**
+  Des identifiants, un texte humain, des identifiants de critères — tous revalidés en base.
+- **Une review périmée ne lance rien.** Une correction vise l'exécution courante ; un onglet resté
+  sur une exécution déjà corrigée reçoit un refus structuré.
+- **Un rendu de page ne réserve rien et ne lance rien.** Le déclencheur est la finalisation d'une
+  exécution, et la réservation persistante rend le geste idempotent.
+- **Un redémarrage ne lance jamais une correction en attente.** Une réservation survit ; son
+  départ demande un geste explicite.
+- **Un amorçage ne participe jamais à la boucle automatique.**
+- **Une correction n'écrit jamais dans Git.** Ni `add`, ni commit, ni push, ni `reset`, ni
+  `restore`, ni `clean` — y compris quand une validation a sali le dépôt : NOX le nomme, et ne le
+  répare pas.

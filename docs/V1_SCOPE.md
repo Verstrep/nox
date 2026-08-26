@@ -157,6 +157,21 @@ La distinction qui porte tout : « Claude dit avoir lancé `npm test` » est un 
 `npm test` » est une preuve. Seule la seconde soutient un critère. Aucune IA ne participe à cette
 vérification, aucun interprète de commandes n'est impliqué, et rien de tout cela ne touche à Git.
 
+### 1.17 Boucle de correction pilotée par la validation
+
+Quand une commande que NOX a exécutée lui-même échoue, il possède déjà tout ce qu'un humain
+allait recopier : le critère non prouvé, la commande, son code de sortie, ses sorties. Ce constat
+devient un **contexte de correction**, transmis tel quel à la reprise.
+
+Une file démarrée à la main autorise NOX à répondre lui-même à cet échec, **au plus deux fois par
+cycle de travail**. Une tâche entièrement automatisée peut donc échouer, être corrigée, repasser et
+se terminer sans aucune action humaine. Au-delà de la borne, la main revient à un humain — et
+l'écran le dit avant qu'il ait à le deviner.
+
+Ce qui ne se corrige jamais tout seul : une panne d'infrastructure, un amorçage, une tâche lancée à
+la main, une file en pause, une exécution qui s'est mal terminée. Et rien, jamais, ne renégocie le
+contrat gelé de la tâche : une correction essaie de le satisfaire, pas de le réécrire.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
@@ -168,10 +183,10 @@ Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actu
 Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
 actions sont entièrement manuelles et hors de l'outil.
 
-### 2.2 Correction et re-review enchaînées
+### 2.2 Runner multi-projets
 
-Reprendre un travail refusé et le faire relire, avec une borne explicite. Aujourd'hui chaque
-reprise se déclenche à la main, et rien ne compte les tours.
+Aujourd'hui, une seule exécution est active tous projets confondus. Travailler sur deux projets en
+parallèle suppose que cette limite tombe.
 
 ---
 

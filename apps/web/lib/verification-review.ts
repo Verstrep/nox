@@ -84,8 +84,21 @@ export type VerificationReview = {
   batchSettled: boolean;
   /** Une reprise de la validation est proposee — panne d'infrastructure seule. */
   retryAvailable: boolean;
-  /** Une validation autonome a modifie des fichiers suivis. */
+  /**
+   * Une validation autonome a modifie des fichiers suivis, **ou** NOX l'ignore.
+   *
+   * C'est la valeur qui refuse une completion automatique : ne pas savoir n'y
+   * autorise jamais rien.
+   */
   trackedFilesMutated: boolean;
+  /**
+   * NOX a **constate** la modification : deux empreintes connues et differentes.
+   *
+   * Distincte de la precedente, et pour une raison precise : on peut refuser une
+   * completion sur une ignorance, mais on ne peut pas demander a Claude Code de
+   * reparer ce qu'on n'a pas su regarder.
+   */
+  repositoryMutationObserved: boolean;
   decision: ReviewDecisionView | null;
 };
 
@@ -136,6 +149,12 @@ export async function loadVerificationReview(
         batch.trackedStateAfter === null ||
         batch.trackedStateBefore !== batch.trackedStateAfter;
 
+  const repositoryMutationObserved =
+    batch !== null &&
+    batch.trackedStateBefore !== null &&
+    batch.trackedStateAfter !== null &&
+    batch.trackedStateBefore !== batch.trackedStateAfter;
+
   return {
     plan,
     planValid,
@@ -151,6 +170,7 @@ export async function loadVerificationReview(
     // pour de vrai ne changera pas d'avis : le code n'a pas bouge.
     retryAvailable: batch !== null && batch.status === VALIDATION_BATCH_STATUS.ERROR,
     trackedFilesMutated,
+    repositoryMutationObserved,
     decision:
       decisionRow === null
         ? null

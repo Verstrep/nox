@@ -1,4 +1,5 @@
 import {
+  CORRECTION_ATTEMPT_STATUS,
   RESUME_REFUSAL,
   RUN_VALIDATION_STATUS,
   TASK_STATUS,
@@ -38,6 +39,8 @@ import {
   architectReviewIneligibleMessage,
   architectReviewUrl,
 } from "@/lib/architect/review-display";
+import { CorrectionPanel } from "@/components/CorrectionPanel";
+import { loadCorrectionContext } from "@/lib/correction-cycle";
 import { requestChangesUrl, resumeRefusalMessage } from "@/lib/correction-display";
 import { loadProject } from "@/lib/projects";
 import { formatDuration, runStatusTone, runUrl, shortSha } from "@/lib/run-display";
@@ -59,6 +62,7 @@ import {
   AutomatedValidationSection,
 } from "@/components/VerificationPanels";
 
+import { ResumeCorrectionForm } from "./ResumeCorrectionForm";
 import { RetryValidationForm } from "./RetryValidationForm";
 import { loadRun, reconcileRun } from "@/lib/runs";
 import { loadTask } from "@/lib/tasks";
@@ -240,6 +244,11 @@ export default async function ReviewPage({
   // cette page ne declenche rien chez le fournisseur.
   const architect = await getArchitectReviewSummary(db, run.id);
   const architectEligibility = architectReviewEligibility(run.status, review?.capturedAt ?? null);
+
+  // Cycle de correction. Lecture seule : aucun appel a Claude Code, a OpenAI ou
+  // au runner. Ouvrir cette page ne reserve rien et ne lance rien — c'est la
+  // finalisation d'une execution qui declenche, jamais une consultation.
+  const correction = await loadCorrectionContext(db, { runId: run.id, taskId: task.id });
 
   const resumeContext = await getRunResumeContext(db, run.id);
   const resumeRefusal =
@@ -632,6 +641,29 @@ export default async function ReviewPage({
         >
           <AcceptanceCriteriaSection review={verification} />
         </SectionCard>
+
+        {correction === null ? null : (
+          <SectionCard
+            title="Correction"
+            description="D'ou vient cette execution, et ce qui peut encore etre repris sur ce cycle."
+          >
+            <CorrectionPanel
+              context={correction}
+              projectId={project.id}
+              resumeForm={
+                correction.held !== null &&
+                correction.held.status === CORRECTION_ATTEMPT_STATUS.RESERVED ? (
+                  <ResumeCorrectionForm
+                    projectId={project.id}
+                    taskId={task.id}
+                    runId={run.id}
+                    attemptId={correction.held.id}
+                  />
+                ) : null
+              }
+            />
+          </SectionCard>
+        )}
 
         {task.status === TASK_STATUS.REVIEW ? (
           <SectionCard

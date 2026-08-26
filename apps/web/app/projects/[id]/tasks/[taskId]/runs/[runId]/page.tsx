@@ -1,4 +1,10 @@
-import { RUN_STATUS, isFinalRunStatus, type DevelopmentRunDetail } from "@nox/shared";
+import {
+  RUN_PROVENANCE,
+  RUN_STATUS,
+  isFinalRunStatus,
+  runProvenance,
+  type DevelopmentRunDetail,
+} from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -25,13 +31,14 @@ import {
   reviewUnavailableMessage,
   reviewUrl,
 } from "@/lib/review-display";
+import { runProvenanceLabel } from "@/lib/correction-display";
 import { loadRunReview, syncRunReview } from "@/lib/run-review";
 import { loadRun, reconcileRun } from "@/lib/runs";
 import { loadTask } from "@/lib/tasks";
 
 import { CancelRunForm } from "./CancelRunForm";
 import { RunPoller } from "./RunPoller";
-import { getDatabaseClient } from "@nox/database";
+import { getCorrectionAttemptForRun, getDatabaseClient } from "@nox/database";
 
 import { AutomatedValidationSection } from "@/components/VerificationPanels";
 import { loadVerificationReview } from "@/lib/verification-review";
@@ -146,6 +153,12 @@ export default async function RunPage({
   // navigateur suffit a recuperer un resultat produit entre-temps.
   const run = await reconcileRun(stored);
 
+  // Provenance de l'execution. Une lecture, jamais un declenchement : ouvrir
+  // cette page ne reserve aucune correction et ne relance rien.
+  const sourceCorrection = await getCorrectionAttemptForRun(getDatabaseClient(), run.id);
+  const provenance = runProvenance(run.kind, sourceCorrection?.source ?? null);
+  const sourceAttempt = sourceCorrection?.automatedAttempt ?? null;
+
   // Lecture seule. Le lot autonome est declenche par la finalisation de
   // l'execution, jamais par l'ouverture d'une page : consulter ne demarre rien.
   const verification = await loadVerificationReview(getDatabaseClient(), {
@@ -197,8 +210,12 @@ export default async function RunPage({
             <p className="mt-1 truncate text-sm text-zinc-600">{project.name}</p>
             {/* La chaine des corrections est rappelee ici plutot que dessinee :
                 un lien vers le parent suffit a la remonter, run par run. */}
+            {/* D'ou vient cette execution. Une correction anterieure a
+                TASK-028 n'a pas de source enregistree : elle est annoncee comme
+                historique, jamais en erreur. */}
+            <p className="mt-2 text-xs text-zinc-500">{runProvenanceLabel(provenance)}</p>
             {run.parentRunId === null ? null : (
-              <p className="mt-2 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-zinc-500">
                 Correction de{" "}
                 <Link
                   href={runUrl(project.id, task.id, run.parentRunId)}
@@ -207,6 +224,9 @@ export default async function RunPage({
                   l&apos;execution precedente
                 </Link>{" "}
                 — la session de celle-ci a ete reprise.
+                {provenance === RUN_PROVENANCE.AUTOMATIC_CORRECTION && sourceAttempt !== null
+                  ? ` Source : validation autonome de l'execution precedente, tentative ${String(sourceAttempt)}.`
+                  : ""}
               </p>
             )}
           </div>

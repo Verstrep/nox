@@ -18,12 +18,16 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  CORRECTION_SOURCE,
+  CORRECTION_STAGE,
   EXECUTION_QUEUE_ERROR,
+  MAX_AUTOMATED_CORRECTION_ATTEMPTS,
   QUEUE_DISPATCH,
   QUEUE_STATE,
   QUEUE_STATES,
   REVIEW_WAIT,
   type ReviewWait,
+  type CorrectionCycleState,
 } from "@nox/shared";
 
 import {
@@ -235,5 +239,91 @@ describe("ce que la review fait attendre", () => {
       assert.ok(text.length > 60, kind);
       assert.ok(!text.includes("_"), kind);
     }
+  });
+});
+
+describe("l'autorisation permanente couvre les corrections bornees", () => {
+  it("annonce les corrections **avant** le clic, avec leur borne", () => {
+    // Une autorisation qui s'elargit en silence n'est plus une autorisation :
+    // ce que le clic engage doit se lire au moment ou on clique.
+    assert.ok(QUEUE_STANDING_AUTHORIZATION.includes("corrections"));
+    assert.ok(
+      QUEUE_STANDING_AUTHORIZATION.includes(String(MAX_AUTOMATED_CORRECTION_ATTEMPTS)),
+      "la borne est chiffree",
+    );
+    assert.ok(QUEUE_STANDING_AUTHORIZATION.includes("exécute lui-même"));
+  });
+
+  it("dit qu'aucune correction ne part sans un echec constate par NOX", () => {
+    assert.ok(QUEUE_STANDING_AUTHORIZATION.includes("échec que NOX a constaté"));
+  });
+});
+
+describe("element courant pendant un cycle de correction", () => {
+  function cycle(overrides: Partial<CorrectionCycleState> = {}): CorrectionCycleState {
+    return {
+      stage: CORRECTION_STAGE.NONE,
+      automatedAttempts: 0,
+      maxAutomatedAttempts: MAX_AUTOMATED_CORRECTION_ATTEMPTS,
+      lastSource: null,
+      refusal: null,
+      ...overrides,
+    };
+  }
+
+  const failed = { kind: REVIEW_WAIT.VALIDATION_FAILED, humanCheckCount: 0 } as const;
+
+  it("garde le libelle historique quand aucun cycle n'est charge", () => {
+    assert.equal(queueReviewLabel(failed), "Automated validation failed");
+    assert.equal(queueReviewLabel(failed, null), "Automated validation failed");
+  });
+
+  it("annonce la correction a venir plutot qu'un echec sec", () => {
+    assert.equal(
+      queueReviewLabel(failed, cycle({ automatedAttempts: 0 })),
+      "Automated validation failed — automatic correction 1 of 2",
+    );
+    assert.equal(
+      queueReviewLabel(failed, cycle({ automatedAttempts: 1 })),
+      "Automated validation failed — automatic correction 2 of 2",
+    );
+  });
+
+  it("annonce une correction en cours", () => {
+    assert.equal(
+      queueReviewLabel(
+        failed,
+        cycle({
+          stage: CORRECTION_STAGE.RUNNING,
+          automatedAttempts: 1,
+          lastSource: CORRECTION_SOURCE.AUTOMATED_VALIDATION,
+        }),
+      ),
+      "Automatic correction 1 of 2 running",
+    );
+  });
+
+  it("annonce la borne atteinte, et que la main revient a l'humain", () => {
+    const reached = cycle({ stage: CORRECTION_STAGE.LIMIT_REACHED, automatedAttempts: 2 });
+    assert.equal(
+      queueReviewLabel(failed, reached),
+      "Automatic correction limit reached — human action required",
+    );
+    assert.match(queueReviewExplanation(failed, reached), /Human review required/u);
+  });
+
+  it("ne masque pas une validation en cours par un etat de correction", () => {
+    // Un lot qui tourne interdit toute decision : le dire est plus utile que
+    // d'annoncer une correction qui n'a pas encore lieu d'etre.
+    const running = { kind: REVIEW_WAIT.VALIDATION_RUNNING, humanCheckCount: 0 } as const;
+    assert.equal(queueReviewLabel(running, cycle()), "Automated validation running");
+  });
+
+  it("ne transforme pas une attente humaine en correction", () => {
+    const human = { kind: REVIEW_WAIT.HUMAN_CHECKS, humanCheckCount: 1 } as const;
+    assert.equal(
+      queueReviewLabel(human, cycle()),
+      "Waiting for human validation · 1 check",
+    );
   });
 });

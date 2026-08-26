@@ -6,17 +6,34 @@
  * une couleur.
  */
 
-import { RESUME_REFUSAL, RUN_KIND } from "@nox/shared";
+import {
+  CORRECTION_REFUSAL,
+  CORRECTION_REFUSAL_CODES,
+  CORRECTION_SOURCE,
+  CORRECTION_STAGE,
+  MAX_AUTOMATED_CORRECTION_ATTEMPTS,
+  RESUME_REFUSAL,
+  RUN_KIND,
+  RUN_PROVENANCE,
+  type CorrectionCycleState,
+} from "@nox/shared";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
   allPreconditionsMet,
+  automatedAttemptLabel,
   buildPreconditions,
+  correctionEvidenceUrl,
+  correctionRefusalMessage,
+  correctionSourceLabel,
+  correctionStageDetail,
+  correctionStageLabel,
   correctionUrl,
   feedbackExcerpt,
   requestChangesUrl,
   resumeRefusalMessage,
+  runProvenanceLabel,
 } from "./correction-display.ts";
 
 describe("URL", () => {
@@ -138,5 +155,143 @@ describe("RUN_KIND dans l'interface", () => {
   it("distingue une correction d'une execution initiale", () => {
     // Le contrat est ferme : l'interface n'a que deux cas a traiter.
     assert.deepEqual(Object.values(RUN_KIND).sort(), ["CORRECTION", "INITIAL"]);
+  });
+});
+
+describe("URL d'une correction", () => {
+  it("porte les criteres humains signales, et rien d'autre", () => {
+    assert.equal(
+      correctionUrl("p1", "t1", "r1", "f1"),
+      "/projects/p1/tasks/t1/runs/r1/corrections/f1",
+    );
+    assert.equal(
+      correctionUrl("p1", "t1", "r1", "f1", ["c1", "c2"]),
+      "/projects/p1/tasks/t1/runs/r1/corrections/f1?criterion=c1&criterion=c2",
+    );
+  });
+
+  it("echappe un identifiant hostile plutot que de le recopier", () => {
+    const url = correctionUrl("p1", "t1", "r1", "f1", ["a&b=c"]);
+    assert.equal(url.includes("a&b=c"), false);
+    assert.ok(url.includes("a%26b%3Dc"));
+  });
+
+  it("ouvre une page distincte quand il n'y a aucun feedback", () => {
+    // Une correction humaine peut n'avoir aucun texte : les preuves de NOX
+    // disent deja tout, et un `ReviewFeedback` vide n'existe pas dans NOX.
+    assert.equal(
+      correctionEvidenceUrl("p1", "t1", "r1"),
+      "/projects/p1/tasks/t1/runs/r1/corrections/evidence",
+    );
+  });
+});
+
+describe("refus d'une correction", () => {
+  it("explique chaque cause, sans trou", () => {
+    for (const code of CORRECTION_REFUSAL_CODES) {
+      const message = correctionRefusalMessage(code);
+      assert.equal(typeof message, "string");
+      assert.ok(message.length > 20, code);
+    }
+  });
+
+  it("distingue une file en pause d'une borne atteinte", () => {
+    // Deux gestes humains differents : redemarrer la file, ou relire le travail.
+    const paused = correctionRefusalMessage(CORRECTION_REFUSAL.QUEUE_PAUSED);
+    const limit = correctionRefusalMessage(CORRECTION_REFUSAL.LIMIT_REACHED);
+    assert.notEqual(paused, limit);
+    assert.match(paused, /pause/u);
+    assert.match(limit, /corrections automatiques/u);
+  });
+
+  it("renvoie vers la reprise du lot pour une panne d'infrastructure", () => {
+    const message = correctionRefusalMessage(CORRECTION_REFUSAL.VALIDATION_ERROR);
+    assert.match(message, /relancez la validation/iu);
+  });
+
+  it("dit qu'une tache lancee a la main attend un clic", () => {
+    const message = correctionRefusalMessage(CORRECTION_REFUSAL.NOT_QUEUED);
+    assert.match(message, /attend votre clic/u);
+  });
+});
+
+describe("libelles du cycle", () => {
+  function state(overrides: Partial<CorrectionCycleState> = {}): CorrectionCycleState {
+    return {
+      stage: CORRECTION_STAGE.NONE,
+      automatedAttempts: 0,
+      maxAutomatedAttempts: MAX_AUTOMATED_CORRECTION_ATTEMPTS,
+      lastSource: null,
+      refusal: null,
+      ...overrides,
+    };
+  }
+
+  it("annonce le rang d'une correction automatique en cours", () => {
+    assert.equal(
+      correctionStageLabel(
+        state({
+          stage: CORRECTION_STAGE.RUNNING,
+          automatedAttempts: 1,
+          lastSource: CORRECTION_SOURCE.AUTOMATED_VALIDATION,
+        }),
+      ),
+      "Automatic correction 1 of 2 running",
+    );
+  });
+
+  it("ne colle aucun rang a une correction humaine", () => {
+    assert.equal(
+      correctionStageLabel(
+        state({ stage: CORRECTION_STAGE.RUNNING, lastSource: CORRECTION_SOURCE.HUMAN_FEEDBACK }),
+      ),
+      "Correction running",
+    );
+    assert.equal(automatedAttemptLabel(CORRECTION_SOURCE.HUMAN_FEEDBACK, 1), null);
+    assert.equal(automatedAttemptLabel(CORRECTION_SOURCE.AUTOMATED_VALIDATION, null), null);
+    assert.equal(
+      automatedAttemptLabel(CORRECTION_SOURCE.AUTOMATED_VALIDATION, 2),
+      "Attempt 2 of 2",
+    );
+  });
+
+  it("dit la borne atteinte, et que l'humain reprend la main", () => {
+    const reached = state({ stage: CORRECTION_STAGE.LIMIT_REACHED, automatedAttempts: 2 });
+    assert.equal(correctionStageLabel(reached), "Automatic correction limit reached");
+    assert.match(correctionStageDetail(reached) ?? "", /Human review required/u);
+  });
+
+  it("dit qu'il n'y a rien a recopier quand une correction est prete", () => {
+    const ready = state({ stage: CORRECTION_STAGE.READY });
+    assert.equal(correctionStageLabel(ready), "Correction ready");
+    assert.match(correctionStageDetail(ready) ?? "", /rien a recopier/u);
+  });
+
+  it("ne dit rien de plus quand rien n'est en jeu", () => {
+    assert.equal(correctionStageDetail(state()), null);
+  });
+});
+
+describe("source et provenance", () => {
+  it("nomme les deux sources en toutes lettres", () => {
+    assert.equal(
+      correctionSourceLabel(CORRECTION_SOURCE.AUTOMATED_VALIDATION),
+      "Automatic validation",
+    );
+    assert.equal(correctionSourceLabel(CORRECTION_SOURCE.HUMAN_FEEDBACK), "Human feedback");
+  });
+
+  it("nomme les quatre provenances, dont l'historique", () => {
+    assert.equal(runProvenanceLabel(RUN_PROVENANCE.INITIAL), "Initial execution");
+    assert.equal(
+      runProvenanceLabel(RUN_PROVENANCE.HUMAN_CORRECTION),
+      "Human-requested correction",
+    );
+    assert.equal(
+      runProvenanceLabel(RUN_PROVENANCE.AUTOMATIC_CORRECTION),
+      "Automatic validation correction",
+    );
+    // Une correction d'avant TASK-028 n'est pas une erreur : elle est historique.
+    assert.equal(runProvenanceLabel(RUN_PROVENANCE.LEGACY_CORRECTION), "Legacy correction");
   });
 });

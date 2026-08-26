@@ -65,6 +65,17 @@
  *                              seule sur sa ligne — de quoi verifier qu'une
  *                              recommandation d'approbation devient impossible
  *
+ * Modes ajoutes par TASK-028 :
+ *
+ *   stream-gate-open   ecrit le fichier designe par `FAKE_CLAUDE_GATE` dans le
+ *                      repository, puis rend une session normale. Combine a un
+ *                      script de validation qui n'accepte que si ce fichier
+ *                      existe, il permet de jouer « la correction repare »
+ *                      sans dependre d'un vrai Claude.
+ *   stream-gate-shut   la meme session, mais **sans** ecrire le fichier : elle
+ *                      touche un autre fichier pour que la review ne soit pas
+ *                      vide. C'est « la correction n'a pas suffi ».
+ *
  * Ces modes n'existent que pour les tests. Aucun n'est atteignable en
  * production : le mode par defaut reste `success`.
  */
@@ -426,6 +437,43 @@ switch (mode) {
       JSON.stringify(assistantText("La validation signale un espace en trop.")),
     ];
     for (const line of failingLines) {
+      process.stdout.write(`${line}\n`);
+    }
+    process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));
+    process.exit(0);
+    break;
+  }
+
+  case "stream-gate-open":
+  case "stream-gate-shut": {
+    // Deux sessions identiques a une chose pres : l'une leve la barriere que la
+    // validation autonome verifie, l'autre non. C'est ce qui permet de rejouer
+    // « echec, correction, succes » et « echec, correction, echec » avec le
+    // meme pipeline, sans vrai Claude et sans hasard.
+    const gateRoot = process.cwd();
+    const gate = process.env.FAKE_CLAUDE_GATE ?? "gate.txt";
+    const marker = `${String(Date.now())}\n`;
+
+    if (mode === "stream-gate-open") {
+      writeFileSync(path.join(gateRoot, gate), marker, "utf8");
+    }
+    // Une trace ecrite dans tous les cas : une correction qui ne modifierait
+    // rien du tout serait indiscernable d'une correction jamais lancee.
+    writeFileSync(path.join(gateRoot, "correction-log.md"), `# Correction\n\n${marker}`, "utf8");
+
+    const gateLines = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: SESSION }),
+      JSON.stringify(toolUse("gc-1", "Write", { file_path: gate })),
+      JSON.stringify(toolResult("gc-1")),
+      JSON.stringify(
+        assistantText(
+          mode === "stream-gate-open"
+            ? "J'ai corrige ce qui faisait echouer la validation."
+            : "Je n'ai pas trouve la cause de l'echec.",
+        ),
+      ),
+    ];
+    for (const line of gateLines) {
       process.stdout.write(`${line}\n`);
     }
     process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));

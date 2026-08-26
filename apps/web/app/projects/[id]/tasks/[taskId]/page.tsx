@@ -1,4 +1,5 @@
 import {
+  CORRECTION_STAGE,
   TASK_DOCUMENT_SYNC_STATUS,
   TASK_STATUS,
   allowedTaskStatusTransitions,
@@ -15,6 +16,8 @@ import { getDatabaseClient, readVerificationPlan } from "@nox/database";
 
 import { TaskQueue } from "@/components/TaskQueue";
 import { VerificationPlanSummary } from "@/components/VerificationPlanSummary";
+import { loadTaskCorrectionCycle } from "@/lib/correction-cycle";
+import { correctionStageDetail, correctionStageLabel } from "@/lib/correction-display";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
@@ -303,6 +306,12 @@ export default async function TaskDetailPage({
   // Lecture seule : afficher un contrat ne declenche aucune validation, et
   // n'interroge ni le runner, ni un fournisseur.
   const plan = await readVerificationPlan(getDatabaseClient(), task.id);
+
+  // Cycle de correction en cours, s'il y en a un. Lecture seule : cette page ne
+  // reserve rien, ne lance rien, et n'appelle ni Claude Code, ni OpenAI, ni le
+  // runner. Une tache terminee de longue date n'affiche rien ici — son
+  // historique vit sur ses executions.
+  const correctionCycle = await loadTaskCorrectionCycle(getDatabaseClient(), task.id);
   // Une tache inscrite autorise l'execution de son contrat actuel : l'editeur
   // n'est donc pas propose tant qu'elle y figure. La Server Action refuse de
   // toute facon, et c'est elle qui fait autorite.
@@ -398,6 +407,27 @@ export default async function TaskDetailPage({
         </SectionCard>
 
         <VerificationPlanSummary plan={plan} taskKind={task.kind} />
+
+        {correctionCycle === null ||
+        correctionCycle.cycle.stage === CORRECTION_STAGE.NONE ? null : (
+          <SectionCard
+            title="Correction"
+            description="Ou en est le cycle de travail de cette tache."
+          >
+            <p className="text-sm text-zinc-200">{correctionStageLabel(correctionCycle.cycle)}</p>
+            {correctionCycle.cycle.automatedAttempts === 0 ? null : (
+              <p className="mt-1 text-sm text-zinc-400">
+                Correction attempt {correctionCycle.cycle.automatedAttempts} of{" "}
+                {correctionCycle.cycle.maxAutomatedAttempts} · Triggered by automated validation.
+              </p>
+            )}
+            {correctionStageDetail(correctionCycle.cycle) === null ? null : (
+              <p className="mt-3 text-xs leading-relaxed text-zinc-500">
+                {correctionStageDetail(correctionCycle.cycle)}
+              </p>
+            )}
+          </SectionCard>
+        )}
 
         {task.documentReferences.length === 0 ? null : (
           <SectionCard

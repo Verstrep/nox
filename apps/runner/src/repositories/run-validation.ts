@@ -35,6 +35,7 @@ import { createHash } from "node:crypto";
 
 import {
   RUNNER_ERROR,
+  TRACKED_STATE_FILE_LIMIT,
   VALIDATION_OUTPUT_LIMIT,
   boundOutput,
   checkAutonomousCommand,
@@ -272,7 +273,9 @@ function execute(
 export async function readTrackedState(
   repositoryPath: string,
   options: { runGit?: GitRunner } = {},
-): Promise<{ ok: true; digest: string } | { ok: false; code: RunnerErrorCode }> {
+): Promise<
+  { ok: true; digest: string; files: string[] } | { ok: false; code: RunnerErrorCode }
+> {
   const resolved = await resolveRepository(repositoryPath, { runGit: options.runGit });
   if (!resolved.ok) {
     return { ok: false, code: resolved.code };
@@ -295,5 +298,34 @@ export async function readTrackedState(
     .update(`${head.stdout.trim()}
 ${status.stdout}`, "utf8")
     .digest("hex");
-  return { ok: true, digest };
+  return { ok: true, digest, files: trackedPathsOf(status.stdout) };
+}
+
+/**
+ * Chemins suivis qu'un `git status --porcelain=v1 -uno` a signales.
+ *
+ * Les deux premiers caracteres sont les codes d'index et de dossier de travail,
+ * le troisieme une espace. Le reste est le chemin, **relatif** au repository :
+ * `--no-renames` n'etant pas passe ici, une ligne de renommage porte
+ * `ancien -> nouveau`, et c'est la destination qui est retenue — c'est elle qui
+ * existe sur le disque.
+ *
+ * La liste est bornee et triee : elle sert a nommer ce qui a bouge, pas a
+ * remplacer une review.
+ */
+function trackedPathsOf(status: string): string[] {
+  const paths = new Set<string>();
+  for (const line of status.split(/\r?\n/u)) {
+    if (line.length < 4) {
+      continue;
+    }
+    const raw = line.slice(3).trim();
+    const arrow = raw.lastIndexOf(" -> ");
+    const candidate = arrow === -1 ? raw : raw.slice(arrow + 4);
+    const cleaned = candidate.replace(/^"(.*)"$/u, "$1").trim();
+    if (cleaned !== "") {
+      paths.add(cleaned);
+    }
+  }
+  return [...paths].sort().slice(0, TRACKED_STATE_FILE_LIMIT);
 }

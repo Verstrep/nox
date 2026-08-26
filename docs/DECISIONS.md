@@ -5105,3 +5105,132 @@ Mais surtout : « Claude dit avoir lancé `npm test` » et « NOX a lancé `npm 
 même information. La première est un récit, la seconde est une preuve. Les mélanger dans un seul fil
 chronologique rendrait impossible de savoir laquelle on lit — ce qui annulerait tout l'intérêt de
 TASK-027.
+
+### D-337 — Une preuve de NOX déclenche une correction ; un récit, jamais
+
+**Décision.** Seule une validation que **NOX** a exécutée lui-même peut ouvrir une correction
+automatique. Le compte rendu de Claude Code ne déclenche rien.
+
+**Justification.** C'est la distinction que `TASK-027` existe pour établir, et une boucle
+automatique est exactement l'endroit où on la perdrait. Relancer Claude Code parce qu'il a écrit
+« le test échoue » reviendrait à le laisser décider seul de recommencer — sur un fait que personne
+n'a vérifié.
+
+### D-338 — Une file active est une autorisation permanente pour un nombre borné de corrections
+
+**Décision.** `Start queue` autorise désormais deux choses : lancer les tâches inscrites, et
+répondre à un échec de validation par une correction. Le texte du bouton le dit avant le clic.
+
+**Justification.** Redemander une autorisation à chaque correction annulerait le bénéfice : une
+file qui s'arrête sur une modale n'avance pas plus qu'une file arrêtée. Mais une autorisation qui
+s'élargit en silence n'est plus une autorisation — d'où le texte, qui nomme la borne et ce qui
+l'interrompt.
+
+Hors file, ou file en pause, rien ne part seul. La pause veut dire « aucun Claude automatique », et
+c'est la seule chose qu'elle veut dire : elle n'annule rien de ce qui tourne déjà.
+
+### D-339 — Deux corrections automatiques par cycle, et c'est une constante
+
+**Décision.** `MAX_AUTOMATED_CORRECTION_ATTEMPTS` vaut `2`. La valeur n'est ni configurable dans
+l'interface, ni lue dans l'environnement.
+
+**Justification.** Un même test peut échouer pour une raison que Claude Code ne comprend pas. Sans
+borne, `échec → correction → échec → correction` consommerait du temps, du quota et des
+modifications de repository jusqu'à ce que quelque chose casse — et personne ne serait là pour le
+voir.
+
+Deux tentatives suffisent à rattraper ce qui se rattrape ; au-delà, l'échec est structurel, et
+c'est une information en soi. Une borne qu'on peut desserrer depuis un écran n'en est plus une :
+c'est la même règle que pour les délais de validation autonome.
+
+La borne ne s'applique **qu'à** l'automatisme. Un humain peut toujours demander une correction
+après elle, et le compteur du cycle n'est pas remis à zéro pour autant.
+
+### D-340 — Le cycle courant est une chaîne d'exécutions, jamais un comptage
+
+**Décision.** Les corrections d'un cycle se comptent en remontant `parentRunId` jusqu'à
+l'exécution initiale dont elles descendent. `runCount` n'entre dans aucun calcul.
+
+**Justification.** Une tâche peut avoir eu une histoire : un lancement, une review, une
+réouverture, un second lancement. Compter toutes ses exécutions mélangerait ces vies successives.
+La borne refuserait alors une correction légitime — ou en autoriserait une de trop, ce qui est
+pire.
+
+### D-341 — Une correction est réservée avant d'être lancée
+
+**Décision.** Une ligne `CorrectionAttempt` est écrite **avant** la création de l'exécution, avec un
+index unique `(sourceRunId, attempt)`. La réservation est le verrou.
+
+**Justification.** Le moment dangereux est l'intervalle entre « NOX décide de corriger » et
+« l'exécution existe ». Un arrêt du serveur web dans cet intervalle laisserait, sans réservation, un
+échec qu'une seconde constatation relancerait.
+
+Un verrou en mémoire n'aurait survécu ni à un redémarrage, ni à deux processus — c'est le
+raisonnement de `TASK-026` sur la file et de `TASK-027` sur les lots, appliqué à un troisième point
+de concurrence. Dix constatations simultanées n'obtiennent qu'une réservation, et un
+`Request changes` humain concurrent reçoit un refus nommé plutôt qu'une exception.
+
+Une réservation non consommée est **rendue**, avec sa raison. « NOX a renoncé » et « NOX corrige »
+sont deux états qu'un utilisateur doit pouvoir distinguer sans ouvrir la base.
+
+### D-342 — Une panne d'infrastructure n'est jamais un échec de code
+
+**Décision.** Un lot `ERROR` ne déclenche aucune correction, même lorsqu'une autre commande a
+réellement échoué à côté. Le geste qui s'applique est `Retry automated validation`.
+
+**Justification.** La preuve est incomplète. Corriger sur une image partielle reviendrait à demander
+à Claude Code de réparer ce qu'on n'a pas fini de regarder — et un runner arrêté ne dit rien du
+code. Si la reprise produit un échec réel, la correction redevient possible : rien n'est perdu,
+seul l'ordre change.
+
+### D-343 — Toute correction reçoit une validation complète et neuve
+
+**Décision.** Après une correction réussie, NOX rejoue le plan autonome **entier** de la nouvelle
+exécution. Aucun résultat n'est repris d'une tentative précédente.
+
+**Justification.** Corriger `npm test` peut casser `npm run typecheck`, qui passait avant. Combiner
+« test passé hier » et « build passé aujourd'hui » décrirait un état qui n'a jamais existé — et
+c'est exactement l'état qu'on livrerait.
+
+Le coût est réel : chaque tentative relance tout. C'est le prix d'une preuve qui décrit le présent.
+
+### D-344 — Une confirmation humaine ne traverse jamais une correction
+
+**Décision.** Les confirmations de critères humains appartiennent à la décision de review d'une
+exécution. Une correction crée une exécution neuve, donc une review neuve, donc de nouvelles
+confirmations.
+
+**Justification.** « J'ai vérifié que la navigation clavier est correcte » porte sur un état du
+code. Une correction change cet état ; reporter la confirmation reviendrait à faire dire à
+quelqu'un qu'il a vérifié quelque chose qu'il n'a pas vu.
+
+### D-345 — Une validation qui modifie le dépôt rend la main, plutôt que d'engager une correction
+
+**Décision.** Quand toutes les preuves passent mais qu'une validation a modifié des fichiers
+suivis, NOX refuse la correction automatique avec un code dédié — `CORRECTION_REPOSITORY_MUTATED` —
+au lieu de la confondre avec « rien n'a échoué ».
+
+**Justification.** Une reprise exige que le dossier de travail soit **exactement** celui qui a été
+relu : branche, `HEAD` et empreinte comprises. Après une validation qui l'a modifié, il ne l'est
+plus. Réancrer l'empreinte sur l'état d'après-validation aurait sauvé ce cas, mais aurait élargi le
+contrat de reprise de `TASK-012` pour tous les autres — et ce contrat est précisément ce qui
+distingue « le travail qu'on vient de relire » de « quelque chose d'autre ».
+
+NOX nomme donc le défaut, ne restaure rien, et laisse un humain décider. Le contexte de correction,
+lui, décrit la mutation et les fichiers concernés : si l'utilisateur remet le dépôt en état et
+demande une correction, Claude Code sait exactement quoi réparer.
+
+### D-346 — L'instantané de review est capturé à la finalisation, pas au rendu
+
+**Décision.** `reconcileRun` transfère la review du runner vers la base dès qu'une exécution devient
+finale, avant de déclencher la validation autonome. Les pages continuent d'appeler `syncRunReview`,
+qui reste idempotent.
+
+**Justification.** Une correction — humaine ou automatique — exige que la review existe : c'est elle
+qui prouve que le dossier de travail est encore celui qui a été relu. Capturer au rendu marchait
+tant que seul un humain corrigeait, parce qu'il arrivait forcément après la page. Depuis
+`TASK-028`, la décision peut suivre la finalisation de quelques millisecondes, et l'ordre devenait
+une course perdue d'avance.
+
+Ce n'est pas un détail d'ordonnancement : c'est l'événement de finalisation qui produit désormais
+tout ce qu'il doit produire, au lieu d'en laisser une partie à l'écran qui l'affichera.

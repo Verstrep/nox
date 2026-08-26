@@ -244,13 +244,25 @@ export {
   getReviewFeedback,
   getRunResumeContext,
   listFeedbacksForSourceRun,
-  startCorrectionFromFeedback,
   startTaskCorrection,
   type CreateFeedbackResult,
   type ReviewFeedbackView,
   type RunResumeContext,
-  type StartCorrectionResult,
 } from "./review-feedback.js";
+
+export {
+  abandonCorrection,
+  getCorrectionAttempt,
+  getCorrectionAttemptForRun,
+  getHeldCorrection,
+  listCorrectionAttempts,
+  readCorrectionChain,
+  reserveCorrection,
+  startCorrectionRun,
+  type CorrectionAttemptRow,
+  type ReserveCorrectionResult,
+  type StartCorrectionResult,
+} from "./correction-attempts.js";
 
 export {
   InvalidProjectMemoryRecordError,

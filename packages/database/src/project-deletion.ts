@@ -56,6 +56,9 @@ export const PROJECT_DELETION_ORDER = [
   "runHumanCriterionConfirmation",
   "runReviewDecision",
   "architectRunReview",
+  // Les reservations de correction avant les executions qu'elles designent :
+  // leurs deux liens vers `Run` sont `Restrict`, comme celui de `ReviewFeedback`.
+  "correctionAttempt",
   "reviewFeedback",
   "run",
   "taskQueueEntry",
@@ -198,6 +201,7 @@ export async function deleteProjectState(
       architectRunReview: (await tx.architectRunReview.deleteMany({ where: byRun })).count,
       // Un feedback reference une tache **et** deux executions : il part avant
       // les trois.
+      correctionAttempt: (await tx.correctionAttempt.deleteMany({ where: byTask })).count,
       reviewFeedback: (await tx.reviewFeedback.deleteMany({ where: byTask })).count,
       run: (await tx.run.deleteMany({ where: byTask })).count,
       // La file avant les taches : une inscription ne survit jamais au projet,

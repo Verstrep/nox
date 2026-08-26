@@ -56,17 +56,27 @@ export function buildExecutionPrompt(
  * tache, pas du run relu : une correction doit satisfaire ce que la tache exige
  * aujourd'hui, et c'est cette liste-la qui sera recopiee dans le nouveau run. Le
  * run precedent, lui, garde la sienne — c'est le principe de la recopie.
+ *
+ * Le contrat gele et les preuves arrivent **deja rendus et bornes** : ce module
+ * assemble et empreinte, il ne decide pas de ce qui entre dans un prompt.
  */
 export function buildCorrectionPrompt(input: {
   task: DevelopmentTaskDetail;
   sourceRunCode: string;
-  feedback: string;
+  /** `null` lorsque les preuves de NOX suffisent et que personne n'a ecrit. */
+  feedback: string | null;
+  /** Contrat gele deja rendu, ou `null` pour la forme courte historique. */
+  contract?: string | null;
+  /** Preuves d'echec deja rendues et bornees. */
+  evidence?: string | null;
 }): ExecutionPrompt {
   const prompt = renderClaudeCorrectionPrompt({
     taskCode: input.task.code,
     taskTitle: input.task.title,
     sourceRunCode: input.sourceRunCode,
     feedback: input.feedback,
+    contract: input.contract ?? null,
+    evidence: input.evidence ?? null,
     validationCommands: input.task.validationCommands,
     kind: input.task.kind,
   });

@@ -88,6 +88,7 @@ function batch(overrides: Partial<AutonomousValidationBatchRow> = {}): Autonomou
     errorMessage: null,
     trackedStateBefore: "a".repeat(64),
     trackedStateAfter: "a".repeat(64),
+    mutatedFiles: null,
     results: [],
     ...overrides,
   };
@@ -106,6 +107,7 @@ function review(overrides: Partial<VerificationReview> = {}): VerificationReview
     batchSettled: true,
     retryAvailable: false,
     trackedFilesMutated: false,
+    repositoryMutationObserved: false,
     decision: null,
     ...overrides,
   };

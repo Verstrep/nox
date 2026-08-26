@@ -31,9 +31,10 @@ import {
   getTaskById,
   getRunResumeContext,
   listFeedbacksForSourceRun,
+  reserveCorrection,
   saveRunReview,
   seedRunValidations,
-  startCorrectionFromFeedback,
+  startCorrectionRun,
   startTaskCorrection,
   startTaskExecution,
   toDatabaseFilePath,
@@ -41,6 +42,8 @@ import {
   updateTaskStatus,
   type DatabaseClient,
 } from "../dist/index.js";
+
+import { CORRECTION_SOURCE } from "@nox/shared";
 
 const MIGRATIONS_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -283,7 +286,51 @@ describe("listFeedbacksForSourceRun", () => {
   });
 });
 
-describe("startCorrectionFromFeedback", () => {
+/**
+ * Reserve puis lance, comme le fait le moteur de correction.
+ *
+ * Deux ecritures, une seule intention : la reservation prend la place, le
+ * lancement la consomme. Les rejouer ici plutot que de les cacher derriere une
+ * fonction de la base est deliberé — c'est exactement la sequence que le web
+ * execute, et un test qui en testerait une autre ne prouverait rien.
+ */
+async function launch(input: {
+  feedbackId: string;
+  taskId: string;
+  parentRunId: string;
+  prompt: string;
+  promptSha256: string;
+  runnerRunId: string;
+  resumedFromSessionId: string;
+}) {
+  const feedback = await getReviewFeedback(db, input.feedbackId);
+  if (feedback === null) {
+    return { ok: false, reason: "not_found" } as const;
+  }
+  const reserved = await reserveCorrection(db, {
+    taskId: feedback.taskId,
+    sourceRunId: feedback.sourceRunId,
+    source: CORRECTION_SOURCE.HUMAN_FEEDBACK,
+    feedbackId: input.feedbackId,
+  });
+  if (!reserved.ok) {
+    return {
+      ok: false,
+      reason: reserved.reason === "already_reserved" ? "already_used" : "not_found",
+    } as const;
+  }
+  return startCorrectionRun(db, {
+    attemptId: reserved.attempt.id,
+    taskId: input.taskId,
+    parentRunId: input.parentRunId,
+    prompt: input.prompt,
+    promptSha256: input.promptSha256,
+    runnerRunId: input.runnerRunId,
+    resumedFromSessionId: input.resumedFromSessionId,
+  });
+}
+
+describe("lancement d'une correction depuis un feedback", () => {
   async function prepared(): Promise<{
     projectId: string;
     taskId: string;
@@ -303,7 +350,7 @@ describe("startCorrectionFromFeedback", () => {
   it("cree une execution de correction rattachee a son parent", async () => {
     const { taskId, runId, feedbackId } = await prepared();
 
-    const result = await startCorrectionFromFeedback(db, {
+    const result = await launch({
       feedbackId,
       taskId,
       parentRunId: runId,
@@ -322,7 +369,7 @@ describe("startCorrectionFromFeedback", () => {
   it("consomme le feedback, une fois", async () => {
     const { taskId, runId, feedbackId } = await prepared();
 
-    const result = await startCorrectionFromFeedback(db, {
+    const result = await launch({
       feedbackId,
       taskId,
       parentRunId: runId,
@@ -342,7 +389,7 @@ describe("startCorrectionFromFeedback", () => {
   it("refuse une seconde utilisation du meme feedback", async () => {
     const { taskId, runId, feedbackId } = await prepared();
 
-    const first = await startCorrectionFromFeedback(db, {
+    const first = await launch({
       feedbackId,
       taskId,
       parentRunId: runId,
@@ -353,7 +400,7 @@ describe("startCorrectionFromFeedback", () => {
     });
     assert.ok(first.ok);
 
-    const second = await startCorrectionFromFeedback(db, {
+    const second = await launch({
       feedbackId,
       taskId,
       parentRunId: runId,
@@ -372,7 +419,7 @@ describe("startCorrectionFromFeedback", () => {
 
     // Le double clic : deux appels lances sans attendre le premier.
     const [left, right] = await Promise.all([
-      startCorrectionFromFeedback(db, {
+      launch({
         feedbackId,
         taskId,
         parentRunId: runId,
@@ -381,7 +428,7 @@ describe("startCorrectionFromFeedback", () => {
         runnerRunId: runnerRunId(),
         resumedFromSessionId: "session-1",
       }),
-      startCorrectionFromFeedback(db, {
+      launch({
         feedbackId,
         taskId,
         parentRunId: runId,
@@ -403,7 +450,7 @@ describe("startCorrectionFromFeedback", () => {
     const { taskId, feedbackId } = await prepared();
     const other = await newSourceRun();
 
-    const result = await startCorrectionFromFeedback(db, {
+    const result = await launch({
       feedbackId,
       taskId,
       parentRunId: other.runId,
@@ -420,7 +467,7 @@ describe("startCorrectionFromFeedback", () => {
   it("refuse un feedback inexistant", async () => {
     const { taskId, runId } = await prepared();
 
-    const result = await startCorrectionFromFeedback(db, {
+    const result = await launch({
       feedbackId: "feedback-inexistant",
       taskId,
       parentRunId: runId,
@@ -438,7 +485,7 @@ describe("startCorrectionFromFeedback", () => {
     const { taskId, runId, feedbackId } = await prepared();
     const before = await getRunById(db, runId);
 
-    await startCorrectionFromFeedback(db, {
+    await launch({
       feedbackId,
       taskId,
       parentRunId: runId,
@@ -458,7 +505,7 @@ describe("startCorrectionFromFeedback", () => {
   it("permet de retrouver le feedback depuis la correction", async () => {
     const { taskId, runId, feedbackId } = await prepared();
 
-    const result = await startCorrectionFromFeedback(db, {
+    const result = await launch({
       feedbackId,
       taskId,
       parentRunId: runId,
@@ -477,7 +524,7 @@ describe("startCorrectionFromFeedback", () => {
   it("supporte une chaine de deux corrections", async () => {
     const { taskId, runId, feedbackId } = await prepared();
 
-    const first = await startCorrectionFromFeedback(db, {
+    const first = await launch({
       feedbackId,
       taskId,
       parentRunId: runId,
@@ -495,7 +542,7 @@ describe("startCorrectionFromFeedback", () => {
     });
     assert.ok(second.ok);
 
-    const chained = await startCorrectionFromFeedback(db, {
+    const chained = await launch({
       feedbackId: second.feedback.id,
       taskId,
       parentRunId: first.run.id,
@@ -536,7 +583,7 @@ describe("getRunResumeContext", () => {
     });
     assert.ok(created.ok);
 
-    await startCorrectionFromFeedback(db, {
+    await launch({
       feedbackId: created.feedback.id,
       taskId,
       parentRunId: runId,
@@ -630,7 +677,7 @@ describe("propagation des validations vers une correction", () => {
     assert.ok(feedback.ok);
 
     // 2. Le run de correction, cree a partir du feedback.
-    const correction = await startCorrectionFromFeedback(db, {
+    const correction = await launch({
       feedbackId: feedback.feedback.id,
       taskId,
       parentRunId: runId,
@@ -668,7 +715,7 @@ describe("propagation des validations vers une correction", () => {
     });
     assert.ok(feedback.ok);
 
-    const correction = await startCorrectionFromFeedback(db, {
+    const correction = await launch({
       feedbackId: feedback.feedback.id,
       taskId,
       parentRunId: runId,

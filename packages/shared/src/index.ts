@@ -220,6 +220,50 @@ export {
 export type { CorrectionPromptInput } from "./claude-correction-prompt.js";
 
 export {
+  CORRECTION_ATTEMPT_STATUS,
+  CORRECTION_ATTEMPT_STATUSES,
+  CORRECTION_EVIDENCE_LIMITS,
+  CORRECTION_REFUSAL,
+  CORRECTION_REFUSAL_CODES,
+  CORRECTION_SOURCE,
+  CORRECTION_SOURCES,
+  CORRECTION_STAGE,
+  CORRECTION_STAGES,
+  CORRECTION_TRUNCATION_NOTICE,
+  MAX_AUTOMATED_CORRECTION_ATTEMPTS,
+  RUN_PROVENANCE,
+  attemptHoldsPlace,
+  checkAutomaticCorrection,
+  checkHumanCorrection,
+  deriveCorrectionCycle,
+  isCorrectionAttemptStatus,
+  isCorrectionSource,
+  queueBlockedByCorrection,
+  runProvenance,
+} from "./correction-cycle.js";
+
+export type {
+  AutomaticCorrectionDecision,
+  AutomaticCorrectionFacts,
+  CorrectionAttemptFacts,
+  CorrectionAttemptStatus,
+  CorrectionCycleFacts,
+  CorrectionCycleState,
+  CorrectionRefusalCode,
+  CorrectionSource,
+  CorrectionStage,
+  RunProvenance,
+} from "./correction-cycle.js";
+
+export { renderCorrectionEvidence, renderFrozenContract } from "./correction-evidence.js";
+
+export type {
+  CorrectionCommandEvidence,
+  CorrectionCriterionEvidence,
+  CorrectionEvidence,
+} from "./correction-evidence.js";
+
+export {
   RESUME_REFUSAL,
   REVIEW_FEEDBACK_LIMITS,
   RUN_KIND,
@@ -813,6 +857,7 @@ export type {
 } from "./verification.js";
 
 export {
+  TRACKED_STATE_FILE_LIMIT,
   VALIDATION_OUTPUT_LIMIT,
   boundOutput,
   isRunValidationSuccess,

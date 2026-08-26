@@ -40,6 +40,7 @@ base SQLite dans le dossier du projet.
 | **Cycle de vie** | Renommer un projet, ou le supprimer de NOX — le repository, son code et son `.git` restent intacts |
 | **File d'exécution** | Inscrire plusieurs tâches prêtes et laisser NOX les lancer une à une, sur une autorisation explicite |
 | **Validation autonome** | Dire avant l'exécution quels critères une commande peut prouver, et laisser NOX obtenir lui-même cette preuve |
+| **Correction pilotée** | Repartir d'un échec que NOX a constaté, sans recopier un seul log — et, sous file active, le laisser reprendre au plus deux fois |
 | **File d'exécution** | Inscrire plusieurs tâches prêtes, démarrer la file, et laisser NOX les lancer une à une — jamais sans autorisation explicite |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
@@ -281,6 +282,10 @@ Deux points à retenir avant un premier lancement :
 - **Ce que Claude Code raconte n'est pas une preuve.** « J'ai lancé `npm test` » est affiché, et
   conservé. Ce qui soutient un critère est ce que **NOX** a lancé, après coup, dans le même
   repository.
+- **Une correction repart d'un constat, pas d'un récit.** Quand une preuve échoue, le critère, la
+  commande, son code de sortie et ses sorties partent avec la reprise : vous n'avez rien à
+  recopier. Démarrer une file autorise en plus NOX à reprendre **au plus deux fois** par tâche ;
+  au-delà, la main vous revient, et l'écran le dit.
 
 ## Convention de langue de l'interface
 

@@ -27,6 +27,7 @@ import {
 } from "@/lib/queue-display";
 import { describeWaitingDependencies } from "@/lib/task-dependencies";
 import { taskStatusTone, taskUrl } from "@/lib/task-display";
+import { loadTaskCorrectionCycle } from "@/lib/correction-cycle";
 import { loadReviewWait } from "@/lib/verification-review";
 
 import {
@@ -75,9 +76,22 @@ export default async function QueuePage({ params }: { params: Promise<{ id: stri
       ? await loadReviewWait(getDatabaseClient(), queue.current.taskId)
       : null;
 
-  const stateLabel = reviewWait === null ? queueStateLabel(queue.state) : queueReviewLabel(reviewWait);
+  // Le cycle de correction, quand il y en a un. Lecture seule egalement : rien
+  // ici ne reserve, ne lance et ne corrige — ouvrir la file n'a jamais rien
+  // demarre, et TASK-028 ne change pas cette regle.
+  const correctionCycle =
+    reviewWait === null || queue.current === null
+      ? null
+      : (await loadTaskCorrectionCycle(getDatabaseClient(), queue.current.taskId))?.cycle ?? null;
+
+  const stateLabel =
+    reviewWait === null
+      ? queueStateLabel(queue.state)
+      : queueReviewLabel(reviewWait, correctionCycle);
   const stateExplanation =
-    reviewWait === null ? queueStateExplanation(queue.state) : queueReviewExplanation(reviewWait);
+    reviewWait === null
+      ? queueStateExplanation(queue.state)
+      : queueReviewExplanation(reviewWait, correctionCycle);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">

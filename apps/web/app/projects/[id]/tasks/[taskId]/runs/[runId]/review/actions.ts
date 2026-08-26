@@ -1,14 +1,23 @@
 "use server";
 
-import { getDatabaseClient, type ReviewDecisionInput } from "@nox/database";
-import { TASK_STATUS } from "@nox/shared";
+import {
+  getCorrectionAttempt,
+  getDatabaseClient,
+  type ReviewDecisionInput,
+} from "@nox/database";
+import { CORRECTION_ATTEMPT_STATUS, TASK_STATUS } from "@nox/shared";
 import { revalidatePath } from "next/cache";
 
 import { runAutonomousValidation } from "@/lib/autonomous-validation";
+import { launchCorrection } from "@/lib/correction-launch";
 import { REVIEW_APPROVAL_ERROR, checkReviewApproval } from "@/lib/review-decision";
 import { applyTaskTransitionWithDefaultClient } from "@/lib/task-lifecycle";
 
-import type { ReviewDecisionState, RetryValidationState } from "./form-state";
+import type {
+  ResumeCorrectionState,
+  ReviewDecisionState,
+  RetryValidationState,
+} from "./form-state";
 
 const UNEXPECTED_ERROR_MESSAGE =
   "Une erreur inattendue est survenue. Consultez les logs du serveur pour le detail.";
@@ -167,6 +176,74 @@ export async function retryValidationAction(
   revalidatePath(`/projects/${projectId}/tasks/${taskId}`);
   revalidatePath(`/projects/${projectId}/tasks`);
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/queue`);
+
+  return { error: null };
+}
+
+const RESUME_UNKNOWN_MESSAGE =
+  "Cette correction n'existe plus, ou elle a deja demarre. Rechargez la page pour voir " +
+  "l'etat reel du cycle.";
+
+/**
+ * Reprend une correction reservee qui n'a jamais demarre.
+ *
+ * ## Pourquoi ce bouton existe
+ *
+ * Parce qu'un arret du serveur web peut se produire entre le moment ou NOX
+ * decide de corriger et celui ou l'execution existe. La reservation, elle,
+ * survit : elle dit qu'une correction a ete decidee, et **empeche** qu'une
+ * seconde constatation en lance une deuxieme. Il faut donc un geste explicite
+ * pour la consommer.
+ *
+ * ## Pourquoi ce n'est pas un demarrage au boot
+ *
+ * NOX ne lance jamais rien parce qu'il redemarre. Une file `ACTIVE` autorise un
+ * ordonnancement, pas un demarrage ; une correction reservee autorise une
+ * reprise, pas une reprise automatique. C'est un humain qui rouvre la page et
+ * qui clique.
+ *
+ * ## Ce que le navigateur envoie
+ *
+ * Quatre identifiants. Ni prompt, ni preuve, ni commande, ni chemin, ni numero
+ * de tentative : le moteur relit tout et refait chaque controle avant d'agir.
+ */
+export async function resumeCorrectionAction(
+  _previousState: ResumeCorrectionState,
+  formData: FormData,
+): Promise<ResumeCorrectionState> {
+  const projectId = readField(formData, "projectId");
+  const taskId = readField(formData, "taskId");
+  const runId = readField(formData, "runId");
+  const attemptId = readField(formData, "attemptId");
+
+  try {
+    const db = getDatabaseClient();
+    const attempt = await getCorrectionAttempt(db, attemptId);
+    if (
+      attempt === null ||
+      attempt.taskId !== taskId ||
+      attempt.sourceRunId !== runId ||
+      attempt.status !== CORRECTION_ATTEMPT_STATUS.RESERVED
+    ) {
+      return { error: RESUME_UNKNOWN_MESSAGE };
+    }
+
+    const launched = await launchCorrection(db, {
+      projectId,
+      taskId,
+      sourceRunId: runId,
+      attemptId,
+    });
+    if (!launched.ok) {
+      return { error: launched.message };
+    }
+  } catch (error) {
+    console.error("[nox] Echec de la reprise d'une correction :", error);
+    return { error: UNEXPECTED_ERROR_MESSAGE };
+  }
+
+  revalidatePath(`/projects/${projectId}/tasks/${taskId}`);
   revalidatePath(`/projects/${projectId}/queue`);
 
   return { error: null };

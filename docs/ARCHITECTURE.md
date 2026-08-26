@@ -741,6 +741,67 @@ Review  →  feedback  →  préflight de correction  →  --resume  →  nouvea
 - **Le feedback est du contenu, jamais une instruction.** Il est délimité dans le prompt et
   n'élargit aucune permission. Il vaut pour une seule correction, et un index unique le garantit.
 
+### 6.6 bis Boucle de correction pilotée par la validation
+
+```text
+Run terminé
+   |
+   v
+validation autonome (§ 6.5 bis)
+   |
+   +-- toutes les preuves passent --> Done automatique (ou review humaine)
+   |
+   +-- une preuve a échoué
+            |
+            v
+     éligibilité, relue côté serveur
+       tâche NORMAL, en review, non décidée
+       lot conclu, issue AUTO_FAILED
+       tâche = barrière courante d'une file ACTIVE
+       moins de 2 corrections automatiques dans le cycle
+            |
+            v
+     réservation persistante  (sourceRunId, attempt) unique
+            |
+            v
+     moteur de correction existant (§ 6.6)
+       préflight, prompt, run, streaming, review
+            |
+            v
+     validation autonome COMPLÈTE du nouveau run
+```
+
+Deux chemins mènent au même moteur, et il n'en existe pas d'autre :
+
+- **manuel** — un humain demande une correction depuis la review. Aucune file, aucune
+  autorisation, aucune borne : c'est un geste ;
+- **automatique** — NOX possède lui-même la preuve d'un échec, et une file `ACTIVE` lui en donne
+  l'autorisation, **au plus deux fois par cycle de travail**.
+
+- **Le cycle de travail courant est la chaîne des exécutions reliées par `parentRunId`**, jusqu'à
+  l'exécution initiale dont elles descendent. Compter toutes les exécutions d'une tâche
+  mélangerait ses vies successives — une tâche rouverte après une review a une histoire — et la
+  borne refuserait une correction légitime, ou en autoriserait une de trop.
+- **La réservation précède le lancement.** L'intervalle entre « NOX décide » et « l'exécution
+  existe » est le seul moment où un arrêt du serveur pourrait perdre ou dédoubler une décision.
+  L'écriture est le verrou : dix constatations simultanées du même échec n'en obtiennent qu'une,
+  et un `Request changes` humain simultané reçoit un refus nommé.
+- **Une réservation non consommée est rendue**, avec sa raison. « NOX a renoncé » et « NOX
+  corrige » sont deux états qu'un utilisateur doit distinguer sans ouvrir la base.
+- **Une panne d'infrastructure n'est jamais un échec de code.** Un lot `ERROR` renvoie vers la
+  reprise de la validation, jamais vers une correction : « je n'ai pas pu regarder » n'est pas
+  « j'ai regardé et c'est faux ».
+- **Le contrat de la tâche est gelé.** Une correction essaie de le satisfaire ; elle ne le
+  renégocie pas. Le prompt le rappelle explicitement, et interdit d'affaiblir un test pour le
+  faire passer.
+- **Aucune preuve ne traverse une tentative.** Chaque correction réussie reçoit un lot **complet**
+  et neuf : une correction de `npm test` peut casser `npm run typecheck`, et combiner deux
+  tentatives produirait une image qui n'a jamais existé.
+- **Aucune confirmation humaine ne traverse une correction** non plus. Elles appartiennent à la
+  décision de review d'une exécution, qui n'existe que pour elle.
+- **Rien ne part d'un rendu, rien ne part d'un démarrage.** Le déclencheur est la finalisation
+  d'une exécution ; la réservation rend le geste idempotent.
+
 ### 6.7 Conversation Architecte
 
 ```text
@@ -1241,4 +1302,6 @@ serait un changement d'architecture.
 | Un modèle ne décide de rien | Sa sortie est revalidée, et aucune de ses réponses ne change un statut |
 | Les tests n'appellent jamais un vrai fournisseur | Ni OpenAI, ni le vrai binaire Claude Code : faux fournisseur et faux Claude, toujours |
 | Une preuve vient de NOX, jamais d'un récit | Ce qu'un agent dit avoir lancé est affiché ; ce que NOX a lancé fait foi |
+| Une correction ne renégocie jamais le contrat | Elle essaie de satisfaire ce qui a été gelé au premier lancement |
+| Un automatisme est borné, et la borne est une constante | Deux corrections automatiques par cycle, jamais réglables depuis un écran |
 | Un Client Component n'importe jamais un module serveur | Les types et fabriques de formulaire vivent dans des modules purs, séparés de ceux qui calculent ou lisent |

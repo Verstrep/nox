@@ -32,6 +32,7 @@ import {
   getTaskById,
   readVerificationPlan,
   recordValidationResult,
+  reserveCorrection,
   reserveValidationBatch,
   startValidationBatch,
   summarizeBatchStatus,
@@ -39,6 +40,8 @@ import {
 } from "@nox/database";
 import {
   AUTONOMOUS_VALIDATION_STATUS,
+  CORRECTION_REFUSAL,
+  CORRECTION_SOURCE,
   REVIEW_DECISION_SOURCE,
   RUN_STATUS,
   TASK_KIND,
@@ -50,6 +53,7 @@ import {
   deriveTaskVerificationOutcome,
   type AutonomousCommandOutcome,
   type AutonomousValidationStatus,
+  type CorrectionRefusalCode,
   type ValidationBatchStatus,
 } from "@nox/shared";
 
@@ -83,6 +87,11 @@ export const VALIDATION_SKIP = {
 
 export type ValidationSkipReason = (typeof VALIDATION_SKIP)[keyof typeof VALIDATION_SKIP];
 
+/** Ce qu'une tentative de correction automatique a produit. */
+export type AutomaticCorrectionResult =
+  | { started: true; runId: string; attempt: number }
+  | { started: false; code: CorrectionRefusalCode | "RUNNER" | "UNKNOWN" };
+
 export type AutonomousValidationOutcome =
   | { ran: false; reason: ValidationSkipReason; autoCompleted: false }
   | {
@@ -92,6 +101,8 @@ export type AutonomousValidationOutcome =
       autoCompleted: boolean;
       /** Avancement tente apres une completion automatique, sinon `null`. */
       dispatch: AdvanceQueueResult | null;
+      /** Correction automatique tentee apres un echec, sinon `null`. */
+      correction: AutomaticCorrectionResult | null;
     };
 
 function skip(reason: ValidationSkipReason): AutonomousValidationOutcome {
@@ -242,6 +253,11 @@ export async function runAutonomousValidation(
   await completeValidationBatch(db, reserved.batchId, {
     status: batchStatus,
     trackedStateAfter: after.ok ? after.value.digest : null,
+    // Ce que les deux empreintes ne disent pas : **quoi**. Sert a nommer le
+    // probleme dans un contexte de correction, jamais a decider d'une
+    // completion automatique — celle-ci reste tranchee par les empreintes.
+    // `null` quand NOX ne sait pas ; une liste vide voudrait dire « aucun ».
+    mutatedFiles: mutatedFilesBetween(before, after),
     errorCode: infrastructureError?.code ?? null,
     errorMessage: infrastructureError?.message ?? null,
   });
@@ -266,12 +282,17 @@ export async function runAutonomousValidation(
   });
 
   if (!decision.eligible) {
+    // Le lot vient de conclure : c'est **cette transition** qui peut ouvrir une
+    // correction, jamais une consultation. La reservation persistante rend le
+    // geste idempotent — vingt rafraichissements n'en produisent aucune de plus.
+    const correction = await maybeStartAutomaticCorrection(db, runId, task.id);
     return {
       ran: true,
       batchId: reserved.batchId,
       batchStatus,
       autoCompleted: false,
       dispatch: null,
+      correction,
     };
   }
 
@@ -287,7 +308,103 @@ export async function runAutonomousValidation(
     batchStatus,
     autoCompleted: completed.ok,
     dispatch: completed.ok ? completed.dispatch : null,
+    correction: null,
   };
+}
+
+/**
+ * Les fichiers suivis qui ont bouge pendant le lot.
+ *
+ * `null` des qu'un des deux releves manque : ne pas savoir n'est pas « aucun ».
+ * La difference est symetrique — un fichier qui redevient propre a bouge autant
+ * qu'un fichier qui se salit.
+ */
+function mutatedFilesBetween(
+  before: { ok: boolean; value?: { files?: readonly string[] } },
+  after: { ok: boolean; value?: { files?: readonly string[] } },
+): string[] | null {
+  const start = before.ok ? before.value?.files : undefined;
+  const end = after.ok ? after.value?.files : undefined;
+  if (start === undefined || end === undefined) {
+    return null;
+  }
+  const left = new Set(start);
+  const right = new Set(end);
+  const changed = new Set<string>();
+  for (const entry of start) {
+    if (!right.has(entry)) {
+      changed.add(entry);
+    }
+  }
+  for (const entry of end) {
+    if (!left.has(entry)) {
+      changed.add(entry);
+    }
+  }
+  return [...changed].sort();
+}
+
+/**
+ * Tente une correction automatique apres un lot en echec.
+ *
+ * ## Ce que cette fonction ne decide pas
+ *
+ * Elle ne decide ni de l'eligibilite, ni des permissions, ni du prompt. Elle
+ * relit l'etat, demande la decision a `checkAutomaticCorrection`, reserve, puis
+ * passe la main au **moteur de correction existant**. Il n'existe pas de second
+ * moteur Claude pour l'automatisme, et il ne doit pas en exister.
+ *
+ * ## Pourquoi la reservation precede le lancement
+ *
+ * Parce que l'intervalle entre « NOX decide » et « l'execution existe » est le
+ * seul moment ou un arret du serveur pourrait faire perdre — ou dedoubler — une
+ * decision. La reservation est ecrite d'abord, et l'index unique fait que dix
+ * constatations simultanees n'en obtiennent qu'une.
+ *
+ * ## Ce qu'un echec ici ne fait pas
+ *
+ * Il ne fait jamais tomber la finalisation de l'execution. Une correction qui
+ * ne part pas laisse la tache en review, avec un etat lisible — c'est la meme
+ * regle que pour la capture de review et pour le lot lui-meme.
+ */
+export async function maybeStartAutomaticCorrection(
+  db: DatabaseClient,
+  runId: string,
+  taskId: string,
+): Promise<AutomaticCorrectionResult> {
+  const { loadCorrectionContext } = await import("./correction-cycle.ts");
+  const context = await loadCorrectionContext(db, { runId, taskId });
+  if (context === null) {
+    return { started: false, code: "UNKNOWN" };
+  }
+  if (!context.automatic.eligible) {
+    return { started: false, code: context.automatic.code };
+  }
+
+  const reserved = await reserveCorrection(db, {
+    taskId,
+    sourceRunId: runId,
+    sourceBatchId: context.review.batch?.id ?? null,
+    source: CORRECTION_SOURCE.AUTOMATED_VALIDATION,
+    automatedAttempt: context.automatic.attempt,
+  });
+  if (!reserved.ok) {
+    // Quelqu'un — une autre constatation, ou un humain — a pris la place le
+    // premier. C'est exactement ce que la reservation existe pour produire.
+    return { started: false, code: CORRECTION_REFUSAL.ALREADY_RESERVED };
+  }
+
+  const { launchCorrection } = await import("./correction-launch.ts");
+  const launched = await launchCorrection(db, {
+    projectId: context.task.projectId,
+    taskId,
+    sourceRunId: runId,
+    attemptId: reserved.attempt.id,
+  });
+
+  return launched.ok
+    ? { started: true, runId: launched.runId, attempt: context.automatic.attempt }
+    : { started: false, code: launched.code };
 }
 
 /**

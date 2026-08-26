@@ -60,6 +60,8 @@ export type AutonomousValidationBatchRow = {
   errorMessage: string | null;
   trackedStateBefore: string | null;
   trackedStateAfter: string | null;
+  /** Fichiers suivis modifies par la validation, ou `null` si NOX l'ignore. */
+  mutatedFiles: readonly string[] | null;
   results: readonly AutonomousValidationResultRow[];
 };
 
@@ -245,6 +247,8 @@ export async function completeValidationBatch(
   input: {
     status: ValidationBatchStatus;
     trackedStateAfter: string | null;
+    /** `null` quand NOX ne sait pas, jamais quand il sait qu'il n'y en a aucun. */
+    mutatedFiles?: readonly string[] | null;
     errorCode?: string | null;
     errorMessage?: string | null;
   },
@@ -255,6 +259,10 @@ export async function completeValidationBatch(
       status: input.status,
       completedAt: new Date(),
       trackedStateAfter: input.trackedStateAfter,
+      mutatedFiles:
+        input.mutatedFiles === undefined || input.mutatedFiles === null
+          ? null
+          : input.mutatedFiles.join("\n"),
       errorCode: input.errorCode ?? null,
       errorMessage: input.errorMessage ?? null,
     },
@@ -308,6 +316,7 @@ export async function getLatestValidationBatch(
     errorMessage: batch.errorMessage,
     trackedStateBefore: batch.trackedStateBefore,
     trackedStateAfter: batch.trackedStateAfter,
+    mutatedFiles: readMutatedFiles(batch.mutatedFiles),
     results: batch.results.map(toResultRow),
   };
 }
@@ -334,6 +343,23 @@ export async function listValidationBatches(
     errorMessage: batch.errorMessage,
     trackedStateBefore: batch.trackedStateBefore,
     trackedStateAfter: batch.trackedStateAfter,
+    mutatedFiles: readMutatedFiles(batch.mutatedFiles),
     results: batch.results.map(toResultRow),
   }));
+}
+
+/**
+ * Relit la liste des fichiers modifies par une validation.
+ *
+ * `null` reste `null` : un lot anterieur a TASK-028 ne dit pas « aucun fichier »,
+ * il ne dit rien. Une chaine vide, elle, veut bien dire « aucun ».
+ */
+function readMutatedFiles(value: string | null): string[] | null {
+  if (value === null) {
+    return null;
+  }
+  return value
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
 }

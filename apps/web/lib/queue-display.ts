@@ -10,15 +10,20 @@
  */
 
 import {
+  CORRECTION_STAGE,
   EXECUTION_QUEUE_ERROR,
-  REVIEW_WAIT,
+  MAX_AUTOMATED_CORRECTION_ATTEMPTS,
   QUEUE_DISPATCH,
   QUEUE_STATE,
+  REVIEW_WAIT,
+  type CorrectionCycleState,
   type ExecutionQueueErrorCode,
   type QueueDispatchOutcome,
   type QueueState,
   type ReviewWait,
 } from "@nox/shared";
+
+import { correctionStageDetail, correctionStageLabel } from "./correction-display.ts";
 
 /** Page de la file d'execution d'un projet. */
 export function queueUrl(projectId: string): string {
@@ -92,12 +97,30 @@ export function queueStateExplanation(state: QueueState): string {
  * Le decompte des criteres humains est affiche : « il vous reste deux choses a
  * regarder » est actionnable la ou « relisez » ne l'est pas.
  */
-export function queueReviewLabel(wait: ReviewWait): string {
+export function queueReviewLabel(wait: ReviewWait, correction: CorrectionCycleState | null = null): string {
+  // Le cycle de correction prime sur l'attente de review : « la file ne repart
+  // pas parce que NOX corrige » et « la file ne repart pas parce qu'elle attend
+  // votre relecture » appellent deux gestes differents — dont l'un est « ne
+  // rien faire ».
+  if (correction !== null) {
+    switch (correction.stage) {
+      case CORRECTION_STAGE.RUNNING:
+      case CORRECTION_STAGE.RESERVED:
+        return correctionStageLabel(correction);
+      case CORRECTION_STAGE.LIMIT_REACHED:
+        return "Automatic correction limit reached — human action required";
+      default:
+        break;
+    }
+  }
+
   switch (wait.kind) {
     case REVIEW_WAIT.VALIDATION_RUNNING:
       return "Automated validation running";
     case REVIEW_WAIT.VALIDATION_FAILED:
-      return "Automated validation failed";
+      return correction !== null && correction.automatedAttempts < correction.maxAutomatedAttempts
+        ? `Automated validation failed — automatic correction ${String(correction.automatedAttempts + 1)} of ${String(correction.maxAutomatedAttempts)}`
+        : "Automated validation failed";
     case REVIEW_WAIT.VALIDATION_ERROR:
       return "Automated validation could not run";
     case REVIEW_WAIT.HUMAN_CHECKS:
@@ -110,7 +133,24 @@ export function queueReviewLabel(wait: ReviewWait): string {
 }
 
 /** Ce que ce meme etat veut dire, et ce qu'il reste a faire. */
-export function queueReviewExplanation(wait: ReviewWait): string {
+export function queueReviewExplanation(
+  wait: ReviewWait,
+  correction: CorrectionCycleState | null = null,
+): string {
+  if (correction !== null) {
+    const detail = correctionStageDetail(correction);
+    if (
+      detail !== null &&
+      (correction.stage === CORRECTION_STAGE.LIMIT_REACHED ||
+        correction.stage === CORRECTION_STAGE.RESERVED)
+    ) {
+      return detail;
+    }
+    if (correction.stage === CORRECTION_STAGE.RUNNING) {
+      return "NOX a relancé Claude Code sur cette tâche à partir d'un échec qu'il a constaté lui-même. La file attend la fin de cette correction, puis une nouvelle validation complète.";
+    }
+  }
+
   switch (wait.kind) {
     case REVIEW_WAIT.VALIDATION_RUNNING:
       return "NOX exécute lui-même les validations enregistrées sur cette tâche. Aucune décision n'est possible avant leur résultat — accepter maintenant reviendrait à conclure sans la preuve qu'on est en train d'obtenir.";
@@ -129,12 +169,20 @@ export function queueReviewExplanation(wait: ReviewWait): string {
  * Texte de l'autorisation permanente, affiche avant de demarrer la file.
  *
  * Il dit exactement ce que le clic engage : NOX pourra lancer des taches sans
- * redemander. Rien de cache, et une seule fois — pas une fenetre par tache.
+ * redemander, **et** reprendre un travail dont une validation autonome a
+ * echoue, dans une limite ecrite. Rien de cache, et une seule fois — pas une
+ * fenetre par tache, pas une fenetre par correction.
+ *
+ * Le perimetre est annonce avant le clic, jamais decouvert apres : une
+ * autorisation qui s'elargit en silence n'est plus une autorisation.
  */
 export const QUEUE_STANDING_AUTHORIZATION =
   "Une fois la file active, NOX peut lancer automatiquement les tâches inscrites dès qu'elles " +
-  "deviennent éligibles. Les reviews, les échecs et les préconditions du repository " +
-  "interrompent cette progression. Aucune tâche n'est jamais lancée sans être déjà inscrite.";
+  "deviennent éligibles, et effectuer au plus " +
+  `${String(MAX_AUTOMATED_CORRECTION_ATTEMPTS)} corrections par tâche lorsque les validations ` +
+  "qu'il exécute lui-même échouent. Les reviews, les échecs d'exécution et les préconditions du " +
+  "repository interrompent cette progression. Aucune tâche n'est jamais lancée sans être déjà " +
+  "inscrite, et aucune correction n'est lancée sans un échec que NOX a constaté lui-même.";
 
 /** Rappel de la règle d'ordre, affiché sur la page de la file. */
 export const QUEUE_ORDER_NOTICE =

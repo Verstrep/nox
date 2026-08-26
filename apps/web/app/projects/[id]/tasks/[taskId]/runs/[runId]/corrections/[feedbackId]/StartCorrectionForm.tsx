@@ -14,6 +14,8 @@ type StartCorrectionFormProps = {
   cancelHref: string;
   /** Faux lorsqu'une precondition n'est pas tenue : le bouton reste inactif. */
   canLaunch: boolean;
+  /** Criteres humains signales, deja relus en base par la page. */
+  humanCriterionIds?: readonly string[];
 };
 
 /**
@@ -31,6 +33,7 @@ export function StartCorrectionForm({
   feedbackId,
   cancelHref,
   canLaunch,
+  humanCriterionIds = [],
 }: StartCorrectionFormProps) {
   const [state, formAction, pending] = useActionState(
     startCorrectionAction,
@@ -44,6 +47,9 @@ export function StartCorrectionForm({
       <input type="hidden" name="taskId" value={taskId} />
       <input type="hidden" name="runId" value={runId} />
       <input type="hidden" name="feedbackId" value={feedbackId} />
+      {humanCriterionIds.map((criterionId) => (
+        <input key={criterionId} type="hidden" name="humanCriterion" value={criterionId} />
+      ))}
 
       {state.error === null ? null : (
         <p

@@ -38,6 +38,7 @@ import { connection } from "next/server";
 
 import { runAutonomousValidation } from "./autonomous-validation.ts";
 import { toRunnerReport } from "./run-report.ts";
+import { syncRunReview } from "./run-review.ts";
 import { claudePreflight, fetchClaudeRunStatus } from "./runner/client.ts";
 import { describeRunnerFailure, type RunnerFailure } from "./runner/errors.ts";
 
@@ -101,6 +102,27 @@ export async function reconcileRun(run: DevelopmentRunDetail): Promise<Developme
     // persistante refuse tout lot au-dela du premier, donc vingt
     // rafraichissements ne produisent aucun processus supplementaire. Le
     // declencheur est la transition, pas la consultation.
+    if (isFinalRunStatus(updated.status)) {
+      // L'instantane de review est transfere **ici**, dans l'evenement de
+      // finalisation, et non au rendu de la page qui l'affiche.
+      //
+      // Ce n'est pas un detail d'ordonnancement : une correction — humaine ou
+      // automatique — exige que la review existe, parce que c'est elle qui
+      // prouve que le dossier de travail est encore celui qui a ete relu. La
+      // capturer au rendu marchait tant que seul un humain corrigeait ; depuis
+      // TASK-028, la decision peut suivre la finalisation de quelques
+      // millisecondes.
+      //
+      // L'appel reste idempotent : une review deja enregistree n'est jamais
+      // redemandee, et les pages continuent d'appeler `syncRunReview` sans que
+      // cela change quoi que ce soit.
+      await syncRunReview(updated.id, updated.runnerRunId, updated.status).catch(
+        (error: unknown) => {
+          console.error("[nox] Echec du transfert de la review :", error);
+        },
+      );
+    }
+
     if (updated.status === RUN_STATUS.COMPLETED) {
       await runAutonomousValidation(db, updated.id).catch((error: unknown) => {
         // Une validation qui echoue a demarrer ne doit pas faire tomber la page

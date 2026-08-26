@@ -4,7 +4,7 @@ import {
   getRunResumeContext,
   hasActiveRun,
 } from "@nox/database";
-import { checkResumeCandidate } from "@nox/shared";
+import { CORRECTION_SOURCE, checkResumeCandidate } from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -18,6 +18,8 @@ import {
 } from "@/lib/correction-display";
 import { formatIsoDateTime } from "@/lib/format";
 import { loadProject } from "@/lib/projects";
+import { loadCorrectionContext } from "@/lib/correction-cycle";
+import { buildCorrectionContext } from "@/lib/correction-evidence";
 import { reviewUrl } from "@/lib/review-display";
 import { buildCorrectionPrompt } from "@/lib/run-prompt";
 import { claudeCorrectionPreflight } from "@/lib/runner/client";
@@ -56,10 +58,15 @@ function PreconditionRow({ precondition }: { precondition: Precondition }) {
  */
 export default async function PrepareCorrectionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string; taskId: string; runId: string; feedbackId: string }>;
+  searchParams: Promise<{ criterion?: string | string[] }>;
 }) {
   const { id, taskId, runId, feedbackId } = await params;
+  const { criterion } = await searchParams;
+  const requestedCriteria =
+    criterion === undefined ? [] : Array.isArray(criterion) ? criterion : [criterion];
 
   const project = await loadProject(id);
   if (project === null) {
@@ -104,12 +111,37 @@ export default async function PrepareCorrectionPage({
   const back = reviewUrl(project.id, task.id, run.id);
   const alreadyUsed = feedback.correctionRunId !== null;
 
+  // Les preuves que NOX possede deja. Lecture seule : construire ce contexte
+  // n'execute aucune commande, n'appelle ni Claude Code, ni OpenAI, ni le
+  // runner. C'est exactement ce que l'utilisateur n'a plus a recopier.
+  const cycle = await loadCorrectionContext(db, { runId: run.id, taskId: task.id });
+
+  // Les criteres signales sont relus en base : l'URL designe des identifiants,
+  // elle n'en definit pas la liste. Un identifiant forge disparait ici plutot
+  // que de se retrouver dans un prompt en pretendant qu'un humain l'a signale.
+  const known = new Set((cycle?.review.humanCriteria ?? []).map((entry) => entry.id));
+  const humanCriterionIds = requestedCriteria.filter((entry) => known.has(entry));
+
+  const built =
+    cycle === null
+      ? null
+      : buildCorrectionContext({
+          task,
+          review: cycle.review,
+          source: CORRECTION_SOURCE.HUMAN_FEEDBACK,
+          automatedAttempt: 0,
+          humanCriterionIds,
+          humanFeedback: feedback.text,
+        });
+
   // Le prompt affiche est produit par la meme fonction que la Server Action :
   // ce qui est montre est exactement ce qui sera envoye.
   const { prompt, sha256 } = buildCorrectionPrompt({
     task,
     sourceRunCode: feedback.sourceRunCode,
     feedback: feedback.text,
+    contract: built?.contract ?? null,
+    evidence: built?.evidence ?? null,
   });
 
   // L'etat du repository est verifie **maintenant**, par le runner. L'empreinte

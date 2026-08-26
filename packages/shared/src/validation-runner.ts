@@ -118,14 +118,31 @@ export function boundOutput(
 /** Corps de `POST /repositories/validations/state`. */
 export type TrackedStateRequest = { repositoryPath: string };
 
+/** Chemins nommes au plus dans une reponse d'etat suivi. */
+export const TRACKED_STATE_FILE_LIMIT = 200;
+
 /**
- * Empreinte de l'etat suivi d'un repository.
+ * Empreinte de l'etat suivi d'un repository, et les chemins qui la composent.
  *
- * Une chaine, et rien d'autre. Ni liste de fichiers, ni chemin, ni diff : la
- * question posee est binaire — quelque chose de suivi a-t-il bouge ? Le detail
- * appartient a la review Git, qui le produit deja.
+ * L'empreinte repond a la question binaire — quelque chose de suivi a-t-il
+ * bouge ? — et c'est elle seule qui decide d'une completion automatique.
+ *
+ * `files` repond a une autre question, posee par TASK-028 : **quoi**. Elle sert
+ * a nommer, dans un contexte de correction, les fichiers qu'une validation
+ * aurait modifies pendant qu'elle evaluait le travail. Ce sont des chemins
+ * **relatifs** au repository, comme partout ailleurs — un chemin absolu ne sort
+ * jamais du runner — et la liste est bornee : elle informe, elle ne remplace pas
+ * la review Git.
+ *
+ * Elle reste facultative. Un runner anterieur n'en renvoie pas, et « NOX ne sait
+ * pas quels fichiers » est un etat parfaitement descriptible : il ne doit ni
+ * bloquer une lecture, ni etre confondu avec « aucun fichier ».
  */
-export type TrackedStateSuccess = { ok: true; digest: string };
+export type TrackedStateSuccess = {
+  ok: true;
+  digest: string;
+  files?: readonly string[];
+};
 
 /** Valide le corps recu par `POST /repositories/validations/state`. */
 export function parseTrackedStateRequest(value: unknown): TrackedStateRequest | null {
@@ -141,5 +158,12 @@ export function parseTrackedStateRequest(value: unknown): TrackedStateRequest | 
 
 /** Verifie qu'une reponse JSON est une empreinte d'etat suivi. */
 export function isTrackedStateSuccess(value: unknown): value is TrackedStateSuccess {
-  return isRecord(value) && value["ok"] === true && typeof value["digest"] === "string";
+  if (!isRecord(value) || value["ok"] !== true || typeof value["digest"] !== "string") {
+    return false;
+  }
+  const files: unknown = value["files"];
+  if (files === undefined) {
+    return true;
+  }
+  return Array.isArray(files) && files.every((entry) => typeof entry === "string");
 }

@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 24 août 2026, à l'issue de `TASK-027`.
+**Dernière mise à jour** : 26 août 2026, à l'issue de `TASK-028`.
 
 ---
 
@@ -43,15 +43,20 @@ sont automatisés et **tous** prouvés par des commandes que NOX a exécutées l
 clic. Ce n'est pas une boucle autonome — c'est un contrat écrit avant l'exécution, vérifié par des
 codes de sortie, et refusé dès qu'une preuve manque.
 
+`TASK-028` étend cette exception, et l'étend seulement là où une file a été **démarrée à la main** :
+quand une preuve automatisée échoue, NOX peut relancer Claude Code de lui-même, **au plus deux fois
+par cycle de travail**. Le texte de `Start queue` l'annonce avant le clic. Hors file, file en pause,
+panne d'infrastructure, amorçage ou borne atteinte : rien ne part sans un geste humain.
+
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 27 |
-| Migrations appliquées | 20 |
+| Modèles Prisma | 28 |
+| Migrations appliquées | 21 |
 | Routes du runner | 20, dont une seule publique (`GET /health`) |
-| Pages de l'application web | 34 |
-| Tests automatisés | 3 879, dont 6 ignorés sous Windows |
-| Décisions consignées | 336 |
+| Pages de l'application web | 35 |
+| Tests automatisés | 3 993, dont 6 ignorés sous Windows |
+| Décisions consignées | 346 |
 
 ---
 
@@ -604,7 +609,52 @@ suivante reçoit celui qu'elle aurait reçu sans elle. Aucune tâche existante n
 renumérotée ou déplacée, et leur provenance de backlog reste intacte. `TASK-000` n'en porte
 aucune.
 
----
+### 2.7 bis Boucle de correction pilotée par la validation
+
+**Disponible.** Un échec que NOX a constaté lui-même devient un **contexte de correction** : le
+critère non prouvé, la commande qui devait le prouver, son code de sortie et ses sorties bornées
+partent avec la reprise. Personne ne relit un log pour en recopier l'erreur.
+
+Deux sources, et elles ne se mélangent pas. `HUMAN_FEEDBACK` : quelqu'un a relu et a demandé
+quelque chose. `AUTOMATED_VALIDATION` : NOX possédait la preuve, et n'a eu besoin de personne. La
+source est persistée, affichée sur l'exécution, et explique pourquoi Claude Code a été relancé.
+
+Quand la tâche est la **barrière courante d'une file active**, NOX relance Claude Code de lui-même
+sur cet échec, au plus **deux fois par cycle de travail**. Chaque correction réussie reçoit un lot
+de validations **complet et neuf**. Une tâche entièrement automatisée peut donc échouer, être
+corrigée, repasser et se terminer sans aucune action humaine.
+
+Hors file, ou file en pause, rien ne part seul : la review affiche `Correction ready`, les preuves
+sont déjà rassemblées, et un clic suffit. Le texte humain devient alors **facultatif** — il ne sert
+qu'à dire ce que les preuves ne disent pas.
+
+**Limites.**
+
+- **Deux corrections automatiques par cycle**, et c'est une constante — jamais un réglage
+  d'interface. Au-delà, l'écran annonce `Automatic correction limit reached` et la main revient à
+  un humain, qui peut toujours demander une correction : la borne borne l'automatisme, pas les
+  gestes humains.
+- **Une panne d'infrastructure ne déclenche jamais de correction.** Un lot `ERROR` renvoie vers
+  `Retry automated validation`. Si la reprise produit un échec réel, la correction redevient
+  possible.
+- **Une validation qui modifie le dépôt ne se corrige pas automatiquement.** Le dossier de travail
+  n'est plus celui qui a été relu, et une reprise exige qu'il le soit exactement. NOX le nomme,
+  ne restaure rien, et rend la main.
+- **Un amorçage ne se corrige jamais tout seul.**
+- **Une exécution Claude Code qui échoue ou est annulée n'ouvre aucune correction** : le problème
+  n'est pas la qualité du résultat.
+- **Aucune preuve, aucune confirmation humaine ne traverse une tentative.** Chaque review repart de
+  zéro sur l'état courant.
+- **Aucun démarrage au redémarrage.** Une correction réservée mais jamais lancée reste visible et
+  attend un geste explicite.
+
+**Frontières.** Zéro appel à OpenAI : le contexte est construit localement, à partir de la base.
+NOX ne demande jamais à l'Architecte ce qu'il faut corriger. Aucun second moteur Claude : le
+dispatcher choisit, le moteur de correction existant exécute — mêmes permissions, même préflight,
+même streaming. Une correction `NORMAL` garde les permissions `NORMAL`. Aucune écriture Git, aucun
+commit, aucune restauration. Le navigateur n'envoie que des identifiants, un texte humain et des
+identifiants de critères, tous revalidés côté serveur.
+
 ---
 
 ## 3. Où en est l'écart avec la cible
@@ -640,27 +690,27 @@ Le cycle de `TASK-021` — proposer, relire, corriger, appliquer — a été ré
 quel, à une différence près qui compte : ce qui s'applique n'est plus un état, c'est un
 **lot**. D'où l'atomicité de la transaction, et la franchise sur ce qu'elle ne couvre pas.
 
-### 3.4 Résolu par `TASK-023` à `TASK-027`
+### 3.4 Résolu par `TASK-023` à `TASK-028`
 
-Quatre limitations de cette liste n'existent plus. Une spécification **se modifie** tant qu'elle
-n'a jamais été exécutée ; les **dépendances** entre tâches sont un graphe acyclique explicite ; un
-projet vide **s'amorce** par `TASK-000` ; et une **file d'exécution** enchaîne les tâches inscrites
-sans jamais contourner le préflight Git ni la review humaine.
+Cinq limitations de cette liste n'existent plus. Une spécification **se modifie** tant qu'elle n'a
+jamais été exécutée ; les **dépendances** entre tâches sont un graphe acyclique explicite ; un
+projet vide **s'amorce** par `TASK-000` ; une **file d'exécution** enchaîne les tâches inscrites
+sans jamais contourner le préflight Git ni la review humaine ; et **correction et re-review
+s'enchaînent**, avec une borne écrite.
 
-`TASK-027` ferme la boucle que la file avait ouverte : jusqu'ici, chaque tâche exécutée
-interrompait la progression pour une relecture, y compris quand une commande suffisait à répondre.
-Désormais, l'humain n'est sollicité que là où il apporte quelque chose — et la review lui montre
-exactement ce qui le concerne.
+`TASK-027` avait fermé la boucle que la file avait ouverte : l'humain n'est sollicité que là où il
+apporte quelque chose. `TASK-028` va au bout du raisonnement — quand NOX possède lui-même la preuve
+d'un échec, il n'a besoin de personne pour la recopier, et une file démarrée à la main lui donne le
+droit d'y répondre deux fois.
 
 ### 3.5 Ce qui reste à faire
 
-- **La correction et la re-review ne s'enchaînent pas.** Chaque reprise se déclenche à la main,
-  sans borne explicite.
-- **Aucune livraison Git depuis NOX.** Le commit reste un geste fait dans le terminal.
+- **Aucune livraison Git depuis NOX.** Le commit reste un geste fait dans le terminal, et une file
+  s'arrête sur un dépôt modifié.
 - **Une seule exécution active, tous projets confondus.**
 - **Aucune replanification structurée** depuis la conversation du projet.
 
-Voir [ROADMAP.md](ROADMAP.md), `TASK-028` à `TASK-032`.
+Voir [ROADMAP.md](ROADMAP.md), `TASK-029` à `TASK-032`.
 
 ---
 

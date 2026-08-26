@@ -192,15 +192,26 @@ Ce que cette étape **ne fait pas** : elle ne demande son avis à aucune IA — 
 Code —, ne transforme jamais un échec en réussite, et n'offre aucun contournement. Un passage en
 force existe, mais il est humain, motivé, et laisse le résultat automatisé intact.
 
-### `TASK-028` — Correction / re-review improvements — **suivante**
+### `TASK-028` — Boucle de correction pilotée par la validation — terminée
 
-Enchaîner correction et relecture, avec une borne explicite. Une boucle sans borne finit par
-tourner seule.
+Un échec que NOX a constaté lui-même devient un **contexte de correction** : le critère non prouvé,
+la commande qui devait le prouver, son code de sortie et ses sorties partent avec la reprise. Plus
+personne ne lit des logs pour en recopier l'erreur.
 
-### `TASK-029` — Livraison Git contrôlée
+Une file active autorise NOX à relancer Claude Code de lui-même sur cet échec, **au plus deux fois
+par cycle de travail**. Au-delà, la main revient à un humain, et l'écran le dit. Hors file, ou file
+en pause, rien ne part sans un clic — la correction est simplement déjà prête.
 
-Commit et push depuis NOX, sur décision explicite, avec un message relu. La règle « aucun push
-automatique » ne change pas : c'est le geste qui entre dans l'outil, pas la décision.
+Ce que cette étape **ne fait pas** : elle ne corrige jamais sur une panne d'infrastructure — « je
+n'ai pas pu regarder » n'est pas « j'ai regardé et c'est faux » —, ne touche pas au contrat gelé de
+la tâche, ne reprend aucune preuve d'une tentative précédente, ne recycle aucune confirmation
+humaine, et ne lance rien au démarrage du serveur.
+
+### `TASK-029` — Livraison Git contrôlée — **suivante**
+
+Permettre à NOX, après une validation réussie, d'effectuer une livraison Git **explicitement
+autorisée**, afin que la file puisse continuer sans attendre un commit manuel. La règle « aucun
+push automatique » ne change pas : c'est le geste qui entre dans l'outil, pas la décision.
 
 ### `TASK-030` — Vue d'ensemble multi-projets — **absorbée par `TASK-025`**
 

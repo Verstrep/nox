@@ -570,6 +570,9 @@ model Task {
   /// Inscription dans la file d'execution du projet, le cas echeant.
   queueEntry TaskQueueEntry?
 
+  /// Corrections reservees sur cette tache, lancees ou non.
+  correctionAttempts CorrectionAttempt[]
+
   @@unique([projectId, sequence])
   @@index([projectId, status])
   @@index([backlogProposalId, backlogItemPosition])
@@ -740,6 +743,12 @@ model Run {
 
   feedbacks          ReviewFeedback[] @relation("ReviewFeedbackSource")
   triggeringFeedback ReviewFeedback?  @relation("ReviewFeedbackCorrection")
+
+  /// Corrections reservees **depuis** cette execution.
+  correctionAttempts CorrectionAttempt[] @relation("CorrectionAttemptSource")
+
+  /// Reservation dont cette execution est nee, pour une correction.
+  correctionAttempt CorrectionAttempt? @relation("CorrectionAttemptRun")
 
   /// `parentRunId` est une colonne, pas une relation Prisma.
   ///
@@ -1564,6 +1573,18 @@ model AutonomousValidationBatch {
   trackedStateBefore String?
   trackedStateAfter  String?
 
+  /// Fichiers suivis qu'une validation a modifies, un par ligne.
+  ///
+  /// Repond a « quoi », quand les deux empreintes ci-dessus disent seulement
+  /// « quelque chose ». Sert a nommer le probleme dans un contexte de
+  /// correction ; ne decide jamais d'une completion automatique, qui reste
+  /// tranchee par les empreintes.
+  ///
+  /// `null` signifie « NOX ne sait pas » — runner anterieur, ou etat suivi
+  /// illisible avant ou apres. Une chaine vide signifierait « aucun », ce qui
+  /// n'est pas la meme chose.
+  mutatedFiles String?
+
   run     Run                         @relation(fields: [runId], references: [id], onDelete: Cascade)
   results AutonomousValidationResult[]
 
@@ -1673,4 +1694,89 @@ model RunHumanCriterionConfirmation {
 
   @@unique([decisionId, criterionText])
   @@index([decisionId])
+}
+
+/// Une correction decidee sur une execution relue.
+///
+/// ## Pourquoi une table plutot qu'un champ sur `Run`
+///
+/// Parce qu'elle est la **reservation** qui existe avant l'execution qu'elle
+/// autorise. Un champ sur le run de correction ne pourrait etre ecrit qu'une
+/// fois ce run cree — c'est-a-dire trop tard pour empecher qu'on en cree deux.
+/// C'est le meme raisonnement que `AutonomousValidationBatch` : le point de
+/// serialisation doit precede l'action, sans quoi il ne serialise rien.
+///
+/// ## Ce que la source enregistre
+///
+/// `HUMAN_FEEDBACK` : quelqu'un a relu et a demande quelque chose.
+/// `AUTOMATED_VALIDATION` : NOX possedait lui-meme la preuve d'un echec. Les
+/// confondre ferait perdre pourquoi Claude Code a ete relance — la question
+/// qu'on se pose six mois plus tard en lisant trois executions d'affilee.
+///
+/// ## Ce que `attempt` n'est pas
+///
+/// Ce n'est pas un numero d'execution, ni un compteur de corrections. C'est le
+/// rang de **reservation** sur une execution source donnee, a partir de 1 : il
+/// existe pour que l'index unique refuse une seconde reservation concurrente
+/// tout en laissant une reservation abandonnee etre reprise. Le rang affiche —
+/// « correction automatique 1 sur 2 » — vit dans `automatedAttempt`.
+model CorrectionAttempt {
+  id     String @id @default(cuid())
+  taskId String
+
+  /// Execution relue dont cette correction repart.
+  sourceRunId String
+
+  /// Lot de validations qui a motive une correction automatique.
+  ///
+  /// Une colonne, pas une relation : un lot est un fait historique de
+  /// l'execution source, et rattacher formellement la reservation a lui
+  /// imposerait un ordre de suppression de plus sans rien garantir de neuf.
+  sourceBatchId String?
+
+  /// Valeur de `CorrectionSource`.
+  source String
+
+  /// Rang de reservation sur `sourceRunId`, a partir de 1.
+  attempt Int
+
+  /// Rang de la correction automatique dans le cycle, ou `null` pour un humain.
+  ///
+  /// Recopie plutot que derive parce qu'il est **decide** au moment de la
+  /// reservation, a partir de l'etat d'alors : le relire plus tard donnerait le
+  /// compte d'aujourd'hui, pas celui qui a autorise cette correction-la.
+  automatedAttempt Int?
+
+  /// Valeur de `CorrectionAttemptStatus`.
+  status String
+
+  /// Pourquoi la reservation a ete rendue sans rien lancer.
+  refusalCode String?
+
+  createdAt   DateTime  @default(now())
+  launchedAt  DateTime?
+  abandonedAt DateTime?
+
+  /// Execution nee de cette reservation, une seule fois.
+  correctionRunId String?
+
+  /// Feedback humain consomme, lorsqu'il y en avait un.
+  ///
+  /// `null` pour une correction automatique, et aussi pour une demande humaine
+  /// sans texte : quand les preuves de NOX suffisent, l'utilisateur n'a rien a
+  /// recopier, et NOX n'invente pas un feedback pour combler la colonne.
+  feedbackId String?
+
+  /// `Restrict` comme `Run` et `ReviewFeedback` : une correction est un fait
+  /// historique, et elle documente des executions que rien ne supprime.
+  task          Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  sourceRun     Run  @relation("CorrectionAttemptSource", fields: [sourceRunId], references: [id], onDelete: Restrict)
+  correctionRun Run? @relation("CorrectionAttemptRun", fields: [correctionRunId], references: [id], onDelete: Restrict)
+
+  /// L'index qui compte : deux constatations simultanees du meme echec visent
+  /// le meme rang, et une seule l'obtient.
+  @@unique([sourceRunId, attempt])
+  @@unique([correctionRunId])
+  @@index([taskId, createdAt])
+  @@index([sourceRunId])
 }

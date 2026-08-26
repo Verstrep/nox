@@ -10,7 +10,9 @@ import { notFound } from "next/navigation";
 
 import { SectionCard } from "@/components/SectionCard";
 import { WorkflowLink } from "@/components/WorkflowLink";
+import { loadCorrectionContext } from "@/lib/correction-cycle";
 import { resumeRefusalMessage } from "@/lib/correction-display";
+import { failedCriteriaOf } from "@/lib/correction-evidence";
 import { loadProject } from "@/lib/projects";
 import { reviewUrl } from "@/lib/review-display";
 import { loadRun } from "@/lib/runs";
@@ -79,6 +81,19 @@ export default async function RequestChangesPage({
   const suggestedFeedback =
     suggested !== null && suggested.runId === run.id ? suggested.feedback : null;
 
+  // Ce que NOX a deja constate. Lecture seule : aucune commande n'est executee,
+  // et ouvrir cette page ne reserve aucune correction.
+  const cycle = await loadCorrectionContext(db, { runId: run.id, taskId: task.id });
+  const failures = cycle === null ? [] : failedCriteriaOf(cycle.review);
+  const humanChecks =
+    cycle === null
+      ? []
+      : cycle.review.humanCriteria.map((criterion) => ({
+          id: criterion.id,
+          text: criterion.text,
+          instructions: criterion.humanInstructions ?? "",
+        }));
+
   const back = reviewUrl(project.id, task.id, run.id);
 
   return (
@@ -130,9 +145,38 @@ export default async function RequestChangesPage({
           </ul>
         </SectionCard>
 
+        {failures.length === 0 ? null : (
+          <SectionCard
+            title="NOX found these failures"
+            description="Ce que NOX a execute lui-meme, apres l'execution. Vous n'avez rien a recopier."
+          >
+            <ul className="flex flex-col gap-3 text-sm leading-relaxed text-zinc-300">
+              {failures.map((criterion) => (
+                <li key={criterion.text}>
+                  <p>{criterion.text}</p>
+                  <ul className="mt-1 flex flex-col gap-1 pl-4 text-xs text-zinc-500">
+                    {criterion.commands.map((command) => (
+                      <li key={command.command} className="font-mono">
+                        {command.command}
+                        {command.exitCode === null
+                          ? " · non executee"
+                          : ` · exit ${String(command.exitCode)}`}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-4 text-xs leading-relaxed text-zinc-600">
+              Ces echecs, leurs codes de sortie et leurs sorties bornees partent automatiquement
+              avec la correction.
+            </p>
+          </SectionCard>
+        )}
+
         {refusal === null ? (
           <SectionCard
-            title="Feedback"
+            title={failures.length === 0 ? "Feedback" : "Additional instructions"}
             description="Ce texte sera transmis a la session, entre des marqueurs explicites."
           >
             <RequestChangesForm
@@ -142,6 +186,8 @@ export default async function RequestChangesPage({
               cancelHref={back}
               maxLength={REVIEW_FEEDBACK_LIMITS.maxLength}
               suggestedFeedback={suggestedFeedback}
+              evidenceAvailable={failures.length > 0}
+              humanChecks={humanChecks}
             />
           </SectionCard>
         ) : (
