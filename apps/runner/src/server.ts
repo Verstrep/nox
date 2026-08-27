@@ -27,6 +27,9 @@ import {
   parseClaudeRunEventsRequest,
   parseClaudeRunReviewRequest,
   parseClaudeRunStatusRequest,
+  parseDeliveryCommitRequest,
+  parseDeliveryInspectRequest,
+  parseDeliveryPushRequest,
   parseCreateProjectDocumentRequest,
   parseCreateTaskDocumentRequest,
   parseDeleteProjectDocumentRequest,
@@ -46,6 +49,9 @@ import {
   type ClaudeRunEventsSuccess,
   type ClaudeRunReviewSuccess,
   type ClaudeRunStatusSuccess,
+  type DeliveryCommitSuccess,
+  type DeliveryInspectSuccess,
+  type DeliveryPushSuccess,
   type CreateProjectDocumentSuccess,
   type CreateTaskDocumentSuccess,
   type DeleteProjectDocumentSuccess,
@@ -70,6 +76,14 @@ import {
   type CreateDocumentResult,
 } from "./repositories/documents/create-document.ts";
 import { readTrackedState, runRepositoryValidation } from "./repositories/run-validation.ts";
+import {
+  commitDelivery,
+  inspectDelivery,
+  pushDelivery,
+  type DeliveryCommitResult,
+  type DeliveryInspectResult,
+  type DeliveryPushResult,
+} from "./repositories/git-delivery.ts";
 import {
   deleteDocument,
   type DeleteDocumentResult,
@@ -144,6 +158,23 @@ export type RunnerDependencies = {
     repositoryPath: string,
     artifacts: readonly ProjectTaskArtifact[],
   ) => Promise<DeleteProjectDocumentsResult>;
+  /**
+   * Livraison Git : les trois seules ecritures Git que NOX sache faire.
+   *
+   * Injectables comme le reste, mais **jamais** remplacees en production :
+   * la politique qui les autorise vit cote web, et la verification qui les
+   * conditionne vit dans le module, pas ici.
+   */
+  inspectDelivery?: (
+    repositoryPath: string,
+    trailer: string | null,
+  ) => Promise<DeliveryInspectResult>;
+  commitDelivery?: (
+    request: Parameters<typeof commitDelivery>[0],
+  ) => Promise<DeliveryCommitResult>;
+  pushDelivery?: (
+    request: Parameters<typeof pushDelivery>[0],
+  ) => Promise<DeliveryPushResult>;
   claudePreflight?: (repositoryPath: string) => Promise<PreflightResult>;
   claudeCorrectionPreflight?: (
     request: CorrectionPreflightRequest,
@@ -181,6 +212,9 @@ const CLAUDE_RUNS_EVENTS_ROUTE = "/claude/runs/events";
 const CLAUDE_RUNS_CANCEL_ROUTE = "/claude/runs/cancel";
 const CLAUDE_RUNS_REVIEW_ROUTE = "/claude/runs/review";
 const CLAUDE_CORRECTION_PREFLIGHT_ROUTE = "/claude/corrections/preflight";
+const DELIVERY_INSPECT_ROUTE = "/repositories/delivery/inspect";
+const DELIVERY_COMMIT_ROUTE = "/repositories/delivery/commit";
+const DELIVERY_PUSH_ROUTE = "/repositories/delivery/push";
 
 function requestPathname(request: IncomingMessage): string {
   // La base est fictive : seul le chemin est exploite, jamais l'hote annonce.
@@ -297,6 +331,18 @@ export function createRunnerServer(
     dependencies.claudeCorrectionPreflight ??
     ((request: CorrectionPreflightRequest) =>
       runCorrectionPreflight(request, config.claude, { fingerprintKey }));
+  const inspectForDelivery =
+    dependencies.inspectDelivery ??
+    ((repositoryPath: string, trailer: string | null) =>
+      inspectDelivery(repositoryPath, trailer, { fingerprintKey }));
+  const commitForDelivery =
+    dependencies.commitDelivery ??
+    ((request: Parameters<typeof commitDelivery>[0]) =>
+      commitDelivery(request, { fingerprintKey }));
+  const pushForDelivery =
+    dependencies.pushDelivery ??
+    ((request: Parameters<typeof pushDelivery>[0]) =>
+      pushDelivery(request, { fingerprintKey }));
   const startRun =
     dependencies.startClaudeRun ??
     ((request: StartRunRequest) =>
@@ -690,6 +736,98 @@ export function createRunnerServer(
         }
 
         sendJson(response, 200, outcome.result, requestId);
+        return;
+      }
+
+      if (pathname === DELIVERY_INSPECT_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DELIVERY_INSPECT_ROUTE, log,
+          parseDeliveryInspectRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Strictement en lecture : aucune commande de cette route ne cree, ne
+        // modifie, ne supprime ni ne pousse quoi que ce soit. C'est ce qui
+        // permet a une page de livraison de l'appeler sans qu'un
+        // rafraichissement produise une ecriture Git.
+        const inspected = await inspectForDelivery(parsed.repositoryPath, parsed.trailer ?? null);
+        if (!inspected.ok) {
+          logRefusal(requestId, DELIVERY_INSPECT_ROUTE, inspected.code);
+          sendRunnerError(response, inspected.code, requestId);
+          return;
+        }
+
+        const payload: DeliveryInspectSuccess = { ok: true, inspection: inspected.inspection };
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === DELIVERY_COMMIT_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DELIVERY_COMMIT_ROUTE, log,
+          parseDeliveryCommitRequest,
+          MAX_DOCUMENT_BODY_BYTES,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Le corps porte des **faits attendus**, jamais des arguments Git : une
+        // branche, un `HEAD`, une empreinte, des chemins relatifs, un message.
+        // Le runner en deduit lui-meme les commandes, et refuse des la premiere
+        // divergence avec ce qu'il lit sur le disque.
+        const committed = await commitForDelivery(parsed);
+        if (!committed.ok) {
+          // Le detail technique reste dans les logs du runner : la reponse ne
+          // porte qu'un code, comme toutes les erreurs du contrat.
+          log(`[${RUNNER_SERVICE_NAME}] ${requestId} ${DELIVERY_COMMIT_ROUTE} refuse : ${committed.code} — ${committed.detail}`);
+          sendRunnerError(response, committed.code, requestId);
+          return;
+        }
+
+        const payload: DeliveryCommitSuccess = committed.value;
+        sendJson(response, 200, payload, requestId);
+        return;
+      }
+
+      if (pathname === DELIVERY_PUSH_ROUTE) {
+        if (method !== "POST") {
+          sendMethodNotAllowed(response, ["POST"], requestId);
+          return;
+        }
+
+        const parsed = await readAuthenticatedBody(
+          request, response, config, requestId, DELIVERY_PUSH_ROUTE, log,
+          parseDeliveryPushRequest,
+        );
+        if (parsed === null) {
+          return;
+        }
+
+        // Ni remote, ni URL, ni refspec dans le corps : la destination est lue
+        // dans la configuration de la branche. Aucun appelant ne peut faire
+        // pousser NOX ailleurs que la ou la branche pointe deja.
+        const pushed = await pushForDelivery(parsed);
+        if (!pushed.ok) {
+          log(`[${RUNNER_SERVICE_NAME}] ${requestId} ${DELIVERY_PUSH_ROUTE} refuse : ${pushed.code} — ${pushed.detail}`);
+          sendRunnerError(response, pushed.code, requestId);
+          return;
+        }
+
+        const payload: DeliveryPushSuccess = pushed.value;
+        sendJson(response, 200, payload, requestId);
         return;
       }
 

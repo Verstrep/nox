@@ -31,6 +31,9 @@ import {
   isReadProjectDocumentSuccess,
   isResolveRepositorySuccess,
   isRunnerErrorResponse,
+  isDeliveryCommitSuccess,
+  isDeliveryInspectSuccess,
+  isDeliveryPushSuccess,
   isRunnerHealthResponse,
   isUpdateProjectDocumentSuccess,
   type ClaudeCorrectionPreflightRequest,
@@ -57,6 +60,12 @@ import {
   type DeleteProjectDocumentsSuccess,
   type DeleteTaskDocumentRequest,
   type DeleteTaskDocumentSuccess,
+  type DeliveryCommitRequest,
+  type DeliveryCommitSuccess,
+  type DeliveryInspectRequest,
+  type DeliveryInspectSuccess,
+  type DeliveryPushRequest,
+  type DeliveryPushSuccess,
   type InspectRepositoryRequest,
   type RepositoryInspection,
   type ListProjectDocumentsRequest,
@@ -724,6 +733,75 @@ export function readRepositoryTrackedState(
     payload,
     isTrackedStateSuccess,
     (value) => value as TrackedStateSuccess,
+    options,
+  );
+}
+
+/**
+ * Lit l'etat Git d'un repository pour une livraison.
+ *
+ * Strictement en lecture : aucune commande de cette route ne cree, ne modifie,
+ * ne supprime ni ne pousse quoi que ce soit, et aucune ne touche au reseau.
+ * C'est ce qui autorise une page de livraison a l'appeler sans qu'un
+ * rafraichissement produise une ecriture Git.
+ */
+export function inspectDelivery(
+  request: DeliveryInspectRequest,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<DeliveryInspectSuccess>> {
+  return postAuthenticated(
+    "/repositories/delivery/inspect",
+    "repositories/delivery/inspect",
+    request,
+    isDeliveryInspectSuccess,
+    (value) => value as DeliveryInspectSuccess,
+    options,
+  );
+}
+
+/**
+ * Prepare les chemins exacts d'un candidat valide, puis cree le commit.
+ *
+ * Le corps ne porte aucun argument Git : une branche attendue, un `HEAD`
+ * attendu, une empreinte attendue, des chemins relatifs et un message deja
+ * construit. Le runner en deduit lui-meme les commandes et refuse des la
+ * premiere divergence avec ce qu'il lit sur le disque.
+ *
+ * Le navigateur n'appelle jamais cette fonction. Comme tout le client runner,
+ * elle vit cote serveur et le jeton ne la quitte pas.
+ */
+export function commitDelivery(
+  request: DeliveryCommitRequest,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<DeliveryCommitSuccess>> {
+  return postAuthenticated(
+    "/repositories/delivery/commit",
+    "repositories/delivery/commit",
+    request,
+    isDeliveryCommitSuccess,
+    (value) => value as DeliveryCommitSuccess,
+    options,
+  );
+}
+
+/**
+ * Pousse la branche courante vers son upstream deja configure.
+ *
+ * Ni remote, ni URL, ni refspec dans le corps : la destination est lue par le
+ * runner dans la configuration du repository. Aucun appelant — et surtout pas
+ * le navigateur, qui n'atteint jamais cette route — ne peut designer ou NOX
+ * pousse.
+ */
+export function pushDelivery(
+  request: DeliveryPushRequest,
+  options: RunnerClientOptions = {},
+): Promise<RunnerResult<DeliveryPushSuccess>> {
+  return postAuthenticated(
+    "/repositories/delivery/push",
+    "repositories/delivery/push",
+    request,
+    isDeliveryPushSuccess,
+    (value) => value as DeliveryPushSuccess,
     options,
   );
 }

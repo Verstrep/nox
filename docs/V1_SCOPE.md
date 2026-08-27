@@ -172,21 +172,39 @@ Ce qui ne se corrige jamais tout seul : une panne d'infrastructure, un amorçage
 la main, une file en pause, une exécution qui s'est mal terminée. Et rien, jamais, ne renégocie le
 contrat gelé de la tâche : une correction essaie de le satisfaire, pas de le réécrire.
 
+### 1.18 Livraison Git d'un travail validé
+
+Chaque projet décide de ce que NOX a le droit d'écrire dans Git : rien, un commit, ou un commit
+puis un push vers l'upstream déjà configuré de la branche courante. Le défaut est « rien », et
+changer ce réglage **est** l'autorisation — NOX ne redemande pas confirmation tâche par tâche.
+
+Cette autorisation est distincte de celle de la file. Démarrer une file laisse NOX lancer Claude
+Code ; elle ne lui donne aucun droit dans Git.
+
+Ce qui est livré n'est jamais « ce qui traîne dans le dossier de travail » : c'est l'état exact
+qui a été validé, figé au moment de la décision et relu juste avant d'écrire. Une modification
+faite entre-temps bloque la livraison au lieu d'être emportée avec elle — et il n'existe aucun
+bouton pour passer outre.
+
+Ce que NOX ne fait toujours pas : changer de branche, configurer un upstream, forcer un push,
+tirer, fusionner, rebaser, réinitialiser, restaurer ou nettoyer. Réconcilier deux histoires Git
+reste une décision humaine.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Livraison Git contrôlée
-
-Commit et push depuis NOX, sur décision explicite, avec un message relu. Aujourd'hui ces deux
-actions sont entièrement manuelles et hors de l'outil.
-
-### 2.2 Runner multi-projets
+### 2.1 Runner multi-projets
 
 Aujourd'hui, une seule exécution est active tous projets confondus. Travailler sur deux projets en
 parallèle suppose que cette limite tombe.
+
+### 2.2 Replanification depuis la conversation du projet
+
+Revenir dans la conversation principale et réordonner le plan restant, sans repartir d'une
+planification neuve.
 
 ---
 

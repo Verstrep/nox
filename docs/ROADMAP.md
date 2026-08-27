@@ -207,11 +207,22 @@ n'ai pas pu regarder » n'est pas « j'ai regardé et c'est faux » —, ne touc
 la tâche, ne reprend aucune preuve d'une tentative précédente, ne recycle aucune confirmation
 humaine, et ne lance rien au démarrage du serveur.
 
-### `TASK-029` — Livraison Git contrôlée — **suivante**
+### `TASK-029` — Livraison Git contrôlée — terminée
 
-Permettre à NOX, après une validation réussie, d'effectuer une livraison Git **explicitement
-autorisée**, afin que la file puisse continuer sans attendre un commit manuel. La règle « aucun
-push automatique » ne change pas : c'est le geste qui entre dans l'outil, pas la décision.
+Chaque projet porte une politique de livraison : `Manual`, `Auto commit validated`,
+`Auto commit + push validated`. Le défaut est `Manual`, et il n'accorde rien — installer cette
+version produit zéro commit et zéro push. Changer ce réglage **est** l'autorisation humaine :
+NOX ne redemande pas confirmation tâche par tâche, et l'écran l'annonce avant le clic.
+
+Une tâche validée fige un **candidat** : branche, `HEAD`, empreinte du dossier de travail et
+liste exacte des fichiers. Juste avant d'écrire, NOX relit tout et compare. S'il correspond, il
+prépare les chemins exacts, crée un commit lisible et — selon le mode — le pousse vers
+l'upstream déjà configuré. La file peut alors continuer.
+
+Ce que cette étape **ne fait pas** : elle ne commite jamais un état qui a divergé — sans
+échappatoire —, ne change jamais de branche, ne configure jamais un upstream, ne force jamais un
+push, ne tire, ne fusionne, ne rebase, ne réinitialise, ne restaure et ne nettoie jamais. Elle ne
+contourne ni les hooks, ni la signature, et ne stocke aucun identifiant Git.
 
 ### `TASK-030` — Vue d'ensemble multi-projets — **absorbée par `TASK-025`**
 
@@ -221,10 +232,11 @@ seconde implémentation de tableau de bord n'est prévue**. Ce qui pourra encore
 recherche, un filtre, une pagination — se traitera comme une évolution de la surface existante,
 pas comme une nouvelle étape.
 
-### `TASK-031` — Runner multi-projets
+### `TASK-031` — Runner multi-projets — **suivante**
 
 Aujourd'hui, une seule exécution est active tous projets confondus. Cette limite tombe ici, ou
-pas du tout.
+pas du tout : plusieurs projets doivent pouvoir avancer sans elle, tout en gardant **au plus une
+exécution Claude active par repository** et les autorisations propres à chaque projet.
 
 ### `TASK-032` — Replanification depuis la conversation principale
 

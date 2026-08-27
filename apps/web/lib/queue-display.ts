@@ -245,6 +245,9 @@ const DISPATCH_MESSAGES: Record<QueueDispatchOutcome, string> = {
     "La tâche courante attend une décision de review : la file ne passe pas à la suivante.",
   [QUEUE_DISPATCH.WAITING_DEPENDENCIES]:
     "Aucune tâche inscrite n'est éligible : toutes attendent une dépendance non terminée.",
+  [QUEUE_DISPATCH.WAITING_DELIVERY]:
+    "Le travail validé n'a pas encore été livré : la politique Git de ce projet n'est pas " +
+    "satisfaite. Ouvrez la livraison pour voir ce qui la bloque.",
   [QUEUE_DISPATCH.WAITING_REPOSITORY]:
     "Le repository ne satisfait pas les préconditions de lancement. Commitez vos changements, puis relancez avec Try next.",
   [QUEUE_DISPATCH.ACTIVE_RUN]:

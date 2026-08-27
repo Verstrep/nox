@@ -12,11 +12,21 @@ import { notFound } from "next/navigation";
 
 import { GuidedWorkflow } from "@/components/GuidedWorkflow";
 import { TaskDependencies } from "@/components/TaskDependencies";
-import { getDatabaseClient, readVerificationPlan } from "@nox/database";
+import {
+  getDatabaseClient,
+  getLatestDeliveryForTask,
+  readVerificationPlan,
+} from "@nox/database";
 
 import { TaskQueue } from "@/components/TaskQueue";
 import { VerificationPlanSummary } from "@/components/VerificationPlanSummary";
 import { loadTaskCorrectionCycle } from "@/lib/correction-cycle";
+import {
+  deliveryPolicyLabel,
+  deliveryRefusalLabel,
+  deliveryStateLabel,
+  deliveryUrl,
+} from "@/lib/delivery-display";
 import { correctionStageDetail, correctionStageLabel } from "@/lib/correction-display";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -312,6 +322,13 @@ export default async function TaskDetailPage({
   // runner. Une tache terminee de longue date n'affiche rien ici — son
   // historique vit sur ses executions.
   const correctionCycle = await loadTaskCorrectionCycle(getDatabaseClient(), task.id);
+  // Livraison Git de cette tache, lue en base. Aucune inspection du repository
+  // ici : la page d'une tache ne doit interroger ni Git, ni le runner. Le detail
+  // — et la seule sonde en lecture — vit sur la surface de livraison.
+  const delivery =
+    task.status === TASK_STATUS.COMPLETED
+      ? await getLatestDeliveryForTask(getDatabaseClient(), task.id)
+      : null;
   // Une tache inscrite autorise l'execution de son contrat actuel : l'editeur
   // n'est donc pas propose tant qu'elle y figure. La Server Action refuse de
   // toute facon, et c'est elle qui fait autorite.
@@ -424,6 +441,36 @@ export default async function TaskDetailPage({
             {correctionStageDetail(correctionCycle.cycle) === null ? null : (
               <p className="mt-3 text-xs leading-relaxed text-zinc-500">
                 {correctionStageDetail(correctionCycle.cycle)}
+              </p>
+            )}
+          </SectionCard>
+        )}
+
+        {delivery === null ? null : (
+          <SectionCard
+            title="Git delivery"
+            description="Ce que NOX a écrit dans Git pour ce travail validé, ou ce qui l'en empêche."
+            action={
+              <Link
+                href={deliveryUrl(project.id, task.id)}
+                className="text-xs text-zinc-500 hover:text-zinc-300"
+              >
+                Open delivery
+              </Link>
+            }
+          >
+            <p className="text-sm text-zinc-200">
+              {deliveryStateLabel(delivery.status, delivery.errorCode)}
+            </p>
+            <p className="mt-1 text-sm text-zinc-400">
+              {deliveryPolicyLabel(delivery.policy)}
+              {delivery.commitSha === null
+                ? ""
+                : ` · ${delivery.commitSha.slice(0, 12)}`}
+            </p>
+            {delivery.errorCode === null ? null : (
+              <p className="mt-3 text-xs leading-relaxed text-amber-200/80">
+                {deliveryRefusalLabel(delivery.errorCode)}
               </p>
             )}
           </SectionCard>

@@ -251,6 +251,29 @@ export {
 } from "./review-feedback.js";
 
 export {
+  AUTOMATIC_DELIVERY_TRIGGER,
+  claimDelivery,
+  findCompletionRun,
+  getBlockingDelivery,
+  getDeliveryForRun,
+  getGitDelivery,
+  getLatestDeliveryForTask,
+  listProjectDeliveries,
+  parseCandidate,
+  readProjectDeliveryPolicy,
+  recordDeliveryCommit,
+  recordDeliveryFailure,
+  recordDeliveryPush,
+  reserveGitDelivery,
+  setProjectDeliveryPolicy,
+  type ClaimDeliveryResult,
+  type CompletionRunFact,
+  type GitDeliveryRow,
+  type ReserveDeliveryResult,
+  type SetDeliveryPolicyResult,
+} from "./git-delivery.js";
+
+export {
   abandonCorrection,
   getCorrectionAttempt,
   getCorrectionAttemptForRun,

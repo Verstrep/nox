@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 26 août 2026, à l'issue de `TASK-028`.
+**Dernière mise à jour** : 27 août 2026, à l'issue de `TASK-029`.
 
 ---
 
@@ -35,8 +35,8 @@ Ce que NOX **ne fait pas**, et n'a jamais prétendu faire : aucun lancement auto
 Claude Code, aucun passage automatique en `READY`, aucune boucle autonome entre les deux
 modèles, aucun réessai caché, aucun résumé silencieux, aucune review déclenchée en
 arrière-plan, aucune exécution automatique de l'étape recommandée, aucune mémoire créée
-automatiquement, aucun commit, aucun push, aucune estimation de coût, aucun backlog généré
-sans clic.
+automatiquement, aucune estimation de coût, aucun backlog généré sans clic — et, tant que la
+politique de livraison du projet reste `Manual`, aucun commit et aucun push.
 
 Une exception, et une seule, a été ajoutée par `TASK-027` : une tâche dont **tous** les critères
 sont automatisés et **tous** prouvés par des commandes que NOX a exécutées lui-même se termine sans
@@ -48,15 +48,21 @@ quand une preuve automatisée échoue, NOX peut relancer Claude Code de lui-mêm
 par cycle de travail**. Le texte de `Start queue` l'annonce avant le clic. Hors file, file en pause,
 panne d'infrastructure, amorçage ou borne atteinte : rien ne part sans un geste humain.
 
+`TASK-029` ouvre la dernière : NOX peut écrire dans Git, et **seulement** si le projet l'y a
+autorisé par une politique distincte de celle de la file. Le défaut est `Manual`, et il n'accorde
+rien. Là où un mode automatique a été choisi, NOX commite — et pousse, si c'est le mode retenu —
+le travail qu'il vient de valider, à la condition que le repository y corresponde encore
+exactement. Toute divergence bloque l'écriture au lieu de l'emporter avec.
+
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 28 |
-| Migrations appliquées | 21 |
-| Routes du runner | 20, dont une seule publique (`GET /health`) |
-| Pages de l'application web | 35 |
-| Tests automatisés | 3 993, dont 6 ignorés sous Windows |
-| Décisions consignées | 346 |
+| Modèles Prisma | 29 |
+| Migrations appliquées | 22 |
+| Routes du runner | 23, dont une seule publique (`GET /health`) |
+| Pages de l'application web | 36 |
+| Tests automatisés | 4 127, dont 6 ignorés sous Windows |
+| Décisions consignées | 357 |
 
 ---
 
@@ -657,6 +663,64 @@ identifiants de critères, tous revalidés côté serveur.
 
 ---
 
+### 2.7 ter Livraison Git d'un travail validé
+
+**Disponible.** Chaque projet porte une politique de livraison : `Manual`,
+`Auto commit validated`, `Auto commit + push validated`. Elle vit dans les réglages du projet,
+et changer ce réglage **est** l'autorisation humaine : NOX ne redemande pas confirmation tâche
+par tâche — une file qui s'arrête sur une modale n'avance pas plus qu'une file arrêtée.
+
+Elle est **indépendante** de la file d'exécution. `Start queue` autorise NOX à lancer Claude Code
+et à corriger deux fois une validation en échec ; il n'autorise rien dans Git. Une file active
+sur un projet `Manual` continue de s'arrêter sur un repository modifié.
+
+Quand une tâche est validée, NOX fige un **candidat de livraison** : la branche, `HEAD`,
+l'empreinte authentifiée du dossier de travail et la liste exacte des fichiers changés. Juste
+avant d'écrire, il relit tout et compare. Si le repository correspond encore, il prépare les
+chemins exacts — jamais un `git add .` — et crée un commit dont le sujet porte le code de la
+tâche et le corps un trailer technique. En `Auto commit + push validated`, il pousse ensuite vers
+l'upstream **déjà configuré** de la branche courante. La file peut alors continuer.
+
+En `Manual`, le candidat est enregistré et affiché quand même : la surface de livraison montre
+exactement ce qu'il y aurait à livrer, et deux boutons le livrent — avec les mêmes gardes que
+l'automatique. Livrer depuis un terminal reste évidemment possible ; le préflight Git existant
+reste alors l'autorité qui laisse la file continuer.
+
+**Limites.**
+
+- **Si le repository ne correspond plus au candidat, NOX n'écrit pas.** Pas de « il essaie de
+  sauver ce qu'il peut », pas de distinction entre une modification innocente et une autre,
+  aucun bouton `Commit anyway`. Le candidat n'est jamais recalculé sur l'état courant : il
+  faudrait une nouvelle validation pour cela.
+- **Une tâche simplement marquée terminée ne se livre pas.** Sans exécution, sans review et sans
+  décision, il n'existe aucun travail validé — et commiter ce qui traîne serait une invention.
+- **NOX ne change jamais de branche, et ne configure jamais un upstream.** `HEAD` détaché,
+  branche différente, upstream absent : autant de refus nommés, jamais une réparation.
+- **NOX ne force jamais un push, et ne réconcilie jamais un historique.** Un refus
+  « non-fast-forward » conserve le commit local et rend la main ; ni `pull`, ni `merge`, ni
+  `rebase`.
+- **Aucune protection du repository n'est contournée.** `--no-verify` et `--no-gpg-sign` ne sont
+  jamais passés. Un hook de commit ou une signature configurée fait renoncer la livraison
+  **automatique** — personne ne regarde ; un geste humain reste possible, et le hook s'exécute.
+- **Le garde-fou des fichiers sensibles est un filtre de noms, pas un détecteur de secrets.** Il
+  refuse qu'un `.env`, un `*.pem`, un `*.key` ou un `credentials.json` apparaisse pour la
+  première fois dans un commit automatique. Un secret écrit dans un fichier de code ordinaire
+  passera, et NOX ne prétend pas le contraire.
+- **NOX ne stocke aucun identifiant Git.** Ni table, ni jeton, ni clé : il utilise
+  l'environnement Git déjà fonctionnel de la machine, en mode non interactif.
+- **Aucun worker de fond.** Rien ne part d'un rendu de page ni d'un démarrage de serveur : le
+  déclencheur est la transition d'une tâche vers `COMPLETED`, et la réservation persistante rend
+  le geste idempotent.
+- **Un dossier de travail propre n'est pas une livraison.** Si l'utilisateur a commité lui-même,
+  NOX ne cherche pas à reconnaître quel commit correspondait au travail : deviner serait pire que
+  ne rien dire.
+
+**Frontières.** Zéro appel à OpenAI, zéro Claude Code : une livraison n'est ni une décision de
+produit, ni une relecture. Trois commandes d'écriture seulement — `git add` sur des chemins
+littéraux, `git commit`, `git push` — et aucune autre n'est atteignable. Le navigateur n'envoie
+que des identifiants et un mode ; ni chemin, ni branche, ni remote, ni message, ni argument Git.
+Supprimer un projet retire son état de livraison et jamais son historique Git.
+
 ## 3. Où en est l'écart avec la cible
 
 ### 3.1 Résolu par `TASK-020` : une conversation par projet
@@ -690,27 +754,27 @@ Le cycle de `TASK-021` — proposer, relire, corriger, appliquer — a été ré
 quel, à une différence près qui compte : ce qui s'applique n'est plus un état, c'est un
 **lot**. D'où l'atomicité de la transaction, et la franchise sur ce qu'elle ne couvre pas.
 
-### 3.4 Résolu par `TASK-023` à `TASK-028`
+### 3.4 Résolu par `TASK-023` à `TASK-029`
 
-Cinq limitations de cette liste n'existent plus. Une spécification **se modifie** tant qu'elle n'a
+Six limitations de cette liste n'existent plus. Une spécification **se modifie** tant qu'elle n'a
 jamais été exécutée ; les **dépendances** entre tâches sont un graphe acyclique explicite ; un
 projet vide **s'amorce** par `TASK-000` ; une **file d'exécution** enchaîne les tâches inscrites
-sans jamais contourner le préflight Git ni la review humaine ; et **correction et re-review
-s'enchaînent**, avec une borne écrite.
+sans jamais contourner le préflight Git ni la review humaine ; **correction et re-review
+s'enchaînent**, avec une borne écrite ; et un travail validé **se livre dans Git**, sous une
+politique choisie projet par projet.
 
 `TASK-027` avait fermé la boucle que la file avait ouverte : l'humain n'est sollicité que là où il
 apporte quelque chose. `TASK-028` va au bout du raisonnement — quand NOX possède lui-même la preuve
-d'un échec, il n'a besoin de personne pour la recopier, et une file démarrée à la main lui donne le
-droit d'y répondre deux fois.
+d'un échec, il n'a besoin de personne pour la recopier. `TASK-029` lève la dernière interruption
+systématique : le commit, qui arrêtait la file après chaque tâche.
 
 ### 3.5 Ce qui reste à faire
 
-- **Aucune livraison Git depuis NOX.** Le commit reste un geste fait dans le terminal, et une file
-  s'arrête sur un dépôt modifié.
-- **Une seule exécution active, tous projets confondus.**
+- **Une seule exécution active, tous projets confondus.** Deux projets ne peuvent pas avancer en
+  parallèle.
 - **Aucune replanification structurée** depuis la conversation du projet.
 
-Voir [ROADMAP.md](ROADMAP.md), `TASK-029` à `TASK-032`.
+Voir [ROADMAP.md](ROADMAP.md), `TASK-031` et `TASK-032`.
 
 ---
 

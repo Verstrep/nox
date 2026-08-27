@@ -127,6 +127,27 @@ model Project {
   /// derriere elle aucune autorisation dormante.
   executionQueueActive Boolean @default(false)
 
+  /// Ce que ce projet autorise NOX a ecrire dans Git.
+  ///
+  /// ## Pourquoi `MANUAL` par defaut, et pourquoi c'est structurel
+  ///
+  /// Parce qu'une migration ne doit jamais accorder un droit que personne n'a
+  /// demande. Un projet cree avant TASK-029 recoit `MANUAL` par la valeur par
+  /// defaut de la colonne : le simple fait d'installer cette version produit
+  /// zero commit, zero push, zero livraison, zero avancement de file.
+  ///
+  /// ## Ce que cette colonne autorise, et ce qu'elle n'autorise pas
+  ///
+  /// Elle est **independante** de `executionQueueActive`. Demarrer une file
+  /// autorise NOX a lancer Claude Code et, depuis TASK-028, a repondre a un
+  /// echec de validation par un nombre borne de corrections. Elle n'autorise
+  /// rien dans Git. Une file active sur un projet `MANUAL` continue de
+  /// s'arreter sur un repository modifie, exactement comme avant.
+  ///
+  /// Valeur de `DeliveryPolicy`. Une valeur illisible est relue comme
+  /// `MANUAL` : le defaut sur n'accorde rien.
+  deliveryPolicy String @default("MANUAL")
+
   /// Prochaine position a attribuer dans la file d'execution.
   ///
   /// Meme regle que `nextTaskSequence` : il ne recule jamais. Un `MAX(sequence)`
@@ -143,6 +164,7 @@ model Project {
   backlogGenerations ArchitectBacklogGeneration[]
   backlogProposals   ArchitectBacklogProposal[]
   queueEntries       TaskQueueEntry[]
+  gitDeliveries      GitDelivery[]
 
   @@unique([mainArchitectSessionId])
   @@unique([activeBacklogGenerationId])
@@ -573,6 +595,9 @@ model Task {
   /// Corrections reservees sur cette tache, lancees ou non.
   correctionAttempts CorrectionAttempt[]
 
+  /// Livraisons Git reservees pour cette tache.
+  gitDeliveries GitDelivery[]
+
   @@unique([projectId, sequence])
   @@index([projectId, status])
   @@index([backlogProposalId, backlogItemPosition])
@@ -749,6 +774,9 @@ model Run {
 
   /// Reservation dont cette execution est nee, pour une correction.
   correctionAttempt CorrectionAttempt? @relation("CorrectionAttemptRun")
+
+  /// Livraisons Git dont cette execution est le travail valide.
+  gitDeliveries GitDelivery[]
 
   /// `parentRunId` est une colonne, pas une relation Prisma.
   ///
@@ -1779,4 +1807,118 @@ model CorrectionAttempt {
   @@unique([correctionRunId])
   @@index([taskId, createdAt])
   @@index([sourceRunId])
+}
+
+/// Une livraison Git : le candidat valide, et ce qu'il est devenu.
+///
+/// ## Pourquoi une table plutot qu'un champ sur `Task`
+///
+/// Parce qu'elle est la **reservation** qui existe avant l'ecriture qu'elle
+/// autorise. Un champ sur la tache ne pourrait etre ecrit qu'apres le commit —
+/// c'est-a-dire trop tard pour empecher qu'on en cree deux. C'est le meme
+/// raisonnement que `AutonomousValidationBatch` et `CorrectionAttempt` : le
+/// point de serialisation doit preceder l'effet externe, sans quoi il ne
+/// serialise rien.
+///
+/// ## Ce que le candidat prouve
+///
+/// `expectedHead`, `expectedBranch` et `candidateFingerprint` decrivent l'etat
+/// exact du repository au moment de la decision finale. `candidateJson` porte
+/// les entrees changees — code de statut et chemin relatif — qui deviendront
+/// les pathspecs exacts du `git add`. Ensemble, ils repondent a la seule
+/// question qui compte avant d'ecrire : le repository contient-il encore,
+/// octet pour octet, le travail qui a ete valide ?
+///
+/// L'empreinte est un HMAC dont la cle est derivee du jeton du runner et n'est
+/// jamais stockee ici — la meme primitive que `Run.workspaceFingerprint`, pour
+/// la meme raison, et surtout **pas** une deuxieme implementation. Elle ne
+/// quitte jamais le serveur.
+///
+/// ## Ce que le candidat n'est pas
+///
+/// Il n'est jamais recalcule. Si le repository diverge, la livraison est
+/// bloquee ; elle n'est pas reancree sur l'etat courant en declarant que
+/// « maintenant c'est valide ». Il faudrait pour cela une nouvelle validation.
+model GitDelivery {
+  id        String @id @default(cuid())
+  projectId String
+  taskId    String
+
+  /// Execution dont le travail est livre, et sa decision de review.
+  ///
+  /// Toujours presente : une tache simplement marquee terminee n'a ni run, ni
+  /// review, ni etat accepte — donc aucun candidat sur a definir.
+  sourceRunId      String
+  /// Decision de review qui a conclu cette execution, telle qu'elle existait.
+  sourceDecisionId String?
+
+  /// Valeur de `DeliveryPolicy`, figee a la reservation.
+  ///
+  /// Recopiee plutot que relue : changer la politique du projet ne doit ni
+  /// annuler un commit deja cree, ni transformer retroactivement une livraison
+  /// passee. La nouvelle politique ne gouverne que ce qui n'a pas encore eu
+  /// lieu.
+  policy String
+
+  /// Valeur de `DeliveryTrigger` : la politique, ou un clic explicite.
+  trigger String
+
+  /// Valeur de `DeliveryStatus`.
+  status String
+
+  /// Compteur de tentatives, et **le verrou**.
+  ///
+  /// Chaque action prend la main par une mise a jour conditionnelle sur cette
+  /// valeur : deux `Resume delivery` simultanes lisent le meme numero, un seul
+  /// reussit a l'incrementer. Jamais un verrou en memoire, qui ne survivrait ni
+  /// a un redemarrage, ni a deux processus.
+  ///
+  /// Il ne recule jamais, echecs compris — comme tous les compteurs de NOX.
+  attempt Int @default(0)
+
+  /// Etat du repository au moment de la validation.
+  expectedHead         String
+  expectedBranch       String
+  candidateFingerprint String
+  /// Entrees changees du candidat, serialisees.
+  candidateJson        String
+
+  /// Upstream de la branche, lorsqu'il en existait un a la reservation.
+  ///
+  /// NOX n'en configure jamais : ces colonnes enregistrent ce que Git declarait,
+  /// et servent a refuser un push dont la destination aurait change entre-temps.
+  upstreamRemote String?
+  upstreamRef    String?
+
+  /// Message fige a la reservation, trailer compris.
+  ///
+  /// Jamais recalcule : une reprise apres panne doit commiter exactement le meme
+  /// texte, sinon le trailer ne prouverait plus quel commit appartient a quelle
+  /// livraison.
+  commitMessage String
+
+  /// Commit cree par cette livraison, lorsqu'il existe.
+  commitSha String?
+
+  /// Dernier refus ou echec constate. Valeur de `DeliveryRefusalCode`.
+  errorCode String?
+  /// Sortie Git bornee et assainie, ou message construit par NOX.
+  errorMessage String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  committedAt DateTime?
+  pushedAt    DateTime?
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// `Restrict` comme les autres faits historiques : une livraison documente une
+  /// tache et une execution, et rien ne les supprime dans son dos.
+  task      Task    @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  sourceRun Run     @relation(fields: [sourceRunId], references: [id], onDelete: Restrict)
+
+  /// L'index qui compte : dix constatations simultanees de « tache terminee »
+  /// visent la meme paire, et une seule obtient sa livraison.
+  @@unique([taskId, sourceRunId])
+  @@index([projectId, createdAt])
+  @@index([taskId])
 }

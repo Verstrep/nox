@@ -56,6 +56,11 @@ export const PROJECT_DELETION_ORDER = [
   "runHumanCriterionConfirmation",
   "runReviewDecision",
   "architectRunReview",
+  // Les livraisons Git avant les executions et les taches qu'elles designent :
+  // leurs liens vers `Task` et `Run` sont `Restrict`. Supprimer un projet retire
+  // l'etat NOX de ses livraisons ; les commits qu'elles ont crees, eux, restent
+  // dans le repository — NOX ne defait jamais un historique Git.
+  "gitDelivery",
   // Les reservations de correction avant les executions qu'elles designent :
   // leurs deux liens vers `Run` sont `Restrict`, comme celui de `ReviewFeedback`.
   "correctionAttempt",
@@ -199,6 +204,10 @@ export async function deleteProjectState(
       ).count,
       runReviewDecision: (await tx.runReviewDecision.deleteMany({ where: byRun })).count,
       architectRunReview: (await tx.architectRunReview.deleteMany({ where: byRun })).count,
+      // Une livraison reference un projet, une tache et une execution : elle
+      // part avant les trois. Aucune commande Git n'est declenchee ici, et
+      // aucun commit deja cree n'est defait.
+      gitDelivery: (await tx.gitDelivery.deleteMany({ where: { projectId } })).count,
       // Un feedback reference une tache **et** deux executions : il part avant
       // les trois.
       correctionAttempt: (await tx.correctionAttempt.deleteMany({ where: byTask })).count,

@@ -12,7 +12,7 @@ import { QueueActionButton } from "@/components/QueueActionButton";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { taskStatusLabel } from "@/lib/labels";
-import { getDatabaseClient } from "@nox/database";
+import { getBlockingDelivery, getDatabaseClient } from "@nox/database";
 
 import { loadProject, loadQueueWithRepository } from "@/lib/projects";
 
@@ -28,6 +28,11 @@ import {
 import { describeWaitingDependencies } from "@/lib/task-dependencies";
 import { taskStatusTone, taskUrl } from "@/lib/task-display";
 import { loadTaskCorrectionCycle } from "@/lib/correction-cycle";
+import {
+  deliveryRefusalLabel,
+  deliveryStateLabel,
+  deliveryUrl,
+} from "@/lib/delivery-display";
 import { loadReviewWait } from "@/lib/verification-review";
 
 import {
@@ -84,6 +89,13 @@ export default async function QueuePage({ params }: { params: Promise<{ id: stri
       ? null
       : (await loadTaskCorrectionCycle(getDatabaseClient(), queue.current.taskId))?.cycle ?? null;
 
+  // Le blocage Git, quand il en existe un. Lecture SQLite : ouvrir la file
+  // n'inspecte pas le repository et n'ecrit rien. « Waiting for repository
+  // readiness » ne doit pas masquer une raison que NOX connait precisement —
+  // une livraison bloquee, un push refuse, un repository modifie apres
+  // validation.
+  const blockingDelivery = await getBlockingDelivery(getDatabaseClient(), project.id);
+
   const stateLabel =
     reviewWait === null
       ? queueStateLabel(queue.state)
@@ -126,6 +138,27 @@ export default async function QueuePage({ params }: { params: Promise<{ id: stri
           <p className="max-w-prose text-sm leading-relaxed text-zinc-400">
             {stateExplanation}
           </p>
+
+          {blockingDelivery === null ? null : (
+            <div className="mt-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+              <p className="text-sm font-medium text-amber-200">
+                {blockingDelivery.errorCode === null
+                  ? deliveryStateLabel(blockingDelivery.status, null)
+                  : deliveryRefusalLabel(blockingDelivery.errorCode)}
+              </p>
+              <p className="mt-1 max-w-prose text-sm leading-relaxed text-amber-200/80">
+                Le travail validé de la tâche précédente n&apos;est pas encore livré : la file
+                ne lance pas la suivante tant que la politique Git de ce projet n&apos;est pas
+                satisfaite.
+              </p>
+              <Link
+                href={deliveryUrl(project.id, blockingDelivery.taskId)}
+                className="mt-2 inline-block text-xs text-amber-200 underline underline-offset-4 hover:text-amber-100"
+              >
+                Open delivery
+              </Link>
+            </div>
+          )}
 
           <dl className="mt-5 grid gap-4 sm:grid-cols-3">
             <div>

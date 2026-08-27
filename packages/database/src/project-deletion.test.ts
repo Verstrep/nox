@@ -322,6 +322,27 @@ async function populate(projectId: string): Promise<{ taskId: string; bootstrapI
     },
   });
 
+  // Une livraison Git : trois liens, dont deux `Restrict` vers `Task` et `Run`.
+  // Comme pour la reservation ci-dessus, sans une ligne reelle le test qui
+  // verifie que toutes les tables sont videes ne prouverait rien sur celle-ci.
+  await db.gitDelivery.create({
+    data: {
+      projectId,
+      taskId,
+      sourceRunId: run.id,
+      policy: "AUTO_COMMIT",
+      trigger: "AUTOMATIC",
+      status: "COMMITTED",
+      attempt: 1,
+      expectedHead: "f".repeat(40),
+      expectedBranch: "main",
+      candidateFingerprint: REVISION_A,
+      candidateJson: JSON.stringify([{ code: " M", path: "src/app.ts" }]),
+      commitMessage: "TASK-001: livraison de test",
+      commitSha: "e".repeat(40),
+    },
+  });
+
   // Une file d'execution active, avec une inscription : sans elle, le test qui
   // verifie que **toutes** les tables sont videes passerait sans rien prouver
   // sur celle-ci.
@@ -391,6 +412,7 @@ async function countAll(projectId: string): Promise<Record<string, number>> {
     }),
     runReviewDecision: await db.runReviewDecision.count({ where: byRun }),
     architectRunReview: await db.architectRunReview.count({ where: byRun }),
+    gitDelivery: await db.gitDelivery.count({ where: { projectId } }),
     correctionAttempt: await db.correctionAttempt.count({ where: byTask }),
     reviewFeedback: await db.reviewFeedback.count({ where: byTask }),
     run: await db.run.count({ where: byTask }),
@@ -463,6 +485,7 @@ describe("deleteProjectState", () => {
         runHumanCriterionConfirmation: 0,
         runReviewDecision: 0,
         architectRunReview: 0,
+        gitDelivery: 0,
         correctionAttempt: 0,
         reviewFeedback: 0,
         run: 0,
@@ -503,6 +526,7 @@ describe("deleteProjectState", () => {
     // L'etat de TASK-028 disparait avec le reste : une reservation de correction
     // n'a aucune raison de survivre au projet qu'elle documente.
     assert.equal(result.counts.correctionAttempt, 1);
+    assert.equal(result.counts.gitDelivery, 1);
     assert.equal(result.counts.projectMemoryEntry, 2);
     // Chaque cle de l'ordre declare a bien ete rapportee.
     for (const table of PROJECT_DELETION_ORDER) {
@@ -589,6 +613,7 @@ describe("deleteProjectState", () => {
       runHumanCriterionConfirmation: 0,
       runReviewDecision: 0,
       architectRunReview: 0,
+      gitDelivery: 0,
       correctionAttempt: 0,
       reviewFeedback: 0,
       run: 0,

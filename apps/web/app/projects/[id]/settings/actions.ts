@@ -1,12 +1,14 @@
 "use server";
 
-import { getDatabaseClient } from "@nox/database";
+import { getDatabaseClient, setProjectDeliveryPolicy } from "@nox/database";
+import { isDeliveryPolicy } from "@nox/shared";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { deliveryPolicyLabel } from "@/lib/delivery-display";
 import { deleteProjectFromNox, renameProjectInNox } from "@/lib/project-lifecycle";
 
-import type { DeleteProjectState, RenameProjectState } from "./form-state";
+import type { DeleteProjectState, DeliveryPolicyState, RenameProjectState } from "./form-state";
 
 const UNEXPECTED_ERROR_MESSAGE =
   "Une erreur inattendue est survenue. Consultez les logs du serveur pour le détail.";
@@ -97,4 +99,69 @@ export async function deleteProjectAction(
   redirect(
     `/?deleted=1&removed=${String(outcome.removed)}&modified=${String(outcome.modified)}`,
   );
+}
+
+/**
+ * Enregistre la politique de livraison Git d'un projet.
+ *
+ * ## Ce que le navigateur envoie
+ *
+ * Deux valeurs : l'identifiant du projet et le mode choisi. Ni chemin de
+ * repository, ni branche, ni remote, ni argument Git, ni liste de fichiers. Le
+ * mode est revalide cote serveur contre la liste fermee — une valeur forgee ne
+ * peut donc pas ouvrir un droit qui n'existe pas.
+ *
+ * ## Ce qu'elle n'ecrit pas
+ *
+ * Rien dans Git. Aucun commit, aucun push, aucune livraison, aucun avancement
+ * de file : c'est une ecriture SQLite, et la page fonctionne runner arrete.
+ * Passer d'un mode automatique a `Manual` ne defait rien de ce qui a deja ete
+ * livre.
+ */
+export async function setDeliveryPolicyAction(
+  _previousState: DeliveryPolicyState,
+  formData: FormData,
+): Promise<DeliveryPolicyState> {
+  const projectId = readField(formData, "projectId");
+  const policy = readField(formData, "policy");
+
+  if (!isDeliveryPolicy(policy)) {
+    return {
+      error:
+        "Ce mode de livraison n'existe pas. Rechargez la page et choisissez l'un des trois " +
+        "modes proposés.",
+      notice: null,
+    };
+  }
+
+  let outcome;
+  try {
+    outcome = await setProjectDeliveryPolicy(getDatabaseClient(), projectId, policy);
+  } catch (error) {
+    console.error("[nox] Echec du changement de politique de livraison :", error);
+    return { error: UNEXPECTED_ERROR_MESSAGE, notice: null };
+  }
+
+  if (!outcome.ok) {
+    return {
+      error: "Ce projet n'existe plus. Revenez au tableau de bord.",
+      notice: null,
+    };
+  }
+
+  if (!outcome.changed) {
+    return {
+      error: null,
+      notice: "Le mode est inchangé : rien n'a été enregistré.",
+    };
+  }
+
+  revalidatePath("/");
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/settings`);
+  revalidatePath(`/projects/${projectId}/queue`);
+  return {
+    error: null,
+    notice: `Git delivery : ${deliveryPolicyLabel(outcome.policy)}. Aucun commit et aucun push n'ont été créés par ce changement.`,
+  };
 }

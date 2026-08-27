@@ -5234,3 +5234,154 @@ une course perdue d'avance.
 
 Ce n'est pas un détail d'ordonnancement : c'est l'événement de finalisation qui produit désormais
 tout ce qu'il doit produire, au lieu d'en laisser une partie à l'écran qui l'affichera.
+
+### D-347 — La politique de livraison est une autorisation distincte de celle de la file
+
+**Décision.** Écrire dans Git demande une seconde autorisation, donnée dans les réglages du
+projet : `MANUAL`, `AUTO_COMMIT` ou `AUTO_COMMIT_PUSH`. `Start queue` ne l'accorde pas.
+
+**Justification.** Les deux gestes n'ont pas la même portée. Démarrer une file laisse NOX
+consommer du quota et modifier un dossier de travail — c'est réversible, et le résultat se
+relit. Écrire dans Git touche un historique partagé, et un push le rend visible ailleurs.
+
+Les fondre dans une seule autorisation aurait fait qu'un utilisateur qui voulait simplement
+enchaîner deux tâches se serait retrouvé avec des commits qu'il n'avait pas demandés. Les
+séparer coûte un réglage de plus ; c'est le prix pour que « je lance la file » ne veuille jamais
+dire « je signe ce qui en sortira ».
+
+### D-348 — Le défaut est `MANUAL`, et il est structurel
+
+**Décision.** La colonne `Project.deliveryPolicy` porte `MANUAL` comme valeur par défaut. Aucune
+donnée n'est écrite par la migration, et une valeur illisible est relue `MANUAL`.
+
+**Justification.** Une migration ne doit jamais accorder un droit que personne n'a demandé.
+Installer cette version sur une base existante produit zéro commit, zéro push et zéro
+avancement de file — et c'est vérifiable, parce que la garantie tient dans la valeur par défaut
+plutôt que dans une instruction `UPDATE` qu'il aurait fallu écrire correctement.
+
+Le même raisonnement s'applique à la lecture : un défaut sûr est celui qui n'accorde rien, et
+`MANUAL` est le seul mode dont on soit certain qu'il ne peut rien casser.
+
+### D-349 — Le candidat de livraison est figé, et jamais recalculé
+
+**Décision.** Au moment de la décision finale, NOX enregistre la branche, `HEAD`, l'empreinte
+authentifiée du dossier de travail et la liste exacte des entrées changées. Si le repository
+diverge ensuite, la livraison est bloquée ; le candidat n'est pas réancré sur l'état courant.
+
+**Justification.** Recalculer le candidat reviendrait à dire « ce qui se trouve là maintenant est
+validé », ce que personne n'a vérifié. C'est exactement le scénario que TASK-029 existe pour
+empêcher : un éditeur resté ouvert, un script lancé à la main, et un commit automatique qui
+emporte du code que personne n'a relu.
+
+La règle produit tient donc en une phrase, sans variante : **si le repository ne correspond plus
+au candidat validé, NOX n'écrit pas dans Git.** Pas de « il essaie de sauver ce qu'il peut », pas
+de distinction entre une petite modification et une autre, aucun bouton pour passer outre.
+
+### D-350 — Une seule implémentation d'empreinte de dossier de travail
+
+**Décision.** Le candidat réutilise l'empreinte de `TASK-012` — le HMAC dérivé du jeton du
+runner — plutôt que d'en définir une propre à la livraison.
+
+**Justification.** Elle répond déjà exactement à la question posée : « ce repository est-il
+encore, octet pour octet, celui qui a été relu ? ». Elle couvre la branche, `HEAD`, l'état
+d'index et le **contenu** de chaque entrée changée — une modification qui préserverait le nombre
+de lignes lui échapperait, à une comparaison de listes de fichiers, pas à elle.
+
+Trois implémentations d'« empreinte du repository » auraient surtout garanti qu'un jour deux
+d'entre elles divergent, et que personne ne sache laquelle fait autorité.
+
+### D-351 — Le staging est fermé sur les chemins du candidat
+
+**Décision.** `git add -A -- :(literal)<chemin>` pour chaque chemin du candidat, par lots. Jamais
+`git add .`, jamais `git add -A` sans pathspec. Ce qui est préparé est relu et comparé avant le
+commit.
+
+**Justification.** Un `git add .` commiterait ce qui se trouve là, pas ce qui a été validé — et
+la différence est précisément un fichier apparu entre-temps. La syntaxe `:(literal)` n'est pas
+un détail : sans elle, un fichier nommé `notes[1].md` serait lu comme un motif de recherche, et
+Git répondrait « aucun fichier ne correspond » sur un fichier qui existe.
+
+Le `-A` restreint à des chemins littéraux n'élargit rien : il rend uniforme le traitement d'une
+création, d'une modification et d'une suppression, là où `git add <chemin>` en dépend de la
+version de Git.
+
+### D-352 — Le commit porte un trailer déterministe, et le sujet reste lisible
+
+**Décision.** Le message est `TASK-003: <titre>`, suivi d'une ligne `NOX-Delivery: <id>`. Il est
+figé à la réservation et jamais recalculé.
+
+**Justification.** Le sujet est lu par des humains dans un `git log --oneline` : un identifiant
+opaque de vingt-cinq caractères n'y apprendrait rien à personne. Le trailer, lui, répond à une
+question que seule une machine se pose — « ce commit est-il celui que j'étais en train de créer
+quand le serveur s'est arrêté ? ».
+
+Sans lui, une reprise après panne créerait un second commit identique, et personne ne saurait
+lequel garder. Avec lui, la reconnaissance est exacte — à condition d'exiger **aussi** le parent
+attendu, parce qu'un trailer seul pourrait venir d'un `cherry-pick`.
+
+### D-353 — La réconciliation reste bornée à `HEAD`
+
+**Décision.** NOX ne cherche un commit déjà créé qu'à `HEAD`, jamais dans l'historique.
+
+**Justification.** Le flux normal sait exactement où ce commit devrait se trouver : juste
+au-dessus de l'état validé, sur la branche attendue. Parcourir l'historique pour retrouver une
+livraison serait lent, et surtout ambigu — un `git log --all` finirait par ramener autre chose,
+et « autre chose » deviendrait un commit que NOX déclarerait sien.
+
+### D-354 — Commit et push sont deux faits distincts, et un push refusé conserve le commit
+
+**Décision.** `AUTO_COMMIT` est satisfait dès `COMMITTED` ; `AUTO_COMMIT_PUSH` seulement après
+`DELIVERED`. Un push refusé laisse la livraison `COMMITTED` avec sa raison, et le geste proposé
+est `Retry push` — qui ne recrée jamais de commit.
+
+**Justification.** Les confondre ferait avancer la file d'un projet dont le travail n'est jamais
+parti. Et réduire « le commit existe, le push a échoué » à « la livraison a échoué » ferait
+proposer une reprise complète, qui créerait un second commit identique — exactement ce que le
+trailer existe pour empêcher.
+
+L'upstream est donc vérifié **avant** le commit pour `AUTO_COMMIT_PUSH` : créer un commit local
+qu'on savait ne pas pouvoir pousser laisserait la branche en avance, donc un préflight en échec,
+donc une file arrêtée, pour rien.
+
+### D-355 — NOX ne réconcilie jamais un historique, et ne contourne aucune protection
+
+**Décision.** Aucun `--force`, aucun `--force-with-lease`, aucun `pull`, `merge`, `rebase`,
+`reset`, `restore`, `checkout` ou `clean`. Aucun `--no-verify`, aucun `--no-gpg-sign`. Quand un
+hook de commit ou une signature est configuré, la livraison **automatique** renonce avec une
+raison nommée ; un geste humain reste possible.
+
+**Justification.** Ces commandes ne réparent pas une situation : elles en choisissent une, et le
+choix appartient à celui dont c'est l'historique. Un `reset` automatique détruirait justement ce
+qu'un humain doit relire pour comprendre ce qui s'est passé.
+
+Pour les hooks, la distinction automatique/humain n'est pas un affaiblissement : le hook
+s'exécute dans les deux cas, et NOX ne le désactive jamais. Ce qui change est qu'un script
+capable de modifier le contenu, de poser une question ou de durer ne doit pas tourner sans
+personne devant l'écran.
+
+### D-356 — Manuel n'a jamais moins de gardes que l'automatique
+
+**Décision.** Les deux boutons de la surface de livraison passent par le même moteur, le même
+candidat et les mêmes vérifications. Ce qui les distingue tient en deux valeurs : qui déclenche,
+et faut-il pousser.
+
+**Justification.** « Manuel » décrit qui appuie, pas ce qui est vérifié. Un second chemin, plus
+permissif, serait devenu la porte que l'on emprunte quand le premier refuse — et la garantie
+centrale de TASK-029 n'aurait plus tenu que par discipline.
+
+L'utilisateur qui veut passer outre garde son terminal : NOX n'essaie pas de l'en empêcher, et
+un repository propre laisse la file continuer même si NOX n'a créé aucun commit.
+
+### D-357 — Un dossier de travail propre n'est pas une livraison reconnue
+
+**Décision.** Quand le dossier de travail est propre au moment de la décision, aucune livraison
+n'est enregistrée. NOX ne cherche pas à reconnaître quel commit correspondait au travail validé.
+
+**Justification.** C'est le cas de l'utilisateur qui a commité lui-même, et il est parfaitement
+légitime. Mais deviner *quel* commit portait ce travail demanderait de comparer des arbres et de
+trancher des cas ambigus — un `amend`, un `squash`, deux tâches livrées ensemble. Une
+reconnaissance qui se trompe est pire qu'une absence de reconnaissance.
+
+Le préflight Git existant suffit : un repository propre et synchronisé laisse la file continuer,
+exactement comme avant TASK-029. La surface de livraison, elle, se contente de dire ce qu'elle
+constate — sans en tirer de conclusion sur un commit qu'elle n'a pas créé.

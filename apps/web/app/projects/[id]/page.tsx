@@ -1,5 +1,11 @@
 import { ARCHITECT_SESSION_KIND, TASK_STATUS } from "@nox/shared";
-import { findProjectArchitectSession, getDatabaseClient, listArchitectSessions } from "@nox/database";
+import {
+  findProjectArchitectSession,
+  getBlockingDelivery,
+  getDatabaseClient,
+  listArchitectSessions,
+  readProjectDeliveryPolicy,
+} from "@nox/database";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -29,6 +35,13 @@ import { loadStructuredState } from "@/lib/project-plan";
 import { loadProject, loadQueue } from "@/lib/projects";
 import { countTasksByStatus } from "@/lib/task-display";
 
+import {
+  deliveryPolicyLabel,
+  deliveryRefusalLabel,
+  deliveryStateLabel,
+  deliverySettingsUrl,
+  deliveryUrl,
+} from "@/lib/delivery-display";
 import { queueStateLabel, queueUrl } from "@/lib/queue-display";
 import { loadProjectTasks } from "@/lib/tasks";
 
@@ -103,6 +116,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // La file vient de SQLite : aucune sonde du repository ici. Cette page dit
   // combien de taches attendent, pas si elles pourraient partir.
   const queue = await loadQueue(project.id);
+
+  // La politique Git et la derniere livraison, lues en base. Aucune commande
+  // Git, aucun appel au runner : ouvrir un projet n'inspecte pas son
+  // repository, et n'y ecrit evidemment rien.
+  const deliveryPolicy = await readProjectDeliveryPolicy(getDatabaseClient(), project.id);
+  const blockingDelivery = await getBlockingDelivery(getDatabaseClient(), project.id);
 
   const backlog = await loadProjectBacklogView(project.id);
   const backlogState: BacklogSurfaceState =
@@ -352,6 +371,42 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           <p className="mt-5 max-w-prose text-sm leading-relaxed text-zinc-400">
             Inscrire une tâche ne lance rien. Démarrer la file ouvre une autorisation permanente,
             qui reste soumise aux dépendances, à la review et aux préconditions du repository.
+          </p>
+        </SectionCard>
+
+        <SectionCard
+          title="Git delivery"
+          description="Ce que NOX a le droit d'écrire dans Git après une tâche validée."
+          action={
+            <Link
+              href={deliverySettingsUrl(project.id)}
+              className="inline-block rounded-md border border-zinc-700 bg-zinc-800/70 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-50"
+            >
+              Change policy
+            </Link>
+          }
+        >
+          <p className="text-sm text-zinc-200">{deliveryPolicyLabel(deliveryPolicy)}</p>
+
+          {blockingDelivery === null ? null : (
+            <div className="mt-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+              <p className="text-sm font-medium text-amber-200">
+                {blockingDelivery.errorCode === null
+                  ? deliveryStateLabel(blockingDelivery.status, null)
+                  : deliveryRefusalLabel(blockingDelivery.errorCode)}
+              </p>
+              <Link
+                href={deliveryUrl(project.id, blockingDelivery.taskId)}
+                className="mt-2 inline-block text-xs text-amber-200 underline underline-offset-4 hover:text-amber-100"
+              >
+                Open delivery
+              </Link>
+            </div>
+          )}
+
+          <p className="mt-5 max-w-prose text-sm leading-relaxed text-zinc-400">
+            Ce réglage est indépendant de la file : « Start queue » autorise NOX à lancer
+            Claude Code, jamais à écrire dans Git.
           </p>
         </SectionCard>
 

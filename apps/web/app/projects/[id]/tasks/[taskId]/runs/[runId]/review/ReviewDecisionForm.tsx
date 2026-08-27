@@ -1,9 +1,17 @@
 "use client";
 
+import type { DeliveryPolicy } from "@nox/shared";
 import Link from "next/link";
 import { useActionState, useId } from "react";
 
 import { decideReviewAction } from "./actions";
+import {
+  approveDeliveryNotice,
+  approvedDeliveryNotice,
+  deliveryUrl,
+  overrideDeliveryNotice,
+} from "@/lib/delivery-display";
+
 import { INITIAL_REVIEW_DECISION_STATE } from "./form-state";
 
 /** Un critere que seul un humain peut confirmer. */
@@ -22,6 +30,15 @@ type ReviewDecisionFormProps = {
   humanChecks: readonly HumanCheck[];
   /** La validation automatisee a echoue : seul un passage en force reste. */
   overrideRequired: boolean;
+  /**
+   * Politique de livraison Git du projet, relue en base.
+   *
+   * Elle ne change rien a ce que ce formulaire fait : elle change ce qu'il
+   * **annonce**. « Approve ne cree aucun commit » etait vrai avant TASK-029 et
+   * ne l'est plus dans deux modes sur trois — et une phrase rassurante devenue
+   * fausse est pire qu'une phrase absente.
+   */
+  deliveryPolicy: DeliveryPolicy;
   /** Un lot de validation tourne encore : aucune decision n'est possible. */
   validationRunning: boolean;
   /**
@@ -54,6 +71,7 @@ export function ReviewDecisionForm({
   runId,
   humanChecks,
   overrideRequired,
+  deliveryPolicy,
   validationRunning,
   requestChangesHref,
   requestChangesReason,
@@ -66,10 +84,12 @@ export function ReviewDecisionForm({
 
   if (state.decided === "approve") {
     return (
-      <p role="status" className="text-sm leading-relaxed text-teal-200/90">
-        Tache acceptee. Aucun commit n&apos;a ete cree : les modifications sont toujours dans
-        votre dossier de travail, et c&apos;est a vous de les commiter.
-      </p>
+      <div role="status" className="flex flex-col gap-2 text-sm leading-relaxed text-teal-200/90">
+        <p>{approvedDeliveryNotice(deliveryPolicy)}</p>
+        <Link href={deliveryUrl(projectId, taskId)} className="text-xs underline underline-offset-4">
+          Open delivery
+        </Link>
+      </div>
     );
   }
 
@@ -141,6 +161,11 @@ export function ReviewDecisionForm({
             mais la raison sera conservee avec la decision — et le resultat automatise ne sera pas
             reecrit.
           </p>
+          {overrideDeliveryNotice(deliveryPolicy) === null ? null : (
+            <p className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+              {overrideDeliveryNotice(deliveryPolicy)}
+            </p>
+          )}
           <input type="hidden" name="override" value="1" />
           <textarea
             name="overrideReason"
@@ -200,8 +225,7 @@ export function ReviewDecisionForm({
       <div id={noticeId} className="flex flex-col gap-2 text-xs leading-relaxed text-zinc-600">
         <p>
           <span className="font-mono">Approve</span> passe la tache a{" "}
-          <span className="font-mono">Done</span>. Aucun commit, aucun{" "}
-          <code className="font-mono">git add</code>, aucun push : le commit reste votre geste.
+          <span className="font-mono">Done</span>. {approveDeliveryNotice(deliveryPolicy)}
         </p>
         {/* La difference entre les deux boutons de rejet est la question la plus
             frequente de cette page : elle est repondue ici, pas dans un

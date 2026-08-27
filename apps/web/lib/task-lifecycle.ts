@@ -27,6 +27,7 @@ import type { VerificationPlanIssue } from "@nox/shared";
 import { TASK_STATUS, type TaskStatus } from "@nox/shared";
 
 import { advanceQueue, type AdvanceQueueResult } from "./queue.ts";
+import { maybeDeliver, type MaybeDeliverResult } from "./git-delivery.ts";
 
 export const UNKNOWN_TASK_MESSAGE =
   "Cette tache n'existe pas dans ce projet. Revenez au backlog et rouvrez-la.";
@@ -42,6 +43,8 @@ export type TaskTransitionOutcome =
       dequeued: boolean;
       /** Resultat de la tentative d'avancement, `null` si aucune n'a eu lieu. */
       dispatch: AdvanceQueueResult | null;
+      /** Livraison Git tentee apres l'acceptation, `null` si aucune n'a eu lieu. */
+      delivery: MaybeDeliverResult | null;
     }
   | { ok: false; message: string };
 
@@ -96,12 +99,42 @@ export async function applyTaskTransition(
   // Une tache acceptee libere la file : c'est `COMPLETED`, et rien d'autre, qui
   // la fait avancer. Un run techniquement termine mene a `REVIEW`, ce qui n'est
   // pas une acceptation.
-  const dispatch =
-    input.status === TASK_STATUS.COMPLETED
-      ? await advanceQueue(db, input.projectId)
-      : null;
+  if (input.status !== TASK_STATUS.COMPLETED) {
+    return { ok: true, dequeued: result.dequeued, dispatch: null, delivery: null };
+  }
 
-  return { ok: true, dequeued: result.dequeued, dispatch };
+  // La livraison **avant** l'avancement, et c'est tout l'ordre de TASK-029 : la
+  // file ne doit pas lancer la tache suivante tant que la politique Git
+  // applicable n'est pas satisfaite. C'est cette transition-la qui livre, jamais
+  // un rendu de page ; la reservation persistante rend le geste idempotent.
+  //
+  // Un echec de livraison ne fait jamais tomber la transition : la tache reste
+  // terminee, avec un etat lisible et un geste propose. C'est la meme regle que
+  // pour la capture de review et pour le lot de validations.
+  const delivery = await deliverQuietly(db, input.projectId, input.taskId);
+  const dispatch = await advanceQueue(db, input.projectId);
+
+  return { ok: true, dequeued: result.dequeued, dispatch, delivery };
+}
+
+/**
+ * Livre, et ne laisse jamais un incident faire tomber la transition.
+ *
+ * Une exception ici — runner injoignable, base verrouillee — ne doit pas
+ * transformer une acceptation reussie en echec : la tache **est** terminee, et
+ * la decision est deja ecrite. La livraison se reprend depuis sa propre surface.
+ */
+async function deliverQuietly(
+  db: DatabaseClient,
+  projectId: string,
+  taskId: string,
+): Promise<MaybeDeliverResult | null> {
+  try {
+    return await maybeDeliver(db, { projectId, taskId });
+  } catch (error) {
+    console.error("[nox] Echec de la livraison Git apres acceptation :", error);
+    return null;
+  }
 }
 
 /** Variante qui prend le client par defaut, pour les Server Actions. */

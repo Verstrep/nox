@@ -233,6 +233,34 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
     "La commande de validation n'a pas pu demarrer : programme introuvable, ou droits " +
     "insuffisants. Aucune preuve n'a ete obtenue.",
 
+  // Livraison Git. Ces messages sont volontairement proches de ceux de
+  // `delivery-display.ts` sans les dupliquer : ceux-la decrivent l'etat d'une
+  // livraison, ceux-ci decrivent le refus d'un appel au runner. Ils peuvent
+  // apparaitre pour une livraison comme pour une inspection.
+  [RUNNER_ERROR.DELIVERY_REPOSITORY_CHANGED]:
+    "Le repository ne correspond plus a l'etat qui a ete valide. Aucune ecriture Git " +
+    "n'a eu lieu.",
+  [RUNNER_ERROR.DELIVERY_INDEX_NOT_EMPTY]:
+    "L'index Git porte deja des changements prepares. NOX ne les melange pas avec le " +
+    "travail qu'il a valide.",
+  [RUNNER_ERROR.DELIVERY_IDENTITY_MISSING]:
+    "Git n'a ni user.name ni user.email configure pour ce repository. NOX n'en invente " +
+    "aucun et ne modifie aucune configuration.",
+  [RUNNER_ERROR.DELIVERY_STAGING_FAILED]:
+    "Les chemins du travail valide n'ont pas pu etre prepares. Aucun commit n'a ete cree.",
+  [RUNNER_ERROR.DELIVERY_STAGED_MISMATCH]:
+    "Ce qui a ete prepare ne correspond pas au travail valide. Aucun commit n'a ete cree.",
+  [RUNNER_ERROR.DELIVERY_COMMIT_FAILED]:
+    "Git n'a pas pu creer le commit. Rien n'a ete defait.",
+  [RUNNER_ERROR.DELIVERY_TREE_MISMATCH]:
+    "Le commit a ete cree, mais l'etat obtenu n'est pas celui attendu. NOX ne defait rien.",
+  [RUNNER_ERROR.DELIVERY_PUSH_REJECTED]:
+    "Le serveur distant a refuse le push : l'historique a diverge. Le commit local est " +
+    "conserve, et NOX ne force jamais.",
+  [RUNNER_ERROR.DELIVERY_PUSH_FAILED]:
+    "Le push a echoue : reseau, authentification ou delai depasse. Le commit local est " +
+    "conserve.",
+
   [RUNNER_ERROR.INTERNAL_ERROR]:
     "Le runner a rencontre une erreur interne. Consultez ses logs pour le detail.",
 };

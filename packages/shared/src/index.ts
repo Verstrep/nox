@@ -255,6 +255,75 @@ export type {
   RunProvenance,
 } from "./correction-cycle.js";
 
+export {
+  DELIVERY_LIMITS,
+  DELIVERY_POLICIES,
+  DELIVERY_POLICY,
+  DELIVERY_REFUSAL,
+  DELIVERY_REFUSAL_CODES,
+  DELIVERY_STATUS,
+  DELIVERY_STATUSES,
+  DELIVERY_TRAILER_KEY,
+  DELIVERY_TRIGGER,
+  DELIVERY_TRIGGERS,
+  buildDeliveryCommitMessage,
+  candidatePaths,
+  checkDeliveryEligibility,
+  checkDeliveryPush,
+  checkDeliveryWrite,
+  deliveryHasCommit,
+  deliverySatisfied,
+  deliverySubject,
+  deliveryTrailer,
+  isDeletedEntry,
+  isDeliveryPolicy,
+  isDeliveryRefusalCode,
+  isDeliveryStatus,
+  isDeliveryTrigger,
+  isUntrackedEntry,
+  policyAllowsAutomatic,
+  policyRequiresPush,
+  readDeliveryPolicy,
+  readDeliveryStatus,
+  readDeliveryTrigger,
+  reconcilesExistingCommit,
+  reconcilesExistingPush,
+  sensitiveNewPaths,
+} from "./git-delivery.js";
+
+export type {
+  DeliveryCandidateEntry,
+  DeliveryEligibility,
+  DeliveryEligibilityFacts,
+  DeliveryPolicy,
+  DeliveryPushFacts,
+  DeliveryRefusalCode,
+  DeliveryStatus,
+  DeliveryTrigger,
+  DeliveryUpstream,
+  DeliveryWriteDecision,
+  DeliveryWriteFacts,
+} from "./git-delivery.js";
+
+export {
+  isDeliveryCommitSuccess,
+  isDeliveryInspectSuccess,
+  isDeliveryPushSuccess,
+  parseDeliveryCommitRequest,
+  parseDeliveryInspectRequest,
+  parseDeliveryPushRequest,
+} from "./git-delivery-runner.js";
+
+export type {
+  DeliveryCommitRequest,
+  DeliveryCommitSuccess,
+  DeliveryInspectRequest,
+  DeliveryInspectSuccess,
+  DeliveryInspection,
+  DeliveryPushRequest,
+  DeliveryPushSuccess,
+} from "./git-delivery-runner.js";
+
 export { renderCorrectionEvidence, renderFrozenContract } from "./correction-evidence.js";
 
 export type {

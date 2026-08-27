@@ -15,6 +15,7 @@ import {
   getRunResumeContext,
   hasActiveRun,
   listFeedbacksForSourceRun,
+  readProjectDeliveryPolicy,
 } from "@nox/database";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -207,6 +208,11 @@ export default async function ReviewPage({
     runId: run.id,
     taskId: task.id,
   });
+
+  // La politique Git du projet, lue en base. Elle ne change rien a ce que cette
+  // page fait — elle change ce qu'elle **annonce** avant le clic : « Approve ne
+  // cree aucun commit » n'est plus vrai dans deux modes sur trois.
+  const deliveryPolicy = await readProjectDeliveryPolicy(getDatabaseClient(), project.id);
 
   const review = await loadRunReview(run.id);
   const availability = reviewAvailability(
@@ -680,6 +686,7 @@ export default async function ReviewPage({
                 instructions: criterion.humanInstructions ?? "",
               }))}
               overrideRequired={requiresOverride(verification)}
+              deliveryPolicy={deliveryPolicy}
               validationRunning={!verification.batchSettled}
               requestChangesHref={
                 resumeRefusal === null ? requestChangesUrl(project.id, task.id, run.id) : null

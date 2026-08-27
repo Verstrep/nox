@@ -127,6 +127,16 @@ export const QUEUE_DISPATCH = {
   WAITING_DEPENDENCIES: "WAITING_DEPENDENCIES",
   /** Le repository n'est pas dans un etat permettant de lancer. */
   WAITING_REPOSITORY: "WAITING_REPOSITORY",
+  /**
+   * Le travail precedent n'a pas encore ete livre.
+   *
+   * Distinct de `WAITING_REPOSITORY`, et pour une raison qui compte : celui-la
+   * dit « le repository n'est pas propre », celui-ci dit « la politique Git de
+   * ce projet n'est pas encore satisfaite ». Le premier se regle dans un
+   * terminal, le second sur la surface de livraison — et NOX sait laquelle des
+   * deux s'applique.
+   */
+  WAITING_DELIVERY: "WAITING_DELIVERY",
   /** Une execution est deja active. */
   ACTIVE_RUN: "ACTIVE_RUN",
   /** L'element courant a echoue : la file ne saute jamais par-dessus. */

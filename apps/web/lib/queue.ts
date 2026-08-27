@@ -26,6 +26,7 @@
  */
 
 import {
+  getBlockingDelivery,
   getProjectById,
   isQueueActive,
   listQueueEntries,
@@ -193,6 +194,21 @@ export async function advanceQueue(
   const project = await getProjectById(db, projectId);
   if (project === null) {
     return result(QUEUE_DISPATCH.EMPTY);
+  }
+
+  // La politique Git du projet, avant le preflight. Une livraison dont la
+  // politique enregistree n'est pas satisfaite arrete la progression : lancer
+  // la tache suivante par-dessus un travail non livre melangerait deux taches
+  // dans un meme commit, ou laisserait le premier travail indefiniment en
+  // attente. Une livraison `MANUAL` n'est jamais bloquante — ce mode confie la
+  // question au preflight existant, exactement comme avant TASK-029.
+  //
+  // Aucune ecriture Git n'a lieu ici : c'est une lecture SQLite. La livraison
+  // est declenchee par la **transition** d'une tache vers `COMPLETED`, jamais
+  // par un avancement de file.
+  const blocking = await getBlockingDelivery(db, projectId);
+  if (blocking !== null) {
+    return result(QUEUE_DISPATCH.WAITING_DELIVERY, { taskId: blocking.taskId });
   }
 
   // Le preflight existant, tel quel. La file ne l'affaiblit pas : un repository

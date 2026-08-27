@@ -41,6 +41,7 @@ base SQLite dans le dossier du projet.
 | **File d'exécution** | Inscrire plusieurs tâches prêtes et laisser NOX les lancer une à une, sur une autorisation explicite |
 | **Validation autonome** | Dire avant l'exécution quels critères une commande peut prouver, et laisser NOX obtenir lui-même cette preuve |
 | **Correction pilotée** | Repartir d'un échec que NOX a constaté, sans recopier un seul log — et, sous file active, le laisser reprendre au plus deux fois |
+| **Livraison Git** | Choisir, projet par projet, ce que NOX a le droit d'écrire : rien, un commit, ou un commit puis un push vers l'upstream existant |
 | **File d'exécution** | Inscrire plusieurs tâches prêtes, démarrer la file, et laisser NOX les lancer une à une — jamais sans autorisation explicite |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
@@ -286,6 +287,11 @@ Deux points à retenir avant un premier lancement :
   commande, son code de sortie et ses sorties partent avec la reprise : vous n'avez rien à
   recopier. Démarrer une file autorise en plus NOX à reprendre **au plus deux fois** par tâche ;
   au-delà, la main vous revient, et l'écran le dit.
+- **NOX n'écrit dans Git que ce qu'il a validé, et seulement si vous l'y avez autorisé.** La
+  politique de livraison d'un projet vaut `Manual` par défaut. Si vous choisissez un mode
+  automatique, NOX commite le travail validé — et le pousse, si c'est le mode retenu — à la seule
+  condition que le repository y corresponde encore exactement. Sinon il refuse, et il le dit. Il
+  ne change jamais de branche, ne force jamais un push, et ne réconcilie jamais un historique.
 
 ## Convention de langue de l'interface
 

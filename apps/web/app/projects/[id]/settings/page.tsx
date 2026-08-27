@@ -1,4 +1,9 @@
-import { getDatabaseClient, listOwnedTaskArtifacts, projectHasActiveRun } from "@nox/database";
+import {
+  getDatabaseClient,
+  listOwnedTaskArtifacts,
+  projectHasActiveRun,
+  readProjectDeliveryPolicy,
+} from "@nox/database";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -8,6 +13,7 @@ import { PROJECT_ACTIVE_RUN_MESSAGE, projectSettingsUrl } from "@/lib/project-de
 import { loadProject } from "@/lib/projects";
 
 import { DeleteProjectForm } from "./DeleteProjectForm";
+import { DeliveryPolicyForm } from "./DeliveryPolicyForm";
 import { RenameProjectForm } from "./RenameProjectForm";
 
 /**
@@ -47,6 +53,10 @@ export default async function ProjectSettingsPage({
   // doit etre lisible au moment de decider, pas decouvert dans le message final.
   const owned = await listOwnedTaskArtifacts(db, project.id);
   const activeRun = await projectHasActiveRun(db, project.id);
+  // Une lecture SQLite de plus. Aucune commande Git, aucun appel au runner : la
+  // page des reglages n'inspecte pas le repository, et ne le modifie evidemment
+  // pas.
+  const deliveryPolicy = await readProjectDeliveryPolicy(db, project.id);
 
   const settings = projectSettingsUrl(project.id);
 
@@ -88,6 +98,13 @@ export default async function ProjectSettingsPage({
               <dd className="mt-1 text-sm text-zinc-300">{formatDateTime(project.updatedAt)}</dd>
             </div>
           </dl>
+        </SectionCard>
+
+        <SectionCard
+          title="Git delivery"
+          description="Ce que NOX a le droit d'écrire dans Git après une tâche validée. Par défaut, rien."
+        >
+          <DeliveryPolicyForm projectId={project.id} currentPolicy={deliveryPolicy} />
         </SectionCard>
 
         <section className="rounded-xl border border-red-500/30 bg-red-500/[0.03] p-5 sm:p-6">

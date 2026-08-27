@@ -852,3 +852,79 @@ doit le dire explicitement et la justifier.
 - **Une correction n'écrit jamais dans Git.** Ni `add`, ni commit, ni push, ni `reset`, ni
   `restore`, ni `clean` — y compris quand une validation a sali le dépôt : NOX le nomme, et ne le
   répare pas.
+
+### 8.19 Livraison Git
+
+- **Écrire dans Git est une autorisation séparée de celle de la file.** `Start queue` lance
+  Claude Code et borne ses corrections ; il n'accorde **rien** dans Git. Une file `ACTIVE` sur
+  un projet `MANUAL` s'arrête sur un repository modifié, exactement comme avant TASK-029.
+- **La politique de livraison d'un projet vaut `MANUAL` par défaut**, et le défaut est
+  structurel : c'est la valeur de la colonne. Appliquer la migration produit zéro commit, zéro
+  push, zéro livraison et zéro avancement de file. Une valeur illisible est relue `MANUAL` —
+  le défaut sûr n'accorde rien.
+- **Changer la politique est l'autorisation humaine, et elle est annoncée avant le clic.** NOX
+  ne redemande pas confirmation tâche par tâche : une file qui s'arrête sur une modale n'avance
+  pas plus qu'une file arrêtée. En contrepartie, l'écran dit ce que le choix engage.
+- **Changer la politique n'écrit rien et ne défait rien.** Aucun commit annulé, aucun `reset`,
+  aucune livraison passée supprimée : la nouvelle politique ne gouverne que ce qui n'a pas
+  encore eu lieu.
+- **Une livraison n'existe qu'après une complétion validée.** Une tâche marquée terminée à la
+  main — sans exécution, sans review, sans décision — n'a aucun candidat sûr, et NOX ne commite
+  pas ce qui traîne dans le dossier de travail.
+- **Le candidat est figé à la décision finale, et immuable.** Branche, `HEAD`, empreinte
+  authentifiée et liste exacte des entrées changées. Il n'est jamais recalculé sur l'état
+  courant : « maintenant c'est validé » demanderait une nouvelle validation.
+- **Une seule implémentation d'empreinte de dossier de travail.** Celle de TASK-012, HMAC
+  dérivé du jeton du runner, qui ne quitte jamais le serveur. Pas de deuxième, pas de
+  troisième.
+- **Le repository doit correspondre exactement au candidat avant toute écriture.** Tout écart —
+  fichier suivi modifié, fichier inattendu apparu, index déjà garni, `HEAD` avancé — bloque la
+  livraison. Il n'existe ni `Commit anyway`, ni `Accept current state`, ni `Update candidate`,
+  et le service ne porte aucun paramètre `force`, `ignoreFingerprint`, `skipValidation` ou
+  `pushForce`.
+- **NOX ne prépare que les chemins exacts du candidat.** `git add -A -- :(literal)<chemin>`,
+  jamais `git add .`, jamais `git add -A` sans pathspec. Ce qui est préparé est revérifié avant
+  le commit.
+- **Le message de commit est déterministe et figé à la réservation.** Un sujet lisible et un
+  trailer `NOX-Delivery: <id>`. Une reprise commite exactement le même texte, sinon le trailer
+  ne prouverait plus rien.
+- **Une livraison est réservée avant l'écriture, et la réservation est persistée.** L'index
+  unique `(taskId, sourceRunId)` garantit une livraison par travail validé ; le compteur
+  `attempt`, pris par mise à jour conditionnelle, garantit une écriture à la fois. Jamais un
+  verrou en mémoire.
+- **Une livraison produit au plus un commit.** Une réponse perdue se **réconcilie** — trailer
+  de `HEAD` et parent attendu, ensemble — au lieu de produire un second commit identique. La
+  recherche est bornée à `HEAD` : jamais un parcours d'historique.
+- **Commit et push ne sont jamais confondus.** `AUTO_COMMIT` est satisfait dès `COMMITTED`,
+  `AUTO_COMMIT_PUSH` seulement après `DELIVERED`. Un push refusé **conserve** le commit local,
+  et `Retry push` ne recrée jamais de commit.
+- **NOX ne change jamais de branche pour livrer**, et refuse un `HEAD` détaché.
+- **`AUTO_COMMIT_PUSH` n'utilise que l'upstream déjà configuré de la branche courante**, vérifié
+  **avant** le commit. Aucun `push -u`, aucun `remote add`, aucun `branch --set-upstream-to`.
+- **Aucun push forcé, jamais.** Ni `--force`, ni `--force-with-lease`. Un refus
+  « non-fast-forward » remonte tel quel : NOX ne tire pas, ne fusionne pas, ne rebase pas.
+- **Aucun `reset`, `restore`, `checkout`, `clean`, `stash`, `cherry-pick`, `revert`, écriture de
+  tag, écriture de configuration ni mutation de remote.** Pas de « nettoyage » après un échec :
+  ce qui reste est ce qu'un humain doit relire.
+- **Aucune protection du repository n'est contournée.** `--no-verify` et `--no-gpg-sign` ne sont
+  jamais passés. Un hook de commit ou une signature configurée fait renoncer la livraison
+  **automatique**, avec une raison nommée ; un geste humain reste possible, et le hook s'exécute.
+- **Manuel n'a jamais moins de gardes que l'automatique.** Même moteur, même candidat, mêmes
+  vérifications — y compris le refus d'un fichier sensible nouveau.
+- **Le garde-fou des fichiers sensibles est un filtre de noms conservateur**, et NOX ne prétend
+  pas détecter les secrets. Il vise un cas précis : qu'un `.env` créé pendant une exécution ne
+  soit pas commité automatiquement parce que personne ne regardait.
+- **Aucun identifiant Git n'est stocké par NOX.** Ni table, ni jeton, ni clé. Git est invoqué
+  non interactif, sans shell, avec un environnement privé de toute variable `NOX_*`, et aucune
+  URL de remote n'est enregistrée ni affichée.
+- **Le navigateur n'envoie ni chemin, ni branche, ni remote, ni message, ni argument Git.** Des
+  identifiants et un mode, revalidés côté serveur, puis rejoués par le runner.
+- **Un rendu de page et un démarrage de serveur n'écrivent jamais dans Git.** Le déclencheur est
+  la transition d'une tâche vers `COMPLETED` ; la réservation persistante rend le geste
+  idempotent.
+- **La file n'avance que lorsque la politique applicable est satisfaite.** En `MANUAL`, c'est le
+  préflight Git existant qui fait autorité — livrer depuis un terminal reste possible, et ne rend
+  jamais un projet inutilisable.
+- **Supprimer un projet retire son état de livraison, jamais son historique Git.** Aucun commit
+  défait, aucune branche supprimée, aucun push, aucune commande Git déclenchée. Le repository
+  ré-enregistré repart en `MANUAL`, sans livraison reconstruite depuis Git.

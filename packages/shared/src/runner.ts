@@ -309,6 +309,55 @@ export const RUNNER_ERROR = {
    */
   VALIDATION_SPAWN_FAILED: "VALIDATION_SPAWN_FAILED",
 
+  // --- Livraison Git ---------------------------------------------------------
+  //
+  // Ces codes couvrent les seules ecritures Git que NOX sait faire : preparer
+  // des chemins exacts, creer un commit, pousser vers l'upstream deja
+  // configure. Il n'existe aucun code de restauration, de nettoyage ou de
+  // changement de branche — parce qu'il n'existe aucune commande de ce genre.
+
+  /**
+   * Le repository ne correspond plus au candidat valide.
+   *
+   * Empreinte, branche, `HEAD` : l'un des trois a bouge depuis la validation.
+   * Le refus est sans echappatoire — livrer un etat different reviendrait a
+   * commiter du code que personne n'a relu.
+   */
+  DELIVERY_REPOSITORY_CHANGED: "DELIVERY_REPOSITORY_CHANGED",
+  /** L'index porte deja des changements prepares a la main. */
+  DELIVERY_INDEX_NOT_EMPTY: "DELIVERY_INDEX_NOT_EMPTY",
+  /** Git ne connait ni nom, ni adresse : NOX n'en configure aucun. */
+  DELIVERY_IDENTITY_MISSING: "DELIVERY_IDENTITY_MISSING",
+  /** La preparation des chemins exacts a echoue. */
+  DELIVERY_STAGING_FAILED: "DELIVERY_STAGING_FAILED",
+  /**
+   * Ce qui a ete prepare ne correspond pas au candidat.
+   *
+   * Distinct d'un echec de preparation : ici Git a repondu, et ce qu'il a mis
+   * dans l'index n'est pas ce que la livraison decrivait. Aucun commit n'est
+   * cree sur cette base.
+   */
+  DELIVERY_STAGED_MISMATCH: "DELIVERY_STAGED_MISMATCH",
+  /** `git commit` a echoue : hook en echec, signature refusee, erreur Git. */
+  DELIVERY_COMMIT_FAILED: "DELIVERY_COMMIT_FAILED",
+  /**
+   * Le commit existe, mais l'etat obtenu n'est pas celui attendu.
+   *
+   * NOX ne pretend pas que la livraison a reussi, et ne defait rien : le commit
+   * reste, et un humain decide. Un `reset` automatique detruirait justement ce
+   * qu'il faut relire.
+   */
+  DELIVERY_TREE_MISMATCH: "DELIVERY_TREE_MISMATCH",
+  /**
+   * Le serveur distant a refuse le push : l'historique a diverge.
+   *
+   * NOX ne force jamais, ne tire jamais, ne fusionne jamais et ne rebase
+   * jamais. Reconcilier deux histoires est une decision humaine.
+   */
+  DELIVERY_PUSH_REJECTED: "DELIVERY_PUSH_REJECTED",
+  /** Le push a echoue pour une autre raison : reseau, authentification, delai. */
+  DELIVERY_PUSH_FAILED: "DELIVERY_PUSH_FAILED",
+
   /** Defaillance non prevue du runner. */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;
