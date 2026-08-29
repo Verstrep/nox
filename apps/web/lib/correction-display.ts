@@ -202,6 +202,8 @@ const CORRECTION_REFUSAL_MESSAGES: Record<CorrectionRefusalCode, string> = {
     `NOX a deja tente ${String(MAX_AUTOMATED_CORRECTION_ATTEMPTS)} corrections automatiques sur ce cycle de travail. Au-dela, l'echec n'est plus quelque chose qu'une reprise repare : relisez le travail, et decidez.`,
   [CORRECTION_REFUSAL.ALREADY_RESERVED]:
     "Une correction est deja engagee sur cette execution. Rechargez la page pour voir ou elle en est.",
+  [CORRECTION_REFUSAL.REPOSITORY_RUN_ACTIVE]:
+    "Une execution Claude Code travaille deja sur ce repository. La correction reste prete : elle partira quand ce repository sera libre. Les autres projets ne sont pas concernes.",
 };
 
 export function correctionRefusalMessage(code: CorrectionRefusalCode): string {

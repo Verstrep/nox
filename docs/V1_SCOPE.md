@@ -181,6 +181,11 @@ changer ce réglage **est** l'autorisation — NOX ne redemande pas confirmation
 Cette autorisation est distincte de celle de la file. Démarrer une file laisse NOX lancer Claude
 Code ; elle ne lui donne aucun droit dans Git.
 
+Le mode « un commit » n'exige **aucun** push : la branche locale prend naturellement de l'avance
+sur son upstream, tâche après tâche, et la file continue. Le mode « commit puis push » n'est
+satisfait qu'une fois le push confirmé ; s'il est refusé, la file s'arrête et le commit local
+reste.
+
 Ce qui est livré n'est jamais « ce qui traîne dans le dossier de travail » : c'est l'état exact
 qui a été validé, figé au moment de la décision et relu juste avant d'écrire. Une modification
 faite entre-temps bloque la livraison au lieu d'être emportée avec elle — et il n'existe aucun
@@ -190,18 +195,29 @@ Ce que NOX ne fait toujours pas : changer de branche, configurer un upstream, fo
 tirer, fusionner, rebaser, réinitialiser, restaurer ou nettoyer. Réconcilier deux histoires Git
 reste une décision humaine.
 
+### 1.19 Plusieurs projets qui avancent en même temps
+
+Chaque projet a sa file, ses exécutions, ses validations, ses corrections et sa livraison Git.
+Deux projets qui pointent vers deux repositories différents progressent en parallèle : aucun
+n'attend l'autre, et un incident dans l'un — un échec, une pause, une review en attente, un push
+refusé — n'arrête jamais le second.
+
+Ce qui reste interdit est ce qui devait l'être : **au plus une exécution Claude Code par
+repository**. Deux agents qui écrivent dans le même dossier produisent un diff que personne ne
+sait attribuer. La règle porte sur l'identité canonique du dossier, pas sur le projet qui le
+déclare, et le serveur web comme le runner la vérifient chacun de leur côté.
+
+L'autorisation, elle, reste locale : démarrer la file d'un projet n'accorde rien à un autre, et
+chaque projet garde sa politique de livraison Git. NOX n'ordonnance rien — il n'y a ni priorité,
+ni équité, ni plafond global : les projets n'ont simplement plus de raison de s'attendre.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
 
 Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
 
-### 2.1 Runner multi-projets
-
-Aujourd'hui, une seule exécution est active tous projets confondus. Travailler sur deux projets en
-parallèle suppose que cette limite tombe.
-
-### 2.2 Replanification depuis la conversation du projet
+### 2.1 Replanification depuis la conversation du projet
 
 Revenir dans la conversation principale et réordonner le plan restant, sans repartir d'une
 planification neuve.

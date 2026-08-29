@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 27 août 2026, à l'issue de `TASK-029`.
+**Dernière mise à jour** : 29 août 2026, à l'issue de `TASK-031`.
 
 ---
 
@@ -54,6 +54,12 @@ rien. Là où un mode automatique a été choisi, NOX commite — et pousse, si 
 le travail qu'il vient de valider, à la condition que le repository y corresponde encore
 exactement. Toute divergence bloque l'écriture au lieu de l'emporter avec.
 
+`TASK-031` ne crée aucune exception : elle en **retire** une limitation. Plusieurs projets
+peuvent désormais travailler en même temps, chacun sur son repository. Ce qui reste interdit —
+deux exécutions sur un **même** repository — l'est toujours, et l'est deux fois : en base et
+dans le runner. Aucune autorisation ne s'est élargie : démarrer la file d'un projet n'a jamais
+rien dit des autres, et c'est encore vrai.
+
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
@@ -61,8 +67,8 @@ exactement. Toute divergence bloque l'écriture au lieu de l'emporter avec.
 | Migrations appliquées | 22 |
 | Routes du runner | 23, dont une seule publique (`GET /health`) |
 | Pages de l'application web | 36 |
-| Tests automatisés | 4 127, dont 6 ignorés sous Windows |
-| Décisions consignées | 357 |
+| Tests automatisés | 4 212, dont 6 ignorés sous Windows |
+| Décisions consignées | 367 |
 
 ---
 
@@ -196,14 +202,17 @@ Une panne du runner ne supprime jamais une tâche.
 
 ### 2.4 Exécution Claude Code
 
-**Disponible.** Un préflight vérifie que le repository est propre et synchronisé, puis le
-prompt — régénéré côté serveur à partir de la tâche en base — est affiché avant lancement. Le
+**Disponible.** Un préflight vérifie que le dossier de travail est propre, et que la branche est
+synchronisée **dans la mesure où la politique de livraison du projet l'exige** — une branche en
+avance est l'état normal d'un projet `AUTO_COMMIT`, pas un blocage. Le prompt — régénéré côté
+serveur à partir de la tâche en base — est ensuite affiché avant lancement. Le
 lancement est explicite. Les commandes de validation enregistrées sont autorisées à Claude
 Code, une par une et à l'identique. Le runner ne les exécute jamais lui-même.
 
 **Limites.**
 
-- **Une seule exécution active**, tous projets confondus.
+- **Au plus une exécution active par repository** — voir § 2.7 quater. Deux repositories
+  différents ne s'attendent plus.
 - Le registre du runner est en mémoire : un redémarrage perd le suivi d'une exécution en cours.
 - La détection d'une limite d'utilisation est heuristique, et prudente : en cas de doute, elle
   retourne une erreur générique.
@@ -681,6 +690,19 @@ chemins exacts — jamais un `git add .` — et crée un commit dont le sujet po
 tâche et le corps un trailer technique. En `Auto commit + push validated`, il pousse ensuite vers
 l'upstream **déjà configuré** de la branche courante. La file peut alors continuer.
 
+Ce que « continuer » exige n'est pas le même dans les deux modes automatiques, et la distinction
+compte :
+
+| Politique | Ce qui est exigé | État de la branche locale ensuite |
+| --- | --- | --- |
+| `Auto commit validated` | un commit local validé — **aucun push** | en avance sur son upstream, et la file continue |
+| `Auto commit + push validated` | le commit **et** le push confirmé | alignée sur son upstream |
+
+Une branche en avance parce que NOX vient de créer exactement son commit validé n'est donc pas un
+repository « non prêt » : c'est l'état normal d'un projet `Auto commit`. Un push refusé, en
+revanche, laisse la politique `Auto commit + push validated` insatisfaite, et la file s'arrête —
+le commit local, lui, reste en place.
+
 En `Manual`, le candidat est enregistré et affiché quand même : la surface de livraison montre
 exactement ce qu'il y aurait à livrer, et deux boutons le livrent — avec les mêmes gardes que
 l'automatique. Livrer depuis un terminal reste évidemment possible ; le préflight Git existant
@@ -721,6 +743,53 @@ littéraux, `git commit`, `git push` — et aucune autre n'est atteignable. Le n
 que des identifiants et un mode ; ni chemin, ni branche, ni remote, ni message, ni argument Git.
 Supprimer un projet retire son état de livraison et jamais son historique Git.
 
+### 2.7 quater Orchestration multi-projets
+
+**Disponible.** Plusieurs projets peuvent travailler en même temps, chacun sur son repository :
+leur file, leur exécution Claude Code, leurs validations, leurs corrections et leur livraison Git
+avancent sans se bloquer mutuellement.
+
+La règle qui reste, et qui protégeait ce qu'il fallait protéger : **au plus une exécution Claude
+Code active par repository canonique**. Deux Claude Code sur un même dossier se marcheraient
+dessus dès la première écriture ; deux repositories différents ne partagent rien.
+
+L'exclusion porte sur l'identité **canonique** du repository, jamais sur l'identifiant du projet.
+Un séparateur final, un séparateur inversé, un segment `..` résiduel ou une différence de casse
+sous Windows ne la contournent pas — et deux projets qui viseraient le même dossier, ce que NOX
+interdit normalement, restent exclus l'un de l'autre. Elle est vérifiée deux fois, par deux
+composants indépendants : le serveur web en base, dans la transaction qui crée l'exécution ; le
+runner ensuite, sur les processus réels, sans faire confiance au web.
+
+Le tableau de bord montre cette simultanéité : chaque carte porte ce que **son** projet fait —
+`Claude running`, `Correcting`, `Validating`, `Waiting for human validation`, `Git delivery
+pending`, `Queue active`, `Queue paused`, `Blocked`, `Idle` — et sa politique de livraison Git.
+Un résumé dérivé compte les projets, les exécutions en cours, les files actives et les attentes
+humaines. Il n'existe aucune « exécution courante » globale : elle désignerait arbitrairement
+l'un des travaux en cours.
+
+**Limites.**
+
+- **Aucune dépendance entre projets.** Une tâche n'attend que des tâches de son propre projet, et
+  le service refuse une arête qui traverserait deux projets.
+- **Aucun ordonnanceur, aucune équité, aucun plafond global.** Ni priorité, ni tourniquet, ni pool
+  de travailleurs, ni nombre maximal d'exécutions simultanées. Il n'y a pas de ressource partagée
+  à répartir : le seul conflit possible est déjà tranché par le verrou de repository.
+- **Aucune activation automatique.** Démarrer la file d'un projet n'en démarre aucun autre, et
+  redémarrer le serveur ne lance rien — même avec plusieurs files actives en base.
+- **Les limites de la machine et du fournisseur restent extérieures à NOX.** Si deux exécutions
+  simultanées se heurtent à un refus du fournisseur, chacune suit son propre échec ; NOX n'en
+  déduit jamais qu'il est « occupé » globalement.
+- **Le registre du runner reste en mémoire.** Un redémarrage du runner perd le suivi de toutes
+  les exécutions en cours, exactement comme avant : chacune est alors marquée bloquée, et NOX ne
+  prétend pas savoir ce que les processus ont fait. La concurrence ne change rien à cette limite,
+  et n'attribue jamais l'exécution d'un repository au mauvais projet.
+- **Aucune replanification** depuis la conversation du projet.
+
+**Frontières.** Zéro appel à OpenAI : choisir quoi lancer est déterministe. Le navigateur ne
+porte ni chemin, ni clé de verrou, ni identifiant de processus — un projet et une tâche,
+revalidés côté serveur. Aucune action ne traverse deux projets : annulation, review, correction
+et livraison vérifient toutes la chaîne projet → tâche → exécution.
+
 ## 3. Où en est l'écart avec la cible
 
 ### 3.1 Résolu par `TASK-020` : une conversation par projet
@@ -754,27 +823,27 @@ Le cycle de `TASK-021` — proposer, relire, corriger, appliquer — a été ré
 quel, à une différence près qui compte : ce qui s'applique n'est plus un état, c'est un
 **lot**. D'où l'atomicité de la transaction, et la franchise sur ce qu'elle ne couvre pas.
 
-### 3.4 Résolu par `TASK-023` à `TASK-029`
+### 3.4 Résolu par `TASK-023` à `TASK-031`
 
-Six limitations de cette liste n'existent plus. Une spécification **se modifie** tant qu'elle n'a
+Sept limitations de cette liste n'existent plus. Une spécification **se modifie** tant qu'elle n'a
 jamais été exécutée ; les **dépendances** entre tâches sont un graphe acyclique explicite ; un
 projet vide **s'amorce** par `TASK-000` ; une **file d'exécution** enchaîne les tâches inscrites
 sans jamais contourner le préflight Git ni la review humaine ; **correction et re-review
-s'enchaînent**, avec une borne écrite ; et un travail validé **se livre dans Git**, sous une
-politique choisie projet par projet.
+s'enchaînent**, avec une borne écrite ; un travail validé **se livre dans Git**, sous une
+politique choisie projet par projet ; et **plusieurs projets avancent en parallèle**, chacun sur
+son repository.
 
 `TASK-027` avait fermé la boucle que la file avait ouverte : l'humain n'est sollicité que là où il
 apporte quelque chose. `TASK-028` va au bout du raisonnement — quand NOX possède lui-même la preuve
 d'un échec, il n'a besoin de personne pour la recopier. `TASK-029` lève la dernière interruption
-systématique : le commit, qui arrêtait la file après chaque tâche.
+systématique : le commit, qui arrêtait la file après chaque tâche. `TASK-031` lève la dernière
+limitation de capacité : un repository ne bloque plus artificiellement un autre repository.
 
 ### 3.5 Ce qui reste à faire
 
-- **Une seule exécution active, tous projets confondus.** Deux projets ne peuvent pas avancer en
-  parallèle.
 - **Aucune replanification structurée** depuis la conversation du projet.
 
-Voir [ROADMAP.md](ROADMAP.md), `TASK-031` et `TASK-032`.
+Voir [ROADMAP.md](ROADMAP.md), `TASK-032`.
 
 ---
 

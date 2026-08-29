@@ -13,12 +13,25 @@
  * plus une execution qu'il croyait active, la marque bloquee et le dit. NOX ne
  * pretend jamais connaitre le resultat d'un processus qu'il a cesse de suivre.
  *
- * ## Une seule execution active
+ * ## Une seule execution active par repository
  *
- * Globalement, tous projets confondus. Deux Claude Code simultanes sur la meme
- * machine se marcheraient dessus des qu'ils toucheraient au meme repository, et
- * rendraient toute relecture impossible. La contrainte est verifiee ici, dans le
- * runner : c'est le seul composant qui voit les processus reels.
+ * Deux Claude Code simultanes **sur le meme repository** se marcheraient dessus
+ * des la premiere ecriture, et rendraient toute relecture impossible. Deux
+ * repositories differents, en revanche, ne partagent rien : les empecher de
+ * travailler en meme temps n'aurait protege personne.
+ *
+ * L'exclusion porte donc sur la cle canonique du repository, calculee a partir
+ * de la racine reelle rendue par le systeme de fichiers. Elle est verifiee ici,
+ * dans le runner, parce que c'est le seul composant qui voit les processus
+ * reels — et elle l'est **meme si le web l'a deja verifiee** : le runner ne fait
+ * confiance a personne sur ce point.
+ *
+ * ## Aucune entree singleton
+ *
+ * Il n'existe ni « execution courante », ni processus courant, ni variable
+ * globale a remettre a `null`. Chaque entree porte sa propre cle de repository,
+ * son propre processus, son propre flux d'evenements et son propre etat
+ * d'annulation. La fin de l'une n'efface jamais les autres.
  */
 
 import {
@@ -66,6 +79,14 @@ export type RunContext = {
 
 type RegistryEntry = {
   runId: string;
+  /**
+   * Repository possede par cette execution, sous sa forme canonique.
+   *
+   * C'est le domaine du verrou d'execution : deux entrees actives ne peuvent
+   * pas porter la meme valeur. Elle ne sort jamais du runner — c'est une cle de
+   * comparaison derivee d'un chemin absolu, pas une donnee publique.
+   */
+  repositoryKey: string;
   status: RunStatus;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -116,7 +137,7 @@ export type ReviewState =
 
 export type RegisterResult =
   | { ok: true }
-  | { ok: false; reason: "already_active" | "duplicate_id" };
+  | { ok: false; reason: "already_active" | "duplicate_id" | "unknown_repository" };
 
 /** Champs modifiables d'une entree, hors identite, statut et mecanique interne. */
 export type RunUpdate = Partial<
@@ -149,9 +170,10 @@ export type EventsPage = {
   truncated: boolean;
 };
 
-function emptyEntry(runId: string): RegistryEntry {
+function emptyEntry(runId: string, repositoryKey: string): RegistryEntry {
   return {
     runId,
+    repositoryKey,
     status: RUN_STATUS.QUEUED,
     startedAt: null,
     finishedAt: null,
@@ -188,8 +210,8 @@ function emptyEntry(runId: string): RegistryEntry {
  * Registre des executions.
  *
  * Une classe plutot qu'un module a l'etat global : les tests peuvent en creer
- * une instance neuve, et la contrainte « un seul run actif » reste verifiable
- * sans manipuler d'etat partage.
+ * une instance neuve, et l'exclusion « un run actif par repository » reste
+ * verifiable sans manipuler d'etat partage.
  */
 export class ClaudeRunRegistry {
   readonly #entries = new Map<string, RegistryEntry>();
@@ -210,10 +232,35 @@ export class ClaudeRunRegistry {
     this.#now = now;
   }
 
-  /** Retourne l'execution active, s'il y en a une. */
-  activeRunId(): string | null {
+  /**
+   * Executions encore actives, dans l'ordre d'enregistrement.
+   *
+   * Plusieurs peuvent l'etre : c'est le fait central de TASK-031. Aucune n'est
+   * « l'execution courante » — cette notion n'existe pas, et la reintroduire
+   * ferait de la premiere trouvee une autorite qu'elle n'a pas.
+   */
+  activeRunIds(): string[] {
+    const active: string[] = [];
     for (const entry of this.#entries.values()) {
       if (!isFinalRunStatus(entry.status)) {
+        active.push(entry.runId);
+      }
+    }
+    return active;
+  }
+
+  /**
+   * Execution active possedant ce repository, s'il y en a une.
+   *
+   * Une cle vide ne possede rien : elle ne peut venir que d'un chemin
+   * inexploitable, et faire d'une absence un verrou bloquerait tout le monde.
+   */
+  activeRunIdForRepository(repositoryKey: string): string | null {
+    if (repositoryKey === "") {
+      return null;
+    }
+    for (const entry of this.#entries.values()) {
+      if (entry.repositoryKey === repositoryKey && !isFinalRunStatus(entry.status)) {
         return entry.runId;
       }
     }
@@ -221,24 +268,38 @@ export class ClaudeRunRegistry {
   }
 
   /**
-   * Enregistre une nouvelle execution.
+   * Enregistre une nouvelle execution sur un repository.
    *
-   * Echoue si une autre est active, ou si l'identifiant est deja connu — meme
-   * pour une execution terminee : reutiliser un identifiant ferait pointer deux
-   * resultats differents au meme endroit.
+   * Echoue si ce **meme** repository possede deja une execution active, ou si
+   * l'identifiant est deja connu — meme pour une execution terminee : reutiliser
+   * un identifiant ferait pointer deux resultats differents au meme endroit.
+   *
+   * Un autre repository actif n'est pas un motif de refus. C'est exactement ce
+   * que TASK-031 change, et le seul endroit ou elle le change.
    */
-  register(runId: string): RegisterResult {
+  register(runId: string, repositoryKey: string): RegisterResult {
     this.prune();
 
     if (this.#entries.has(runId)) {
       return { ok: false, reason: "duplicate_id" };
     }
-    if (this.activeRunId() !== null) {
+    if (repositoryKey === "") {
+      // Sans cle, l'exclusion ne pourrait pas etre garantie. Refuser est le seul
+      // defaut sur : accorder reviendrait a lancer un processus qu'aucun verrou
+      // ne couvre.
+      return { ok: false, reason: "unknown_repository" };
+    }
+    if (this.activeRunIdForRepository(repositoryKey) !== null) {
       return { ok: false, reason: "already_active" };
     }
 
-    this.#entries.set(runId, emptyEntry(runId));
+    this.#entries.set(runId, emptyEntry(runId, repositoryKey));
     return { ok: true };
+  }
+
+  /** Repository possede par une execution, ou `null` si elle est inconnue. */
+  repositoryKey(runId: string): string | null {
+    return this.#entries.get(runId)?.repositoryKey ?? null;
   }
 
   has(runId: string): boolean {

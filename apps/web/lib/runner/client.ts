@@ -40,6 +40,7 @@ import {
   type ClaudeCorrectionPreflightSuccess,
   type ClaudePreflightRequest,
   type ClaudePreflightSuccess,
+  type DeliveryPolicy,
   type RunValidationRequest,
   type RunValidationSuccess,
   type TrackedStateRequest,
@@ -492,12 +493,18 @@ export function deleteProjectTaskDocuments(
  * Strictement en lecture : cette route ne modifie rien, ne touche pas au reseau,
  * et ne consomme aucun quota Claude — elle se contente d'interroger Git et de
  * demander sa version a l'executable.
+ *
+ * `deliveryPolicy` est **obligatoire**, et c'est volontaire : la reponse depend
+ * de ce que le projet autorise NOX a ecrire dans Git, et un parametre optionnel
+ * aurait laisse un appelant l'oublier en silence. Elle se relit en base a partir
+ * de l'identifiant du projet ; le navigateur ne la transmet jamais.
  */
 export function claudePreflight(
   repositoryPath: string,
+  deliveryPolicy: DeliveryPolicy,
   options: RunnerClientOptions = {},
 ): Promise<RunnerResult<ClaudePreflightSuccess>> {
-  const payload: ClaudePreflightRequest = { repositoryPath };
+  const payload: ClaudePreflightRequest = { repositoryPath, deliveryPolicy };
 
   return postAuthenticated(
     "/claude/preflight",

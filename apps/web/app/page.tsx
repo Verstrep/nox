@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { ProjectCard } from "@/components/ProjectCard";
 import { RunnerStatusBadge } from "@/components/RunnerStatusBadge";
 import { projectDeletedNotice, readDeletedCount } from "@/lib/project-delete";
+import { executionSummary, executionSummaryLabel } from "@/lib/project-dashboard";
 import { loadProjectCards } from "@/lib/projects";
 
 /**
@@ -28,6 +29,16 @@ import { loadProjectCards } from "@/lib/projects";
  * L'etat du runner reste, mais comme un indicateur discret : il explique
  * pourquoi une action echouerait, et rien de plus.
  *
+ * ## Plusieurs projets a la fois
+ *
+ * Depuis TASK-031, plusieurs projets peuvent travailler en meme temps. La page
+ * les montre donc cote a cote, chacun avec ce qu'il fait — et **aucune**
+ * « execution courante » globale : il n'en existe plus, et en afficher une
+ * designerait arbitrairement l'un des travaux en cours.
+ *
+ * Le resume en tete est entierement derive des cartes deja construites : trois
+ * comptages, zero requete de plus, zero etat nouveau.
+ *
  * Aucun appel au fournisseur, aucun Claude Code, aucune ecriture : ce rendu ne
  * fait que lire SQLite.
  */
@@ -38,6 +49,7 @@ export default async function DashboardPage({
 }) {
   const { deleted, removed, modified } = await searchParams;
   const cards = await loadProjectCards();
+  const summary = executionSummaryLabel(executionSummary(cards));
 
   // La confirmation d'une suppression est **reconstruite** a partir de deux
   // compteurs bornes : rien de ce que l'URL porte n'est affiche tel quel.
@@ -73,8 +85,12 @@ export default async function DashboardPage({
           <div>
             <h2 className="text-base font-semibold text-zinc-100">Projects</h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Chaque projet NOX pointe vers un repository Git local de cette machine.
+              Chaque projet NOX pointe vers un repository Git local de cette machine. Deux projets
+              peuvent travailler en même temps ; un même repository, jamais.
             </p>
+            {summary === null ? null : (
+              <p className="mt-1 text-sm text-zinc-400">{summary}</p>
+            )}
           </div>
           <Link
             href="/projects/new"

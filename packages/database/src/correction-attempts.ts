@@ -40,6 +40,7 @@ import {
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
+import { countActiveRepositoryRuns } from "./repository-lock.js";
 import { markQueueEntryStarted } from "./task-queue.js";
 import { getRunById } from "./runs.js";
 import type { DevelopmentRunDetail } from "@nox/shared";
@@ -292,13 +293,21 @@ export async function abandonCorrection(
 
 export type StartCorrectionResult =
   | { ok: true; run: DevelopmentRunDetail }
-  | { ok: false; reason: "not_found" | "already_used" | "mismatch" };
+  | { ok: false; reason: "not_found" | "already_used" | "mismatch" | "active_run" };
 
 /** Levee dans la transaction pour annuler la creation d'un run en double. */
 class CorrectionAlreadyLaunchedError extends Error {
   constructor() {
     super("Cette reservation a deja lance une correction.");
     this.name = "CorrectionAlreadyLaunchedError";
+  }
+}
+
+/** Levee dans la transaction quand le repository travaille deja. */
+class RepositoryBusyError extends Error {
+  constructor() {
+    super("Ce repository possede deja une execution active.");
+    this.name = "RepositoryBusyError";
   }
 }
 
@@ -317,6 +326,13 @@ class CorrectionAlreadyLaunchedError extends Error {
  *
  * Le premier suffit dans le cas ordinaire ; les deux autres tiennent meme si
  * quelqu'un appelle Prisma directement.
+ *
+ * S'y ajoute, depuis TASK-031, l'exclusion par repository : une correction est
+ * une **nouvelle execution**, et la regle « au plus une execution active par
+ * repository canonique » ne connait pas d'exception. Elle est verifiee ici,
+ * apres l'ecriture et dans la meme transaction, exactement comme dans
+ * `createRun` — verifier avant d'ecrire laisserait passer deux appels
+ * simultanes. Une execution active dans un **autre** repository ne refuse rien.
  */
 export async function startCorrectionRun(
   db: DatabaseClient,
@@ -332,6 +348,14 @@ export async function startCorrectionRun(
 ): Promise<StartCorrectionResult> {
   const outcome = await db
     .$transaction(async (tx) => {
+      const owner = await tx.task.findUnique({
+        where: { id: input.taskId },
+        select: { projectId: true },
+      });
+      if (owner === null) {
+        return { ok: false, reason: "not_found" } as const;
+      }
+
       const attempt = await tx.correctionAttempt.findUnique({
         where: { id: input.attemptId },
         select: {
@@ -404,6 +428,15 @@ export async function startCorrectionRun(
         }
       }
 
+      // Meme exclusion que pour un lancement initial, et pour la meme raison :
+      // deux Claude Code sur un meme dossier se marcheraient dessus. L'ecriture
+      // precede le comptage, sinon deux appels simultanes liraient tous les deux
+      // « aucune execution active ».
+      const active = await countActiveRepositoryRuns(tx, owner.projectId, run.id);
+      if (active > 0) {
+        throw new RepositoryBusyError();
+      }
+
       // Meme marquage que pour un lancement initial : une correction est une
       // execution nee d'une tache qui peut etre inscrite. `startedAt` ne bouge
       // plus une fois pose — le premier depart date l'inscription.
@@ -414,6 +447,9 @@ export async function startCorrectionRun(
     .catch((error: unknown) => {
       if (error instanceof CorrectionAlreadyLaunchedError) {
         return { ok: false, reason: "already_used" } as const;
+      }
+      if (error instanceof RepositoryBusyError) {
+        return { ok: false, reason: "active_run" } as const;
       }
       throw error;
     });

@@ -106,6 +106,7 @@ const ERROR_STATUS: Record<RunnerErrorCode, number> = {
   // `409` pour les deux conflits d'etat : une execution deja active, et un
   // `HEAD` qui a bouge depuis le preflight.
   [RUNNER_ERROR.CLAUDE_RUN_ALREADY_ACTIVE]: 409,
+  [RUNNER_ERROR.REPOSITORY_CLAUDE_RUN_ALREADY_ACTIVE]: 409,
   [RUNNER_ERROR.GIT_HEAD_CHANGED]: 409,
   [RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND]: 404,
   [RUNNER_ERROR.CLAUDE_RUN_ID_INVALID]: 400,

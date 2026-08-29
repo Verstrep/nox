@@ -52,7 +52,7 @@ export default async function NewRunPage({
   const dependencies = await loadTaskDependencies(task.id);
   const { prompt, sha256 } = buildExecutionPrompt(task, dependencies.dependsOn);
   const policy = buildClaudeToolPolicy(task.validationCommands, task.kind);
-  const preflight = await loadPreflight(project.repositoryPath);
+  const preflight = await loadPreflight(project.id, project.repositoryPath);
 
   const isReady = task.status === TASK_STATUS.READY;
   const isSynced = task.documentSyncStatus === TASK_DOCUMENT_SYNC_STATUS.SYNCED;

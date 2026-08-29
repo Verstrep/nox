@@ -33,6 +33,7 @@ import {
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
+import { countActiveRepositoryRuns } from "./repository-lock.js";
 import { markQueueEntryStarted } from "./task-queue.js";
 
 /** Donnees necessaires a la creation d'une execution. */
@@ -403,7 +404,8 @@ export async function createRun(
       // introuvable, exactement comme une tache inexistante. Le statut, lui,
       // n'est pas verifie ici : c'est une precondition de workflow, et elle
       // appartient au lanceur. Cette transaction ne garantit qu'une chose, mais
-      // elle la garantit vraiment — une seule execution active par repository.
+      // elle la garantit vraiment — une seule execution active par repository
+      // canonique, projets confondus.
       const task = await tx.task.findFirst({
         where: { id: input.taskId, projectId: input.projectId },
         select: { id: true },
@@ -440,15 +442,15 @@ export async function createRun(
       // une execution. Un verrou en memoire ne tiendrait pas un redemarrage, ni
       // deux processus.
       //
-      // La limite globale — une execution dans tout NOX — reste celle du runner,
-      // seul a voir le processus reel.
-      const others = await tx.run.count({
-        where: {
-          task: { projectId: input.projectId },
-          status: { in: [...ACTIVE_RUN_STATUSES] },
-          id: { not: row.id },
-        },
-      });
+      // Le domaine du verrou est le **repository canonique**, pas le projet :
+      // deux projets qui viseraient le meme dossier — ce que TASK-025 interdit,
+      // mais qu'une base forgee rend possible — restent exclus l'un de l'autre.
+      // Deux repositories differents, eux, ne s'attendent plus : c'est ce que
+      // TASK-031 change.
+      //
+      // Le runner refait ce controle de son cote, sur les processus reels. Les
+      // deux barrieres sont independantes, et c'est voulu.
+      const others = await countActiveRepositoryRuns(tx, input.projectId, row.id);
       if (others > 0) {
         throw new ConcurrentRunError();
       }
@@ -701,9 +703,9 @@ export function updateRunFromRunner(
 /**
  * Indique si une tache a une execution active.
  *
- * La V1 n'autorise qu'un seul run actif, tous projets confondus ; cette fonction
- * repond a la question locale, l'unicite globale etant tranchee par le runner,
- * seul a voir le processus reel.
+ * Question **locale** : elle ne dit rien du repository, seulement de cette
+ * tache. L'exclusion d'execution, elle, porte sur le repository canonique et
+ * vit dans `repository-lock.ts` ; le runner la refait sur les processus reels.
  */
 export async function hasActiveRun(db: DatabaseClient, taskId: string): Promise<boolean> {
   const active = await db.run.findFirst({

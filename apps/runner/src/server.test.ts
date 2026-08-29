@@ -9,7 +9,12 @@ import type {
   CorrectionPreflightRequest,
   CorrectionPreflightResult,
 } from "./claude/correction-preflight.ts";
-import type { ProjectTaskArtifact } from "@nox/shared";
+import {
+  DELIVERY_POLICIES,
+  DELIVERY_POLICY,
+  type DeliveryPolicy,
+  type ProjectTaskArtifact,
+} from "@nox/shared";
 import { createRunnerServer } from "./server.ts";
 import type { ListDocumentsResult } from "./repositories/documents/list-documents.ts";
 import type { ReadDocumentResult } from "./repositories/documents/read-document.ts";
@@ -324,7 +329,14 @@ const RUN_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
  * et aucune version de Claude Code n'est cherchee. Le comportement reel est
  * couvert par `claude/preflight.test.ts`, sur de vrais repositories.
  */
-function fakePreflight(repositoryPath: string): Promise<PreflightResult> {
+const receivedPreflightPolicies: DeliveryPolicy[] = [];
+
+function fakePreflight(
+  repositoryPath: string,
+  deliveryPolicy: DeliveryPolicy,
+): Promise<PreflightResult> {
+  receivedPreflightPolicies.push(deliveryPolicy);
+
   const refusals: Record<string, string> = {
     sale: "REPOSITORY_DIRTY",
     detache: "GIT_DETACHED_HEAD",
@@ -1782,6 +1794,38 @@ describe("POST /claude/preflight", () => {
     assert.equal(response.status, 400);
     assert.equal(errorCode(response.json), "INVALID_REQUEST");
   });
+
+  it("transmet la politique de livraison declaree", async () => {
+    for (const policy of DELIVERY_POLICIES) {
+      receivedPreflightPolicies.length = 0;
+
+      const response = await call("/claude/preflight", {
+        ...authorized,
+        body: body({ repositoryPath: "/depot", deliveryPolicy: policy }),
+      });
+
+      assert.equal(response.status, 200, policy);
+      assert.deepEqual(receivedPreflightPolicies, [policy]);
+    }
+  });
+
+  it("lit MANUAL quand la politique est absente ou illisible", async () => {
+    // Le defaut sur : un corps qui ne declare rien, ou qui declare n'importe
+    // quoi, n'obtient jamais l'assouplissement reserve a `AUTO_COMMIT`.
+    for (const declared of [undefined, "AUTO", "auto_commit", 42, null]) {
+      receivedPreflightPolicies.length = 0;
+
+      const payload: Record<string, unknown> = { repositoryPath: "/depot" };
+      if (declared !== undefined) {
+        payload["deliveryPolicy"] = declared;
+      }
+
+      const response = await call("/claude/preflight", { ...authorized, body: body(payload) });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(receivedPreflightPolicies, [DELIVERY_POLICY.MANUAL], String(declared));
+    }
+  });
 });
 
 describe("POST /claude/runs/start", () => {
@@ -1918,7 +1962,7 @@ describe("POST /claude/runs/status", () => {
   const authorized = { method: "POST", token: `Bearer ${TOKEN}` } as const;
 
   it("retourne l'etat d'une execution connue", async () => {
-    testRegistry.register(RUN_ID);
+    testRegistry.register(RUN_ID, "d:\\depots\\alpha");
     testRegistry.start(RUN_ID, new Date("2026-08-06T10:00:00.000Z"));
 
     const response = await call("/claude/runs/status", {
@@ -1947,7 +1991,7 @@ describe("POST /claude/runs/status", () => {
     // Le registre n'accepte qu'une execution active : celle du test precedent
     // doit d'abord etre conclue.
     testRegistry.finish(RUN_ID, "COMPLETED");
-    testRegistry.register(finished);
+    testRegistry.register(finished, "d:\\depots\\alpha");
     testRegistry.finish(finished, "COMPLETED", { resultText: "Fini.", exitCode: 0 });
 
     const response = await call("/claude/runs/status", {
@@ -1986,15 +2030,17 @@ describe("POST /claude/runs/events", () => {
   const EVENTS_RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3401";
 
   function seed(): void {
-    // Le registre n'accepte qu'une execution active a la fois : celles des
-    // suites precedentes doivent d'abord etre conclues. Celle de cette suite,
-    // en revanche, doit rester active d'un test a l'autre.
-    const active = testRegistry.activeRunId();
-    if (active !== null && active !== EVENTS_RUN) {
-      testRegistry.finish(active, "COMPLETED");
+    // Ces suites partagent un meme repository de test : le registre n'y accepte
+    // qu'une execution active a la fois, et celles des suites precedentes
+    // doivent d'abord etre conclues. Celle de cette suite, en revanche, doit
+    // rester active d'un test a l'autre.
+    for (const active of testRegistry.activeRunIds()) {
+      if (active !== EVENTS_RUN) {
+        testRegistry.finish(active, "COMPLETED");
+      }
     }
     if (!testRegistry.has(EVENTS_RUN)) {
-      testRegistry.register(EVENTS_RUN);
+      testRegistry.register(EVENTS_RUN, "d:\\depots\\alpha");
       testRegistry.start(EVENTS_RUN, new Date("2026-08-07T10:00:00.000Z"));
       testRegistry.appendEvents(EVENTS_RUN, [
         { kind: "STATUS", label: "Started", detail: null, toolName: null, isError: false },
@@ -2137,12 +2183,13 @@ describe("POST /claude/runs/cancel", () => {
   const CANCEL_RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3402";
 
   function seedActive(runId: string): void {
-    const active = testRegistry.activeRunId();
-    if (active !== null && active !== runId) {
-      testRegistry.finish(active, "COMPLETED");
+    for (const active of testRegistry.activeRunIds()) {
+      if (active !== runId) {
+        testRegistry.finish(active, "COMPLETED");
+      }
     }
     if (!testRegistry.has(runId)) {
-      testRegistry.register(runId);
+      testRegistry.register(runId, "d:\\depots\\alpha");
       testRegistry.start(runId, new Date());
       testRegistry.attachKill(runId, () => undefined);
     }
@@ -2177,7 +2224,7 @@ describe("POST /claude/runs/cancel", () => {
   it("refuse une execution deja terminee", async () => {
     const finished = "3f2504e0-4f89-41d3-9a0c-0305e82c3403";
     testRegistry.finish(CANCEL_RUN, "CANCELLED");
-    testRegistry.register(finished);
+    testRegistry.register(finished, "d:\\depots\\alpha");
     testRegistry.finish(finished, "COMPLETED");
 
     const response = await call("/claude/runs/cancel", {
@@ -2252,9 +2299,10 @@ describe("POST /claude/runs/review", () => {
 
   /** Termine ce qui tourne encore : le registre n'accepte qu'un run actif. */
   function idle(except?: string): void {
-    const active = testRegistry.activeRunId();
-    if (active !== null && active !== except) {
-      testRegistry.finish(active, "COMPLETED");
+    for (const active of testRegistry.activeRunIds()) {
+      if (active !== except) {
+        testRegistry.finish(active, "COMPLETED");
+      }
     }
   }
 
@@ -2263,7 +2311,7 @@ describe("POST /claude/runs/review", () => {
     if (testRegistry.has(REVIEW_RUN)) {
       return;
     }
-    testRegistry.register(REVIEW_RUN);
+    testRegistry.register(REVIEW_RUN, "d:\\depots\\alpha");
     testRegistry.finish(REVIEW_RUN, "COMPLETED");
     testRegistry.attachReview(REVIEW_RUN, {
       ok: true,
@@ -2322,7 +2370,7 @@ describe("POST /claude/runs/review", () => {
   it("refuse une execution qui n'a pas encore fini", async () => {
     idle(ACTIVE_RUN);
     if (!testRegistry.has(ACTIVE_RUN)) {
-      testRegistry.register(ACTIVE_RUN);
+      testRegistry.register(ACTIVE_RUN, "d:\\depots\\alpha");
       testRegistry.start(ACTIVE_RUN, new Date("2026-08-07T10:00:00.000Z"));
     }
 
@@ -2339,7 +2387,7 @@ describe("POST /claude/runs/review", () => {
     testRegistry.finish(ACTIVE_RUN, "COMPLETED");
     idle();
     if (!testRegistry.has(FAILED_RUN)) {
-      testRegistry.register(FAILED_RUN);
+      testRegistry.register(FAILED_RUN, "d:\\depots\\alpha");
       testRegistry.finish(FAILED_RUN, "COMPLETED");
       testRegistry.attachReview(FAILED_RUN, { ok: false, code: "CLAUDE_REVIEW_FAILED" });
     }

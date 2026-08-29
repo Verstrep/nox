@@ -180,7 +180,22 @@ export const RUNNER_ERROR = {
   // --- Execution de Claude Code ---------------------------------------------
 
   /** Une execution Claude est deja active : la V1 n'en autorise qu'une. */
+  /**
+   * Code historique : il signifiait « une execution est active quelque part
+   * dans NOX ». Le runner ne l'emet plus depuis TASK-031, ou l'exclusion est
+   * devenue repository par repository. Il reste declare parce que des
+   * executions anterieures le portent encore dans leur `errorCode`, et qu'une
+   * page qui les affiche doit continuer a savoir le traduire.
+   */
   CLAUDE_RUN_ALREADY_ACTIVE: "CLAUDE_RUN_ALREADY_ACTIVE",
+  /**
+   * Une execution est deja active **sur ce repository**.
+   *
+   * Deux repositories differents peuvent executer Claude Code en meme temps ;
+   * un meme repository, jamais. Le refus nomme donc ce qui le motive, au lieu
+   * de laisser croire que NOX est occupe ailleurs.
+   */
+  REPOSITORY_CLAUDE_RUN_ALREADY_ACTIVE: "REPOSITORY_CLAUDE_RUN_ALREADY_ACTIVE",
   /** Le runner ne connait pas cette execution — souvent apres un redemarrage. */
   CLAUDE_RUN_NOT_FOUND: "CLAUDE_RUN_NOT_FOUND",
   /** L'identifiant d'execution n'a pas la forme attendue. */

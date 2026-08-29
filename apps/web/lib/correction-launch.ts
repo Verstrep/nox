@@ -45,6 +45,7 @@ import {
   hasActiveRun,
   listTaskDependencies,
   markRunRunning,
+  readProjectDeliveryPolicy,
   seedRunValidations,
   startCorrectionRun,
   startTaskCorrection,
@@ -269,6 +270,19 @@ export async function launchCorrection(
     resumedFromSessionId: sessionId,
   });
   if (!created.ok) {
+    // Deux refus distincts, parce qu'ils n'appellent pas le meme geste. Un
+    // repository occupe se libere : la reservation est rendue, et la correction
+    // reste prete pour ce moment-la. Une reservation deja consommee, elle, ne se
+    // rend pas — quelqu'un d'autre l'a prise, et l'abandonner effacerait sa
+    // correction.
+    if (created.reason === "active_run") {
+      return await release(
+        db,
+        input.attemptId,
+        CORRECTION_REFUSAL.REPOSITORY_RUN_ACTIVE,
+        correctionRefusalMessage(CORRECTION_REFUSAL.REPOSITORY_RUN_ACTIVE),
+      );
+    }
     return refuse(
       CORRECTION_REFUSAL.ALREADY_RESERVED,
       correctionRefusalMessage(CORRECTION_REFUSAL.ALREADY_RESERVED),
@@ -293,6 +307,11 @@ export async function launchCorrection(
     // Une correction d'amorcage garde les permissions d'un amorcage : le
     // pipeline est le meme, sans branche selon `kind`.
     taskKind: context.task.kind,
+    // Transmise pour que le contrat soit le meme des deux cotes. Une correction
+    // ne passe pas par le preflight initial — elle exige un dossier de travail
+    // **identique** a celui qui a ete relu, pas un depot synchronise — donc
+    // cette valeur ne change rien ici. La taire ferait croire a une exception.
+    deliveryPolicy: await readProjectDeliveryPolicy(db, project.id),
     correction: {
       sessionId,
       expectedBranch: branch,

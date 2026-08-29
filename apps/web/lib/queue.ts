@@ -30,6 +30,7 @@ import {
   getProjectById,
   isQueueActive,
   listQueueEntries,
+  readProjectDeliveryPolicy,
   setQueueActive,
   type DatabaseClient,
 } from "@nox/database";
@@ -211,10 +212,16 @@ export async function advanceQueue(
     return result(QUEUE_DISPATCH.WAITING_DELIVERY, { taskId: blocking.taskId });
   }
 
-  // Le preflight existant, tel quel. La file ne l'affaiblit pas : un repository
-  // qui porte des modifications non commitees arrete la progression, il ne la
-  // contourne pas. C'est le prix assume tant que la livraison Git est manuelle.
-  const preflight = await ports.preflight(project.repositoryPath);
+  // Le preflight existant, tel quel — a une nuance pres, et une seule : il sait
+  // desormais ce que le projet autorise NOX a ecrire. Un repository qui porte
+  // des modifications non commitees arrete toujours la progression ; une branche
+  // en avance parce que NOX vient de commiter sous `AUTO_COMMIT` ne l'arrete
+  // plus, parce que c'est exactement l'etat que cette politique produit.
+  //
+  // La politique est relue en base ici, jamais recue : c'est un droit d'ecriture
+  // dans Git, il ne peut pas venir d'ailleurs.
+  const policy = await readProjectDeliveryPolicy(db, projectId);
+  const preflight = await ports.preflight(project.repositoryPath, policy);
   if (!preflight.ok) {
     return result(QUEUE_DISPATCH.WAITING_REPOSITORY);
   }

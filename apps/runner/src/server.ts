@@ -50,6 +50,7 @@ import {
   type ClaudeRunReviewSuccess,
   type ClaudeRunStatusSuccess,
   type DeliveryCommitSuccess,
+  type DeliveryPolicy,
   type DeliveryInspectSuccess,
   type DeliveryPushSuccess,
   type CreateProjectDocumentSuccess,
@@ -175,7 +176,10 @@ export type RunnerDependencies = {
   pushDelivery?: (
     request: Parameters<typeof pushDelivery>[0],
   ) => Promise<DeliveryPushResult>;
-  claudePreflight?: (repositoryPath: string) => Promise<PreflightResult>;
+  claudePreflight?: (
+    repositoryPath: string,
+    deliveryPolicy: DeliveryPolicy,
+  ) => Promise<PreflightResult>;
   claudeCorrectionPreflight?: (
     request: CorrectionPreflightRequest,
   ) => Promise<CorrectionPreflightResult>;
@@ -323,7 +327,8 @@ export function createRunnerServer(
   const registry = dependencies.runRegistry ?? new ClaudeRunRegistry();
   const preflight =
     dependencies.claudePreflight ??
-    ((repositoryPath: string) => runPreflight(repositoryPath, config.claude));
+    ((repositoryPath: string, deliveryPolicy: DeliveryPolicy) =>
+      runPreflight(repositoryPath, config.claude, { deliveryPolicy }));
   // La cle est derivee **une fois**, au demarrage : le jeton lui-meme ne circule
   // ensuite plus nulle part, et aucun module de calcul d'empreinte ne le voit.
   const fingerprintKey = deriveFingerprintKey(config.token);
@@ -845,7 +850,10 @@ export function createRunnerServer(
           return;
         }
 
-        const result = await preflight(parsed.repositoryPath);
+        // La politique vient du corps, deja ramenee a `MANUAL` par le parseur
+        // si elle etait absente ou illisible. Le runner la rejoue lui-meme : il
+        // ne fait pas confiance au web, mais il n'a aucun moyen de la relire.
+        const result = await preflight(parsed.repositoryPath, parsed.deliveryPolicy);
         if (!result.ok) {
           logRefusal(requestId, CLAUDE_PREFLIGHT_ROUTE, result.code);
           sendRunnerError(response, result.code, requestId);

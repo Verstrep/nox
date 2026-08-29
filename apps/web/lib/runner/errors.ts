@@ -155,8 +155,12 @@ const CODE_MESSAGES: Record<RunnerErrorCode, string> = {
     "La verification Git prealable a echoue. Consultez les logs du runner pour le detail.",
 
   // --- Execution -------------------------------------------------------------
+  // Code historique : il ne peut plus etre emis, mais des executions anterieures
+  // le portent encore, et leur page doit rester lisible.
   [RUNNER_ERROR.CLAUDE_RUN_ALREADY_ACTIVE]:
-    "Une execution Claude Code est deja en cours. NOX n'en autorise qu'une a la fois : attendez sa fin avant d'en lancer une autre.",
+    "Une execution Claude Code etait deja en cours au moment du lancement.",
+  [RUNNER_ERROR.REPOSITORY_CLAUDE_RUN_ALREADY_ACTIVE]:
+    "Une execution Claude Code travaille deja sur ce repository. NOX n'en autorise qu'une a la fois par repository : attendez sa fin avant d'en lancer une autre. Les autres projets ne sont pas concernes.",
   [RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND]:
     "Le runner ne suit plus cette execution. Elle a probablement ete interrompue par un redemarrage du runner : NOX ne peut pas dire ce que le processus a fait, verifiez l'etat du repository vous-meme.",
   [RUNNER_ERROR.CLAUDE_TIMEOUT]:

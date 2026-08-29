@@ -12,11 +12,17 @@ import {
   getProjectById,
   listProjects,
   loadProjectDashboardFacts,
+  readProjectDeliveryPolicy,
   type Project,
 } from "@nox/database";
 import { connection } from "next/server";
 
-import { TASK_STATUSES, type QueueReadModel, type TaskStatus } from "@nox/shared";
+import {
+  DELIVERY_POLICY,
+  TASK_STATUSES,
+  type QueueReadModel,
+  type TaskStatus,
+} from "@nox/shared";
 
 import {
   projectCard,
@@ -78,6 +84,10 @@ function emptyFacts(): ProjectCardFacts {
     lastTaskActivityAt: null,
     queuedCount: 0,
     queueActive: false,
+    activeRun: null,
+    validating: false,
+    deliveryPolicy: DELIVERY_POLICY.MANUAL,
+    blockingDelivery: null,
   };
 }
 
@@ -116,6 +126,7 @@ export async function loadQueueWithRepository(projectId: string): Promise<QueueR
     return model;
   }
 
-  const preflight = await claudePreflight(project.repositoryPath);
+  const policy = await readProjectDeliveryPolicy(db, projectId);
+  const preflight = await claudePreflight(project.repositoryPath, policy);
   return readQueue(db, projectId, preflight.ok ? "ready" : "not_ready");
 }

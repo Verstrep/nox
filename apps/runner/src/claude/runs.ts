@@ -30,7 +30,9 @@ import {
   WORKSPACE_FINGERPRINT_VERSION,
   buildClaudeToolPolicy,
   isRunnerRunId,
+  repositoryLockKey,
   RUN_LIMITS,
+  type DeliveryPolicy,
   type RunStatus,
   type RunWorkspaceFingerprint,
   type RunnerErrorCode,
@@ -60,6 +62,14 @@ export type StartRunRequest = {
   validationCommands: readonly string[];
   /** Nature de la tache : elle decide des programmes d'amorcage autorises. */
   taskKind: TaskKind;
+  /**
+   * Politique de livraison Git du projet, relue en base par le serveur web.
+   *
+   * Elle n'autorise aucune ecriture ici : elle dit seulement si une branche
+   * locale en avance sur son upstream est un incident ou l'etat normal du
+   * projet. Le preflight en a besoin ; rien d'autre sur cette route.
+   */
+  deliveryPolicy: DeliveryPolicy;
   /** Correction ciblee : session a reprendre et etat de depart attendu. */
   correction?: {
     sessionId: string;
@@ -105,6 +115,25 @@ function checkPrompt(prompt: string): RunnerErrorCode | null {
     return RUNNER_ERROR.CLAUDE_PROMPT_INVALID;
   }
   return null;
+}
+
+/**
+ * Traduit un refus du registre en code d'erreur du contrat.
+ *
+ * `already_active` designe **ce** repository, jamais le runner entier : deux
+ * repositories differents peuvent executer Claude Code en meme temps. Le code
+ * historique `CLAUDE_RUN_ALREADY_ACTIVE`, qui signifiait « occupe quelque part »,
+ * n'est plus emis.
+ */
+function registerRefusal(reason: "already_active" | "duplicate_id" | "unknown_repository"): RunnerErrorCode {
+  switch (reason) {
+    case "already_active":
+      return RUNNER_ERROR.REPOSITORY_CLAUDE_RUN_ALREADY_ACTIVE;
+    case "unknown_repository":
+      return RUNNER_ERROR.REPOSITORY_PATH_REQUIRED;
+    case "duplicate_id":
+      return RUNNER_ERROR.CLAUDE_RUN_ID_INVALID;
+  }
 }
 
 /**
@@ -166,7 +195,10 @@ export async function startClaudeRun(
 
   const preflight =
     correction === undefined || fingerprintKey === undefined
-      ? await runPreflight(request.repositoryPath, claude, options)
+      ? await runPreflight(request.repositoryPath, claude, {
+          ...options,
+          deliveryPolicy: request.deliveryPolicy,
+        })
       : await runCorrectionPreflight(
           {
             repositoryPath: request.repositoryPath,
@@ -189,15 +221,16 @@ export async function startClaudeRun(
     return { ok: false, code: RUNNER_ERROR.GIT_HEAD_CHANGED };
   }
 
-  const registered = registry.register(request.runId);
+  // L'exclusion d'execution porte sur le repository, pas sur le runner entier.
+  // La cle est derivee de la racine **reelle** rendue par le systeme de fichiers,
+  // jamais du chemin recu : c'est ce qui fait qu'un alias, une barre finale ou
+  // une difference de casse sous Windows ne contournent rien.
+  //
+  // Le web a deja verifie la meme chose en base ; ce controle-ci ne lui fait pas
+  // confiance, et il est le seul a voir les processus reels.
+  const registered = registry.register(request.runId, repositoryLockKey(repository.root));
   if (!registered.ok) {
-    return {
-      ok: false,
-      code:
-        registered.reason === "already_active"
-          ? RUNNER_ERROR.CLAUDE_RUN_ALREADY_ACTIVE
-          : RUNNER_ERROR.CLAUDE_RUN_ID_INVALID,
-    };
+    return { ok: false, code: registerRefusal(registered.reason) };
   }
 
   const startedAt = new Date();

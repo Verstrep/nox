@@ -338,6 +338,10 @@ describe("lancement d'une correction depuis un feedback", () => {
     feedbackId: string;
   }> {
     const source = await newSourceRun();
+    // Le run source est conclu, comme il l'est toujours quand une correction
+    // part : une execution encore active tient le verrou de son repository, et
+    // la laisser `QUEUED` decrirait un etat que le workflow ne produit pas.
+    await completeRun(db, source.runId, { finishedAt: new Date() });
     const created = await createReviewFeedback(db, {
       taskId: source.taskId,
       sourceRunId: source.runId,
@@ -534,6 +538,9 @@ describe("lancement d'une correction depuis un feedback", () => {
       resumedFromSessionId: "session-1",
     });
     assert.ok(first.ok);
+    // Une chaine se lit dans le temps : la premiere correction se termine avant
+    // que la seconde soit relue, puis lancee.
+    await completeRun(db, first.run.id, { finishedAt: new Date() });
 
     const second = await createReviewFeedback(db, {
       taskId,
@@ -576,6 +583,7 @@ describe("getRunResumeContext", () => {
   it("signale une correction deja lancee", async () => {
     const { taskId, runId } = await newSourceRun();
     await makeResumable(runId);
+    await completeRun(db, runId, { finishedAt: new Date() });
     const created = await createReviewFeedback(db, {
       taskId,
       sourceRunId: runId,

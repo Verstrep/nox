@@ -39,7 +39,7 @@ function manualScheduler() {
 
 function activeRegistry(kill: () => void = () => undefined): ClaudeRunRegistry {
   const registry = new ClaudeRunRegistry();
-  registry.register(RUN_ID);
+  registry.register(RUN_ID, "d:\\depots\\alpha");
   registry.start(RUN_ID, new Date());
   registry.attachKill(RUN_ID, kill);
   return registry;
@@ -56,7 +56,7 @@ describe("cancelClaudeRun", () => {
 
   it("accepte l'arret d'une execution encore en file", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(RUN_ID);
+    registry.register(RUN_ID, "d:\\depots\\alpha");
     registry.attachKill(RUN_ID, () => undefined);
 
     const result = cancelClaudeRun(RUN_ID, registry, { setTimeoutFn: manualScheduler().schedule });

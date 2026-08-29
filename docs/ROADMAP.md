@@ -217,7 +217,9 @@ NOX ne redemande pas confirmation tâche par tâche, et l'écran l'annonce avant
 Une tâche validée fige un **candidat** : branche, `HEAD`, empreinte du dossier de travail et
 liste exacte des fichiers. Juste avant d'écrire, NOX relit tout et compare. S'il correspond, il
 prépare les chemins exacts, crée un commit lisible et — selon le mode — le pousse vers
-l'upstream déjà configuré. La file peut alors continuer.
+l'upstream déjà configuré. La file peut alors continuer : `Auto commit validated` est satisfaite
+dès le commit local, sans push, et la branche reste alors volontairement en avance sur son
+upstream ; `Auto commit + push validated` attend, elle, la confirmation du push.
 
 Ce que cette étape **ne fait pas** : elle ne commite jamais un état qui a divergé — sans
 échappatoire —, ne change jamais de branche, ne configure jamais un upstream, ne force jamais un
@@ -232,15 +234,23 @@ seconde implémentation de tableau de bord n'est prévue**. Ce qui pourra encore
 recherche, un filtre, une pagination — se traitera comme une évolution de la surface existante,
 pas comme une nouvelle étape.
 
-### `TASK-031` — Runner multi-projets — **suivante**
+### `TASK-031` — Runner multi-projets — terminée
 
-Aujourd'hui, une seule exécution est active tous projets confondus. Cette limite tombe ici, ou
-pas du tout : plusieurs projets doivent pouvoir avancer sans elle, tout en gardant **au plus une
-exécution Claude active par repository** et les autorisations propres à chaque projet.
+La limitation globale a disparu. Plusieurs projets travaillent en même temps, chacun sur son
+repository : leur file, leur exécution, leurs validations, leurs corrections et leur livraison
+Git avancent sans se bloquer. Ce qui reste interdit l'est toujours — **au plus une exécution
+Claude Code par repository canonique** — et l'est deux fois : en base, dans la transaction qui
+crée l'exécution, puis dans le runner, sur les processus réels.
 
-### `TASK-032` — Replanification depuis la conversation principale
+Ce que cette étape **ne fait pas** : elle n'ordonnance rien, ne crée aucune file globale, aucune
+priorité, aucune équité, aucun plafond chiffré. Elle n'élargit aucune autorisation — démarrer la
+file d'un projet n'en démarre aucun autre —, ne dispatche rien au démarrage du serveur, et
+n'ouvre pas les dépendances entre projets.
+
+### `TASK-032` — Replanification depuis la conversation principale — **suivante**
 
 La boucle se referme : revenir dans la conversation du projet et réordonner le plan restant.
+C'est la dernière étape prévue avant le premier vrai projet pilote de bout en bout.
 
 ---
 

@@ -8,6 +8,12 @@
 export { createDatabaseClient, getDatabaseClient, type DatabaseClient } from "./client.js";
 
 export {
+  countActiveRepositoryRuns,
+  listProjectIdsSharingRepository,
+} from "./repository-lock.js";
+export type { RepositoryLockClient } from "./repository-lock.js";
+
+export {
   InvalidProjectRecordError,
   createProject,
   findProjectByRepositoryPath,
@@ -51,6 +57,8 @@ export {
 
 export {
   loadProjectDashboardFacts,
+  type ProjectActiveRunFacts,
+  type ProjectBlockingDeliveryFacts,
   type ProjectDashboardFacts,
 } from "./project-dashboard.js";
 

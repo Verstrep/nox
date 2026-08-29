@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 
+import { DELIVERY_POLICIES, DELIVERY_POLICY } from "@nox/shared";
+
 import type { ClaudeConfig } from "../config.ts";
 import { parsePorcelainPaths, readGitChanges, readGitState } from "../repositories/git-state.ts";
 import type { ClaudeVersionResult } from "./executable.ts";
@@ -253,6 +255,100 @@ describe("runPreflight", () => {
     const result = await runPreflight(repository, CLAUDE, { probeVersion: availableVersion });
 
     assert.equal(result.ok, false);
+    assert.equal(result.ok ? null : result.code, "GIT_NOT_SYNCHRONIZED");
+  });
+
+  it("refuse une branche en avance sous une politique manuelle", async () => {
+    await writeFile(path.join(repository, "ajout.txt"), "x", "utf8");
+    git(repository, "add", "-A");
+    git(repository, "commit", "-m", "avance");
+
+    const result = await runPreflight(repository, CLAUDE, {
+      probeVersion: availableVersion,
+      deliveryPolicy: DELIVERY_POLICY.MANUAL,
+    });
+
+    assert.equal(result.ok ? null : result.code, "GIT_NOT_SYNCHRONIZED");
+  });
+
+  it("accepte une branche en avance sous AUTO_COMMIT", async () => {
+    await writeFile(path.join(repository, "ajout.txt"), "x", "utf8");
+    git(repository, "add", "-A");
+    git(repository, "commit", "-m", "avance");
+
+    const result = await runPreflight(repository, CLAUDE, {
+      probeVersion: availableVersion,
+      deliveryPolicy: DELIVERY_POLICY.AUTO_COMMIT,
+    });
+
+    // C'est l'etat normal de cette politique : NOX a commite le travail valide
+    // et ne le poussera pas. Le repository reste parfaitement relisible.
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.git.ahead, 1);
+    assert.equal(result.git.behind, 0);
+  });
+
+  it("refuse une branche en avance sous AUTO_COMMIT_PUSH", async () => {
+    await writeFile(path.join(repository, "ajout.txt"), "x", "utf8");
+    git(repository, "add", "-A");
+    git(repository, "commit", "-m", "avance");
+
+    const result = await runPreflight(repository, CLAUDE, {
+      probeVersion: availableVersion,
+      deliveryPolicy: DELIVERY_POLICY.AUTO_COMMIT_PUSH,
+    });
+
+    // Cette politique n'est satisfaite qu'une fois le commit pousse : une branche
+    // en avance y signifie que le push manque, pas que tout va bien.
+    assert.equal(result.ok ? null : result.code, "GIT_NOT_SYNCHRONIZED");
+  });
+
+  it("refuse une branche en retard, meme sous AUTO_COMMIT", async () => {
+    // Un tiers pousse un commit que ce dossier n'a pas encore integre.
+    const autre = path.join(workspace, "autre");
+    execFileSync("git", ["clone", remote, autre], { stdio: "ignore" });
+    git(autre, "config", "user.email", "test@nox.local");
+    git(autre, "config", "user.name", "Test NOX");
+    await writeFile(path.join(autre, "tiers.txt"), "x", "utf8");
+    git(autre, "add", "-A");
+    git(autre, "commit", "-m", "tiers");
+    git(autre, "push", "origin", "main");
+    git(repository, "fetch", "origin");
+    await rm(autre, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+
+    const result = await runPreflight(repository, CLAUDE, {
+      probeVersion: availableVersion,
+      deliveryPolicy: DELIVERY_POLICY.AUTO_COMMIT,
+    });
+
+    // Aucune politique ne produit cet etat : il vient toujours de l'exterieur, et
+    // il rend la relecture d'apres execution ambigue.
+    assert.equal(result.ok ? null : result.code, "GIT_NOT_SYNCHRONIZED");
+  });
+
+  it("refuse toujours un repository sale, quelle que soit la politique", async () => {
+    await writeFile(path.join(repository, "brouillon.txt"), "x", "utf8");
+
+    for (const policy of DELIVERY_POLICIES) {
+      const result = await runPreflight(repository, CLAUDE, {
+        probeVersion: availableVersion,
+        deliveryPolicy: policy,
+      });
+
+      assert.equal(result.ok ? null : result.code, "REPOSITORY_DIRTY", policy);
+    }
+  });
+
+  it("traite une politique absente comme MANUAL", async () => {
+    await writeFile(path.join(repository, "ajout.txt"), "x", "utf8");
+    git(repository, "add", "-A");
+    git(repository, "commit", "-m", "avance");
+
+    // Le defaut sur n'assouplit rien : un appelant qui oublierait la politique
+    // n'obtient pas plus de droits, il en obtient moins.
+    const result = await runPreflight(repository, CLAUDE, { probeVersion: availableVersion });
+
     assert.equal(result.ok ? null : result.code, "GIT_NOT_SYNCHRONIZED");
   });
 

@@ -7,43 +7,75 @@ import { ClaudeRunRegistry } from "./registry.ts";
 const ID_A = "3f2504e0-4f89-41d3-9a0c-000000000001";
 const ID_B = "3f2504e0-4f89-41d3-9a0c-000000000002";
 const ID_C = "3f2504e0-4f89-41d3-9a0c-000000000003";
+const REPO_A = "d:\\depots\\alpha";
+const REPO_B = "d:\\depots\\beta";
+const REPO_C = "d:\\depots\\gamma";
 
-describe("registre - une seule execution active", () => {
+describe("registre - une execution active par repository", () => {
   it("accepte une premiere execution", () => {
     const registry = new ClaudeRunRegistry();
-    assert.deepEqual(registry.register(ID_A), { ok: true });
-    assert.equal(registry.activeRunId(), ID_A);
+    assert.deepEqual(registry.register(ID_A, REPO_A), { ok: true });
+    assert.deepEqual(registry.activeRunIds(), [ID_A]);
+    assert.equal(registry.activeRunIdForRepository(REPO_A), ID_A);
   });
 
-  it("refuse une seconde execution tant que la premiere tourne", () => {
+  it("refuse une seconde execution sur le meme repository", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
 
-    assert.deepEqual(registry.register(ID_B), { ok: false, reason: "already_active" });
+    assert.deepEqual(registry.register(ID_B, REPO_A), { ok: false, reason: "already_active" });
   });
 
-  it("accepte une nouvelle execution une fois la precedente terminee", () => {
+  it("accepte une seconde execution sur un autre repository", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
-    registry.finish(ID_A, "COMPLETED");
+    registry.register(ID_A, REPO_A);
 
-    assert.deepEqual(registry.register(ID_B), { ok: true });
-    assert.equal(registry.activeRunId(), ID_B);
+    // C'est exactement ce que TASK-031 change : deux repositories differents
+    // ne partagent rien, et se bloquer l'un l'autre n'aurait protege personne.
+    assert.deepEqual(registry.register(ID_B, REPO_B), { ok: true });
+    assert.deepEqual(registry.register(ID_C, REPO_C), { ok: true });
+    assert.deepEqual(registry.activeRunIds(), [ID_A, ID_B, ID_C]);
+    assert.equal(registry.activeRunIdForRepository(REPO_B), ID_B);
+  });
+
+  it("refuse une execution sans repository connu", () => {
+    const registry = new ClaudeRunRegistry();
+
+    // Sans cle, aucun verrou ne couvrirait le processus lance. Refuser est le
+    // seul defaut sur.
+    assert.deepEqual(registry.register(ID_A, ""), {
+      ok: false,
+      reason: "unknown_repository",
+    });
+    assert.deepEqual(registry.activeRunIds(), []);
+  });
+
+  it("libere le repository des que l'execution atteint un etat final", () => {
+    for (const final of ["COMPLETED", "FAILED", "CANCELLED", "BLOCKED"] as const) {
+      const registry = new ClaudeRunRegistry();
+      registry.register(ID_A, REPO_A);
+      registry.finish(ID_A, final);
+
+      // Aucun verrou fantome : la tache suivante du meme repository part.
+      assert.equal(registry.activeRunIdForRepository(REPO_A), null);
+      assert.deepEqual(registry.register(ID_B, REPO_A), { ok: true });
+      assert.deepEqual(registry.activeRunIds(), [ID_B]);
+    }
   });
 
   it("refuse un identifiant deja connu, meme termine", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.finish(ID_A, "COMPLETED");
 
-    assert.deepEqual(registry.register(ID_A), { ok: false, reason: "duplicate_id" });
+    assert.deepEqual(registry.register(ID_A, REPO_A), { ok: false, reason: "duplicate_id" });
   });
 });
 
 describe("registre - cycle de vie", () => {
   it("part de QUEUED puis passe a RUNNING", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
 
     assert.equal(registry.snapshot(ID_A)?.status, "QUEUED");
 
@@ -54,7 +86,7 @@ describe("registre - cycle de vie", () => {
 
   it("conserve le premier etat final", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
 
     registry.finish(ID_A, "BLOCKED", { errorCode: "CLAUDE_TIMEOUT" });
     // Une fin de processus arrivant apres le depassement de delai ne doit pas
@@ -69,7 +101,7 @@ describe("registre - cycle de vie", () => {
 
   it("refuse toute mise a jour apres un etat final", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.finish(ID_A, "COMPLETED", { resultText: "definitif" });
 
     registry.update(ID_A, { resultText: "autre chose" });
@@ -87,7 +119,7 @@ describe("registre - cycle de vie", () => {
 
   it("borne le contenu conserve a la fin", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
 
     registry.finish(ID_A, "COMPLETED", {
       resultText: "a".repeat(500_000),
@@ -114,7 +146,7 @@ describe("registre - cycle de vie", () => {
 describe("registre - arret d'un processus", () => {
   it("ne termine que le processus du run demande", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
 
     let killed = false;
     registry.attachKill(ID_A, () => {
@@ -130,7 +162,7 @@ describe("registre - arret d'un processus", () => {
 
   it("oublie la fonction d'arret une fois l'execution terminee", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.attachKill(ID_A, () => undefined);
     registry.finish(ID_A, "COMPLETED");
 
@@ -144,7 +176,7 @@ describe("registre - retention", () => {
 
     for (let index = 1; index <= 4; index += 1) {
       const id = `3f2504e0-4f89-41d3-9a0c-00000000000${String(index)}`;
-      registry.register(id);
+      registry.register(id, REPO_A);
       registry.finish(id, "COMPLETED");
     }
 
@@ -158,7 +190,7 @@ describe("registre - retention", () => {
     let now = new Date("2026-08-06T10:00:00.000Z");
     const registry = new ClaudeRunRegistry(20, 60_000, () => now);
 
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.finish(ID_A, "COMPLETED");
 
     now = new Date("2026-08-06T10:02:00.000Z");
@@ -172,19 +204,19 @@ describe("registre - retention", () => {
     // Un maximum de zero entree conservee : meme la, l'active reste.
     const registry = new ClaudeRunRegistry(0, 1, () => now);
 
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.start(ID_A, now);
 
     now = new Date("2026-08-07T10:00:00.000Z");
     registry.prune();
 
     assert.equal(registry.has(ID_A), true);
-    assert.equal(registry.activeRunId(), ID_A);
+    assert.equal(registry.activeRunIdForRepository(REPO_A), ID_A);
   });
 
   it("conserve le resultat final apres la fin du processus", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_C);
+    registry.register(ID_C, REPO_A);
     registry.finish(ID_C, "COMPLETED", { resultText: "Compte rendu.", exitCode: 0 });
 
     const snapshot = registry.snapshot(ID_C);
@@ -212,7 +244,7 @@ const DRAFT = {
 
 function withRun(): ClaudeRunRegistry {
   const registry = new ClaudeRunRegistry();
-  registry.register(ID_A);
+  registry.register(ID_A, REPO_A);
   registry.start(ID_A, new Date());
   return registry;
 }
@@ -298,7 +330,7 @@ describe("registre - evenements", () => {
   it("perd les evenements d'une execution purgee par le TTL", () => {
     let now = new Date("2026-08-07T10:00:00.000Z");
     const registry = new ClaudeRunRegistry(20, 1_000, () => now);
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.appendEvents(ID_A, [DRAFT]);
     registry.finish(ID_A, "COMPLETED");
 
@@ -313,9 +345,9 @@ describe("registre - evenements", () => {
     let now = new Date("2026-08-07T10:00:00.000Z");
     const registry = new ClaudeRunRegistry(1, 1_000, () => now);
 
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.finish(ID_A, "COMPLETED");
-    registry.register(ID_B);
+    registry.register(ID_B, REPO_A);
     registry.appendEvents(ID_B, [DRAFT]);
 
     now = new Date("2026-08-07T12:00:00.000Z");
@@ -474,7 +506,7 @@ describe("registre - annulation", () => {
 
   it("ne ramene pas un CANCELLING a RUNNING", () => {
     const registry = new ClaudeRunRegistry();
-    registry.register(ID_A);
+    registry.register(ID_A, REPO_A);
     registry.requestCancellation(ID_A);
 
     // Le demarrage arrive apres la demande : il ne doit pas l'effacer.
@@ -497,7 +529,7 @@ describe("registre - annulation", () => {
 
     assert.equal(registry.getEvents(ID_A, 0, 10)?.isFinal, false);
     // L'execution reste active : aucune autre ne peut demarrer.
-    assert.deepEqual(registry.register(ID_C), { ok: false, reason: "already_active" });
+    assert.deepEqual(registry.register(ID_C, REPO_A), { ok: false, reason: "already_active" });
   });
 
   it("expose la demande d'annulation", () => {

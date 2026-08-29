@@ -32,6 +32,7 @@ import {
   getTaskById,
   listTaskDependencies,
   markRunRunning,
+  readProjectDeliveryPolicy,
   readVerificationPlan,
   seedRunValidations,
   startTaskExecution,
@@ -68,8 +69,8 @@ export const NO_CRITERIA_MESSAGE =
   "Cette tache n'a aucun critere d'acceptation. Sans critere, personne ne pourra dire si l'execution a reussi.";
 
 export const ACTIVE_RUN_MESSAGE =
-  "Une execution est deja en cours sur ce repository. NOX n'en lance qu'une a la fois : " +
-  "attendez sa fin, puis reessayez.";
+  "Une execution est deja en cours sur ce repository. NOX n'en lance qu'une a la fois par " +
+  "repository : attendez sa fin, puis reessayez. Les autres projets ne sont pas concernes.";
 
 /** Acces au runner ; remplaces par des doublures dans les tests. */
 export type RunLaunchPorts = {
@@ -186,6 +187,12 @@ export async function launchTaskRun(
     // La nature vient de la base, jamais du formulaire : c'est elle qui decide
     // si l'execution recoit les programmes d'amorcage.
     taskKind: task.kind,
+    // La politique de livraison, relue en base elle aussi. Elle n'autorise rien
+    // ici : le runner refait son preflight juste avant le spawn, et il doit
+    // savoir si une branche en avance est un incident ou l'etat normal de ce
+    // projet. Sans elle, un projet `AUTO_COMMIT` serait refuse au lancement
+    // apres sa premiere tache livree.
+    deliveryPolicy: await readProjectDeliveryPolicy(db, input.projectId),
   });
 
   if (!started.ok) {

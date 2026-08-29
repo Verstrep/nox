@@ -34,6 +34,7 @@ import {
   isDeliveryPolicy,
   isUntrackedEntry,
   policyAllowsAutomatic,
+  policyAllowsLocalAhead,
   policyRequiresPush,
   readDeliveryPolicy,
   readDeliveryStatus,
@@ -73,6 +74,25 @@ describe("politique de livraison", () => {
 
     assert.equal(policyRequiresPush(DELIVERY_POLICY.AUTO_COMMIT), false);
     assert.equal(policyRequiresPush(DELIVERY_POLICY.AUTO_COMMIT_PUSH), true);
+  });
+
+  it("ne tolere une branche locale en avance que sous AUTO_COMMIT", () => {
+    // `AUTO_COMMIT` commite et ne pousse pas : une branche en avance y est
+    // l'etat normal apres chaque tache validee. `MANUAL` n'ecrit rien, et
+    // `AUTO_COMMIT_PUSH` n'est satisfaite qu'une fois le commit pousse : chez
+    // elles, une branche en avance reste le refus historique.
+    assert.equal(policyAllowsLocalAhead(DELIVERY_POLICY.MANUAL), false);
+    assert.equal(policyAllowsLocalAhead(DELIVERY_POLICY.AUTO_COMMIT), true);
+    assert.equal(policyAllowsLocalAhead(DELIVERY_POLICY.AUTO_COMMIT_PUSH), false);
+  });
+
+  it("distingue la lisibilite du repository de la satisfaction de la livraison", () => {
+    // Deux questions differentes, et le bug de TASK-031 venait de les avoir
+    // fondues : `AUTO_COMMIT` + `COMMITTED` satisfait la politique **et** laisse
+    // une branche en avance. Si la seconde question repondait « non », la file
+    // s'arreterait apres chaque tache alors que tout est en ordre.
+    assert.equal(deliverySatisfied(DELIVERY_POLICY.AUTO_COMMIT, DELIVERY_STATUS.COMMITTED), true);
+    assert.equal(policyAllowsLocalAhead(DELIVERY_POLICY.AUTO_COMMIT), true);
   });
 });
 

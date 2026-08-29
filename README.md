@@ -42,6 +42,7 @@ base SQLite dans le dossier du projet.
 | **Validation autonome** | Dire avant l'exécution quels critères une commande peut prouver, et laisser NOX obtenir lui-même cette preuve |
 | **Correction pilotée** | Repartir d'un échec que NOX a constaté, sans recopier un seul log — et, sous file active, le laisser reprendre au plus deux fois |
 | **Livraison Git** | Choisir, projet par projet, ce que NOX a le droit d'écrire : rien, un commit, ou un commit puis un push vers l'upstream existant |
+| **Plusieurs projets** | Faire avancer plusieurs repositories en même temps, chacun avec sa file, ses validations et sa politique Git |
 | **File d'exécution** | Inscrire plusieurs tâches prêtes, démarrer la file, et laisser NOX les lancer une à une — jamais sans autorisation explicite |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
@@ -273,8 +274,11 @@ ou préparer une V2. L'ouvrir ne coûte aucun appel.
 
 Deux points à retenir avant un premier lancement :
 
-- **Le repository doit être propre et synchronisé.** Commitez et poussez avant de lancer :
-  sans état de départ connu, il devient impossible de dire ce que l'agent a changé.
+- **Le repository doit être propre.** Commitez avant de lancer : sans état de départ connu, il
+  devient impossible de dire ce que l'agent a changé. Faut-il aussi **pousser** ? Cela dépend de
+  la politique de livraison du projet. En `Manual` et en `Auto commit + push`, oui. En
+  `Auto commit`, non : NOX commite lui-même et ne pousse pas, votre branche locale prend donc
+  naturellement de l'avance, et cela n'arrête rien.
 - **Une réussite ne vaut pas validation.** Une exécution réussie place la tâche en `Review`,
   jamais directement en `Done`. Une seule exception, écrite dans le contrat de la tâche avant son
   lancement : si **tous** ses critères sont automatisés et que **toutes** les commandes que NOX
@@ -292,6 +296,10 @@ Deux points à retenir avant un premier lancement :
   automatique, NOX commite le travail validé — et le pousse, si c'est le mode retenu — à la seule
   condition que le repository y corresponde encore exactement. Sinon il refuse, et il le dit. Il
   ne change jamais de branche, ne force jamais un push, et ne réconcilie jamais un historique.
+- **Plusieurs projets avancent en même temps, un même repository jamais deux fois.** Chaque
+  projet garde sa file, ses autorisations et sa politique Git ; deux repositories différents
+  travaillent en parallèle, et un incident dans l'un n'arrête pas l'autre. Démarrer une file
+  n'en démarre aucune autre.
 
 ## Convention de langue de l'interface
 

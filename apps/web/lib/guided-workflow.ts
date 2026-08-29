@@ -42,6 +42,7 @@ import {
   listQueueEntries,
   listTaskDependencies,
   listTaskRunFacts,
+  readProjectDeliveryPolicy,
   type ArchitectReviewSummary,
   type TaskRunFact,
 } from "@nox/database";
@@ -236,7 +237,7 @@ export async function loadGuidedWorkflow(input: {
   // pas ».
   const launch =
     dependencies.allSatisfied && (queue.pendingEntries === 0 || queue.isCurrent)
-      ? await probeLaunch(input.project.repositoryPath, task, hasActiveRun)
+      ? await probeLaunch(db, input.project.id, input.project.repositoryPath, task, hasActiveRun)
       : ({ state: "unknown" } as const);
   const correction = await probeCorrection(
     db,
@@ -275,6 +276,8 @@ export async function loadGuidedWorkflow(input: {
  * un blocage sans objet.
  */
 async function probeLaunch(
+  db: ReturnType<typeof getDatabaseClient>,
+  projectId: string,
   repositoryPath: string,
   task: DevelopmentTaskDetail,
   hasActiveRun: boolean,
@@ -283,7 +286,11 @@ async function probeLaunch(
     return { state: "unknown" };
   }
 
-  const preflight = await claudePreflight(repositoryPath);
+  // La politique de livraison est relue en base : la sonde doit constater
+  // exactement ce que le lancement constatera, sans quoi elle annoncerait un
+  // blocage la ou rien ne bloque.
+  const policy = await readProjectDeliveryPolicy(db, projectId);
+  const preflight = await claudePreflight(repositoryPath, policy);
   return preflight.ok ? { state: "ready" } : toLaunchReadiness(preflight.failure);
 }
 

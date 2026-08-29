@@ -76,12 +76,31 @@
  *                      touche un autre fichier pour que la review ne soit pas
  *                      vide. C'est « la correction n'a pas suffi ».
  *
+ * Modes ajoutes par TASK-031 :
+ *
+ *   stream-barrier       ecrit un marqueur de demarrage dans
+ *                        `FAKE_CLAUDE_BARRIER_DIR`, puis **attend** qu'un
+ *                        fichier de liberation apparaisse avant de conclure.
+ *                        C'est ce qui permet de prouver que deux executions
+ *                        etaient actives au meme instant, sans dependre d'un
+ *                        `sleep` qui serait vrai un jour et faux le lendemain.
+ *                        A la liberation, il ouvre la barriere de validation
+ *                        (`FAKE_CLAUDE_GATE`), comme `stream-gate-open`.
+ *   stream-barrier-shut  la meme attente, mais **sans** ouvrir la barriere :
+ *                        c'est « ce travail va echouer a la validation », joue
+ *                        pendant qu'un autre repository travaille.
+ *
+ * Le mode peut aussi etre choisi **par repository** : si
+ * `FAKE_CLAUDE_MODE_DIR` est defini, le fichier `<dir>/<nom-du-dossier>.txt`
+ * l'emporte. Sans cela, deux projets qui travaillent en meme temps devraient
+ * partager un seul mode, et aucun scenario d'isolation ne serait jouable.
+ *
  * Ces modes n'existent que pour les tests. Aucun n'est atteignable en
  * production : le mode par defaut reste `success`.
  */
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -98,6 +117,17 @@ if (process.argv.includes("--version")) {
  * fichier se reecrit entre deux, ce qu'une variable heritee ne permet pas.
  */
 function readMode() {
+  // Un mode par repository d'abord : plusieurs executions peuvent tourner en
+  // meme temps, et un fichier unique leur imposerait le meme scenario.
+  const modeDir = process.env.FAKE_CLAUDE_MODE_DIR ?? "";
+  if (modeDir !== "") {
+    try {
+      return readFileSync(path.join(modeDir, `${path.basename(process.cwd())}.txt`), "utf8").trim();
+    } catch {
+      // Aucun mode propre a ce repository : on retombe sur le mode commun.
+    }
+  }
+
   const modeFile = process.env.FAKE_CLAUDE_MODE_FILE ?? "";
   if (modeFile !== "") {
     try {
@@ -110,7 +140,20 @@ function readMode() {
 }
 
 const mode = readMode();
-const reportPath = process.env.FAKE_CLAUDE_REPORT ?? "";
+
+/**
+ * Rapport d'execution, eventuellement propre a chaque repository.
+ *
+ * Un fichier unique suffisait tant qu'une seule execution tournait a la fois.
+ * Depuis TASK-031, deux processus peuvent ecrire en meme temps : sans
+ * `FAKE_CLAUDE_REPORT_DIR`, le second ecraserait le premier et le test lirait
+ * un rapport qui ne decrit pas l'execution qu'il examine.
+ */
+const reportDirectory = process.env.FAKE_CLAUDE_REPORT_DIR ?? "";
+const reportPath =
+  reportDirectory === ""
+    ? process.env.FAKE_CLAUDE_REPORT ?? ""
+    : path.join(reportDirectory, `${path.basename(process.cwd())}.json`);
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -476,6 +519,67 @@ switch (mode) {
     for (const line of gateLines) {
       process.stdout.write(`${line}\n`);
     }
+    process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));
+    process.exit(0);
+    break;
+  }
+
+  case "stream-barrier":
+  case "stream-barrier-shut": {
+    // Une barriere de fichiers, pas un `sleep` : le test sait exactement quand
+    // le processus est vivant, et decide exactement quand le liberer. C'est ce
+    // qui rend la preuve de simultaneite deterministe.
+    const barrierRoot = process.cwd();
+    const name = path.basename(barrierRoot);
+    const barrierDir = process.env.FAKE_CLAUDE_BARRIER_DIR ?? "";
+
+    process.stdout.write(
+      `${JSON.stringify({ type: "system", subtype: "init", session_id: SESSION })}\n`,
+    );
+
+    if (barrierDir !== "") {
+      // Le marqueur porte le PID : le test peut ainsi verifier que deux
+      // processus distincts existaient, pas un seul reutilise.
+      writeFileSync(
+        path.join(barrierDir, `${name}.started`),
+        `${String(process.pid)} ${String(Date.now())}\n`,
+        "utf8",
+      );
+
+      const deadline = Date.now() + Number(process.env.FAKE_CLAUDE_BARRIER_TIMEOUT_MS ?? "180000");
+      const released = () =>
+        existsSync(path.join(barrierDir, "release")) ||
+        existsSync(path.join(barrierDir, `${name}.release`));
+
+      while (!released() && Date.now() < deadline) {
+        // Un evenement de temps en temps : la timeline reste vivante, et le
+        // flux prouve que le processus n'est pas fige.
+        process.stdout.write(
+          `${JSON.stringify(toolUse(`wait-${String(Date.now())}`, "Read", { file_path: "README.md" }))}\n`,
+        );
+        await pause(100);
+      }
+    }
+
+    const barrierGate = process.env.FAKE_CLAUDE_GATE ?? "gate.txt";
+    if (mode === "stream-barrier") {
+      writeFileSync(path.join(barrierRoot, barrierGate), `${String(Date.now())}\n`, "utf8");
+    }
+    // Une trace ecrite dans tous les cas : sans elle, un travail qui n'ouvre pas
+    // la barriere serait indiscernable d'un travail jamais lance.
+    writeFileSync(
+      path.join(barrierRoot, "travail.md"),
+      `# Travail de ${name}\n\n${String(Date.now())}\n`,
+      "utf8",
+    );
+
+    process.stdout.write(
+      `${JSON.stringify(toolUse("bar-1", "Write", { file_path: "travail.md" }))}\n`,
+    );
+    process.stdout.write(`${JSON.stringify(toolResult("bar-1"))}\n`);
+    process.stdout.write(
+      `${JSON.stringify(assistantText(`Travail termine dans ${name}.`))}\n`,
+    );
     process.stdout.write(JSON.stringify({ ...success, session_id: SESSION }));
     process.exit(0);
     break;

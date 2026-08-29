@@ -24,6 +24,7 @@ import {
   getDatabaseClient,
   getRunById,
   listRunsByTask,
+  readProjectDeliveryPolicy,
   updateRunFromRunner,
 } from "@nox/database";
 import {
@@ -62,11 +63,18 @@ export type PreflightView =
   | { ok: true; preflight: ClaudePreflightSuccess }
   | { ok: false; message: string; failure: RunnerFailure };
 
-/** Interroge le preflight du runner, sans jamais lever d'exception. */
-export async function loadPreflight(repositoryPath: string): Promise<PreflightView> {
+/**
+ * Interroge le preflight du runner, sans jamais lever d'exception.
+ *
+ * La politique de livraison est relue en base : l'ecran doit dire exactement ce
+ * que la file constatera, sans quoi il annoncerait un blocage la ou rien ne
+ * bloque.
+ */
+export async function loadPreflight(projectId: string, repositoryPath: string): Promise<PreflightView> {
   await connection();
 
-  const result = await claudePreflight(repositoryPath);
+  const policy = await readProjectDeliveryPolicy(getDatabaseClient(), projectId);
+  const result = await claudePreflight(repositoryPath, policy);
   if (result.ok) {
     return { ok: true, preflight: result.value };
   }

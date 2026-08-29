@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { TASK_KIND } from "@nox/shared";
+import { DELIVERY_POLICY, TASK_KIND } from "@nox/shared";
 
 import {
   checkRunnerHealth,
@@ -1096,7 +1096,7 @@ describe("claudePreflight", () => {
   };
 
   it("retourne l'etat Git et la version de Claude Code", async () => {
-    const result = await claudePreflight(REPOSITORY, {
+    const result = await claudePreflight(REPOSITORY, DELIVERY_POLICY.MANUAL, {
       environment: ENVIRONMENT,
       fetch: stubFetch(200, success),
     });
@@ -1109,7 +1109,7 @@ describe("claudePreflight", () => {
   it("envoie le jeton dans le seul en-tete Authorization", async () => {
     const capture: { request?: Request } = {};
 
-    await claudePreflight(REPOSITORY, {
+    await claudePreflight(REPOSITORY, DELIVERY_POLICY.MANUAL, {
       environment: ENVIRONMENT,
       fetch: stubFetch(200, success, capture),
     });
@@ -1129,7 +1129,7 @@ describe("claudePreflight", () => {
       [422, "GIT_NOT_SYNCHRONIZED"],
       [503, "CLAUDE_NOT_AVAILABLE"],
     ] as const) {
-      const result = await claudePreflight(REPOSITORY, {
+      const result = await claudePreflight(REPOSITORY, DELIVERY_POLICY.MANUAL, {
         environment: ENVIRONMENT,
         fetch: stubFetch(status, { ok: false, error: { code } }),
       });
@@ -1142,7 +1142,7 @@ describe("claudePreflight", () => {
   });
 
   it("signale un runner injoignable", async () => {
-    const result = await claudePreflight(REPOSITORY, {
+    const result = await claudePreflight(REPOSITORY, DELIVERY_POLICY.MANUAL, {
       environment: ENVIRONMENT,
       fetch: () => Promise.reject(new Error("connexion refusee")),
     });
@@ -1151,7 +1151,7 @@ describe("claudePreflight", () => {
   });
 
   it("refuse une reponse hors contrat", async () => {
-    const result = await claudePreflight(REPOSITORY, {
+    const result = await claudePreflight(REPOSITORY, DELIVERY_POLICY.MANUAL, {
       environment: ENVIRONMENT,
       fetch: stubFetch(200, { ok: true, claude: { available: true } }),
     });
@@ -1169,6 +1169,7 @@ describe("startClaudeRun", () => {
     expectedGitHead: "a".repeat(40),
     validationCommands: ["npm run test"],
     taskKind: TASK_KIND.NORMAL,
+    deliveryPolicy: DELIVERY_POLICY.MANUAL,
   };
   const accepted = {
     ok: true,
@@ -1194,7 +1195,7 @@ describe("startClaudeRun", () => {
     assert.equal(failureOf(result).kind, "invalid_response");
   });
 
-  it("envoie exactement les six champs du contrat", async () => {
+  it("envoie exactement les sept champs du contrat", async () => {
     const capture: { request?: Request } = {};
 
     await startClaudeRun(request, {
@@ -1208,6 +1209,10 @@ describe("startClaudeRun", () => {
 
     const body = (await sent.json()) as Record<string, unknown>;
     assert.deepEqual(Object.keys(body).sort(), [
+      // La politique de livraison depuis TASK-029/031 : elle n'autorise rien,
+      // elle dit seulement si une branche locale en avance est l'etat normal de
+      // ce projet. Comme `taskKind`, elle est relue en base par le serveur.
+      "deliveryPolicy",
       "expectedGitHead",
       "prompt",
       "repositoryPath",

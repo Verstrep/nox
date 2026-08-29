@@ -595,11 +595,17 @@ Server Action  →  prompt régénéré côté serveur  →  runner  →  spawn 
 
 - **Le prompt ne vient jamais du navigateur.** Il est régénéré à partir de la tâche en base, et
   les règles d'outils sont calculées à partir des commandes de validation enregistrées.
-- **Le repository doit être propre et synchronisé.** Sans état de départ connu, il devient
-  impossible de dire ce que l'agent a changé.
+- **Le dossier de travail doit être propre.** Sans état de départ connu, il devient impossible
+  de dire ce que l'agent a changé. Ce refus-là ne dépend d'aucune politique.
+- **La synchronisation avec l'upstream dépend, elle, de la politique de livraison du projet.**
+  Une branche en retard est toujours refusée. Une branche en avance est refusée sous `MANUAL` et
+  `AUTO_COMMIT_PUSH`, acceptée sous `AUTO_COMMIT` : c'est l'état que cette politique produit à
+  chaque tâche livrée. La politique est relue en base par le serveur web, transmise au runner et
+  **rejouée** par lui ; absente ou illisible, elle vaut `MANUAL`.
 - **Le lancement est toujours explicite.** NOX ne déclenche jamais Claude Code de lui-même, ni
   pour réessayer, ni pour enchaîner une tâche.
-- **Une seule exécution active**, tous projets confondus.
+- **Au plus une exécution active par repository canonique**, vérifiée en base puis dans le
+  runner. Deux repositories différents travaillent en parallèle : voir § 6.6 quater.
 - **L'amorçage est la seule exception, et elle est fermée.** Une tâche `BOOTSTRAP` choisit sa
   pile technique pendant son exécution : ses commandes d'installation ne peuvent pas être
   enregistrées avant. Elle reçoit une liste nommée de programmes d'écosystème — jamais l'outil
@@ -867,8 +873,8 @@ candidat de livraison  (lecture seule)
 - **NOX ne change jamais de branche et ne configure jamais un upstream.** Ni `checkout`, ni
   `switch`, ni `push -u`, ni `remote add`, ni `branch --set-upstream-to`. Pour
   `AUTO_COMMIT_PUSH`, l'upstream est vérifié **avant** le commit : créer un commit local qu'on
-  savait ne pas pouvoir pousser laisserait la branche en avance, donc un préflight en échec,
-  donc une file arrêtée.
+  savait ne pas pouvoir pousser laisserait une livraison inachevée, donc une file arrêtée sur
+  une politique jamais satisfaite.
 - **NOX ne réconcilie jamais un historique.** Pas de `--force`, pas de `--force-with-lease`,
   pas de `pull`, pas de `merge`, pas de `rebase`. Un refus « non-fast-forward » remonte tel
   quel : comment réconcilier deux histoires est une décision humaine.
@@ -897,6 +903,87 @@ candidat de livraison  (lecture seule)
 - **Supprimer un projet retire son état de livraison, jamais son historique Git.** Aucun commit
   n'est défait, aucune branche supprimée, aucun push, aucun `reset`. Le repository ré-enregistré
   repart en `Manual`, sans livraison reconstruite depuis Git.
+
+### 6.6 quater Orchestration multi-projets
+
+```text
+Projet A / repo A        Projet B / repo B        Projet C / repo C
+   file A (ACTIVE)          file B (ACTIVE)          file C (PAUSED)
+        |                        |                        |
+        v                        v                        v
+  advanceQueue(A)          advanceQueue(B)          rien ne part
+        |                        |
+        v                        v
+  verrou repo A            verrou repo B
+  (base, puis runner)      (base, puis runner)
+        |                        |
+        v                        v
+  Claude sur A   <-- en meme temps -->   Claude sur B
+        |                        |
+        v                        v
+  validations A            validations B
+  correction A             correction B
+  livraison A              livraison B
+        |                        |
+        v                        v
+  file A avance            file B avance
+```
+
+**L'invariant, en une phrase :** au plus une execution Claude Code active **par repository
+canonique** — et non plus une seule dans tout NOX.
+
+- **La limitation historique etait globale, et elle vivait dans le registre du runner.**
+  `register(runId)` refusait des qu'une entree non finale existait, quel que soit le dossier
+  vise. Le web, lui, comptait deja par projet. Deux repositories qui n'ont rien en commun ne
+  pouvaient donc pas travailler ensemble : le second recevait `CLAUDE_RUN_ALREADY_ACTIVE`,
+  et sa file s'arretait.
+- **Le domaine du verrou est le repository, pas le projet.** Un repository n'appartient
+  normalement qu'a un seul projet — TASK-025 le garantit par un index unique — mais la securite
+  d'execution ne doit pas dependre d'un invariant applicatif. Une base ancienne, une ligne ecrite
+  a la main ou une course de creation suffiraient a le mettre en defaut, precisement la ou il
+  protege le plus.
+- **La cle canonique est calculee une seule fois, dans `@nox/shared`.** Elle ferme ce qu'une
+  comparaison de chaines laisserait passer : separateur final, separateur inverse, segment `..`
+  residuel, difference de casse sous Windows. Elle ne remplace pas la canonisation reelle —
+  `realpath`, cote runner — elle la prolonge la ou Node n'est pas disponible. Ce n'est jamais un
+  chemin : rien ne s'ouvre, ne s'ecrit ni ne se lance avec elle.
+- **Deux barrieres independantes, et c'est voulu.** Le web refuse en base, dans la transaction
+  qui cree l'execution : l'ecriture precede le comptage, sinon deux appels simultanes liraient
+  tous les deux « rien d'actif ». Le runner refuse de nouveau, sur les processus reels, sans
+  faire confiance au web. Elles ne repondent pas a la meme question — l'une sait ce que la base
+  croit, l'autre ce qui tourne.
+- **Le navigateur ne porte aucune autorite.** Ni chemin, ni cle de verrou, ni identifiant de
+  processus : un projet et une tache, revalides cote serveur. Une cle recue de l'exterieur serait
+  une cle qu'on peut choisir.
+- **Une correction est une execution comme une autre.** Elle passe par le meme verrou, dans la
+  meme transaction. Une correction dans un projet ne bloque aucun autre repository, et la borne
+  de deux tentatives reste propre a un cycle de travail.
+- **Le registre du runner n'a plus d'execution courante.** Chaque entree porte sa cle de
+  repository, son processus, son flux d'evenements et son etat d'annulation. `cancel(runId)`
+  retrouve exactement le processus vise ; une execution qui se termine ne retire qu'elle-meme.
+  Les numeros d'evenements sont attribues par execution : deux flux simultanes ne partagent
+  aucun compteur, et la page d'un run ne recoit jamais les evenements de l'autre.
+- **Chaque file avance seule, et il n'existe pas de vague.** `advanceQueue(projectId)` ne regarde
+  qu'un projet et ne peut lancer que le sien. NOX n'attend jamais que toutes les files aient fini
+  une tache pour passer aux suivantes : un projet rapide en enchaine trois pendant qu'un autre en
+  termine une.
+- **Aucun ordonnanceur, aucun plafond chiffre.** Ni priorite, ni equite, ni tourniquet, ni pool de
+  travailleurs, ni `MAX_GLOBAL_RUNS`. Il n'y a pas de ressource partagee a repartir : le seul
+  conflit possible est deja tranche par le verrou de repository. Les limites reelles — la machine,
+  le fournisseur — s'expriment d'elles-memes, et chaque execution suit alors son propre echec.
+- **L'autorisation reste locale.** `Start queue` autorise **ce** projet ; la politique de
+  livraison Git et la borne de corrections vivent sur la ligne du projet. Trois projets voisins
+  peuvent porter trois politiques differentes, et aucun n'herite de rien.
+- **Les barrieres restent locales.** Un echec, une pause, une attente de review ou une livraison
+  bloquee n'arretent que le projet concerne. Un push refuse demande un humain ; pendant qu'il y
+  reflechit, rien ne justifie que les autres repositories cessent d'avancer.
+- **Plusieurs files actives est un etat ordinaire, et le demarrage reste sans effet.** Une
+  autorisation permanente dit ce que NOX a le droit de faire quand un evenement applicatif
+  survient, pas ce qu'il doit faire au boot. Redemarrer le serveur ne lance rien, n'ecrit rien
+  dans Git et n'execute aucune validation, quel que soit le nombre de files actives.
+- **Les dependances restent internes a un projet.** Une arete qui traverserait deux projets est
+  refusee par le service. Faire attendre un projet apres un autre serait une capacite nouvelle,
+  pas un effet de bord de la concurrence.
 
 ### 6.7 Conversation Architecte
 
@@ -1398,6 +1485,9 @@ serait un changement d'architecture.
 | Un modèle ne décide de rien | Sa sortie est revalidée, et aucune de ses réponses ne change un statut |
 | Les tests n'appellent jamais un vrai fournisseur | Ni OpenAI, ni le vrai binaire Claude Code : faux fournisseur et faux Claude, toujours |
 | Une preuve vient de NOX, jamais d'un récit | Ce qu'un agent dit avoir lancé est affiché ; ce que NOX a lancé fait foi |
+| Au plus une exécution Claude par repository canonique | Deux repositories différents travaillent en même temps ; un même repository, jamais |
+| Rien n'est global : ni file, ni ordonnanceur, ni autorisation | Chaque projet porte la sienne, et n'hérite d'aucune autre |
+| Une barrière dans un projet n'arrête jamais un autre projet | Échec, pause, review, livraison bloquée : tout reste local |
 | Écrire dans Git est une autorisation à part | Démarrer une file ne l'accorde pas ; la politique du projet, oui, et son défaut n'accorde rien |
 | NOX n'écrit dans Git que l'état exact qu'il a validé | Si le repository a changé, il refuse d'écrire plutôt que de rattraper |
 | NOX ne réconcilie jamais un historique Git | Ni forçage, ni pull, ni merge, ni rebase, ni changement de branche : c'est une décision humaine |

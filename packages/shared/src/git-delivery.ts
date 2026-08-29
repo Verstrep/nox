@@ -85,6 +85,26 @@ export function policyRequiresPush(policy: DeliveryPolicy): boolean {
   return policy === DELIVERY_POLICY.AUTO_COMMIT_PUSH;
 }
 
+/**
+ * La politique produit-elle des commits locaux que personne ne poussera ?
+ *
+ * `AUTO_COMMIT` est exactement cela : NOX commite le travail valide et s'arrete
+ * la. Une branche **en avance** sur son upstream n'y est donc pas un incident,
+ * c'est l'etat normal apres chaque tache — et exiger la synchronisation
+ * reviendrait a rendre cette politique inutilisable des la deuxieme tache.
+ *
+ * Les deux autres politiques n'ont pas cet effet : `MANUAL` n'ecrit rien, et
+ * `AUTO_COMMIT_PUSH` n'est satisfaite qu'une fois le commit pousse. Toutes deux
+ * conservent donc l'exigence historique.
+ *
+ * Cette question ne dit **rien** de la livraison elle-meme : elle porte sur ce
+ * qu'un repository peut legitimement contenir avant la tache suivante. Savoir
+ * si une livraison est satisfaite reste le role de `deliverySatisfied`.
+ */
+export function policyAllowsLocalAhead(policy: DeliveryPolicy): boolean {
+  return policy === DELIVERY_POLICY.AUTO_COMMIT;
+}
+
 // ---------------------------------------------------------------------------
 // 2. Etats d'une livraison
 // ---------------------------------------------------------------------------

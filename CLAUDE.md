@@ -233,10 +233,20 @@ doit le dire explicitement et la justifier.
 - **Les commandes de validation enregistrées ne sont jamais exécutées par NOX.** Elles sont
   autorisées à Claude Code, une par une et à l'identique ; le runner n'en exécute aucune, et
   n'en relance aucune.
-- **Toute exécution exige un repository propre et synchronisé.** Le lancement est toujours
-  explicite : NOX ne déclenche jamais Claude Code de lui-même, ni pour réessayer, ni pour
-  enchaîner une tâche.
-- **Une seule exécution active à la fois**, tous projets confondus.
+- **Toute exécution exige un dossier de travail propre.** Sans état de départ connu, il devient
+  impossible de dire ce que l'agent a changé. Le lancement est toujours explicite : NOX ne
+  déclenche jamais Claude Code de lui-même, ni pour réessayer, ni pour enchaîner une tâche.
+- **La synchronisation avec l'upstream n'est exigée que là où la politique de livraison la
+  produit.** Une branche **en retard** est toujours refusée : aucune politique ne crée cet état.
+  Une branche **en avance** est refusée sous `MANUAL` et `AUTO_COMMIT_PUSH`, et acceptée sous
+  `AUTO_COMMIT` — c'est exactement ce que cette politique produit à chaque tâche livrée, et la
+  refuser rendrait la file inutilisable dès la deuxième. La politique est relue en base par le
+  serveur web et **rejouée par le runner** ; absente ou illisible, elle vaut `MANUAL`.
+- **« Le repository peut-il recevoir une autre tâche ? » et « la livraison est-elle satisfaite ? »
+  restent deux questions distinctes.** La première est le préflight ; la seconde est
+  `deliverySatisfied`. Aucune ne doit emprunter sa réponse à l'autre.
+- **Au plus une exécution active par repository canonique.** Deux repositories différents
+  peuvent exécuter Claude Code en même temps ; un même repository, jamais — voir § 8.20.
 - **Aucun prompt libre ne vient du navigateur.** Il est régénéré côté serveur à partir de la
   tâche en base ; les règles d'outils sont calculées, jamais reçues.
 - **Aucune clé d'API Anthropic dans NOX.** L'authentification est celle déjà configurée dans
@@ -925,6 +935,71 @@ doit le dire explicitement et la justifier.
 - **La file n'avance que lorsque la politique applicable est satisfaite.** En `MANUAL`, c'est le
   préflight Git existant qui fait autorité — livrer depuis un terminal reste possible, et ne rend
   jamais un projet inutilisable.
+- **`AUTO_COMMIT` est satisfaite sans push, et le préflight en tient compte.** Le commit local
+  validé suffit ; la branche reste **en avance** sur son upstream, et c'est l'état attendu de ce
+  mode, tâche après tâche. Traiter cette avance comme un défaut de synchronisation arrêterait la
+  file dès la deuxième tâche : « ce repository peut-il recevoir une autre tâche ? » et « cette
+  livraison est-elle terminée ? » ne sont pas la même question.
+- **`AUTO_COMMIT_PUSH` exige toujours le push, et rien n'y déroge.** Tant que l'upstream ne porte
+  pas le commit, la politique n'est pas satisfaite : la file s'arrête, `Retry push` reste le seul
+  geste, et aucun second commit n'est créé. Un dossier de travail sale, un `HEAD` inattendu, une
+  branche changée ou une branche **en retard** restent refusés sous toutes les politiques.
 - **Supprimer un projet retire son état de livraison, jamais son historique Git.** Aucun commit
   défait, aucune branche supprimée, aucun push, aucune commande Git déclenchée. Le repository
   ré-enregistré repart en `MANUAL`, sans livraison reconstruite depuis Git.
+
+### 8.20 Orchestration multi-projets
+
+- **Plusieurs files de projets peuvent être `ACTIVE` en même temps.** Ce n'est plus un état
+  exceptionnel : toutes les requêtes et tous les modèles de lecture doivent le supporter.
+- **L'autorisation de file reste propre à un projet.** `Start queue` autorise **ce** projet, et
+  lui seul. Il n'existe ni « démarrer tous les projets », ni autorisation héritée, ni activation
+  en cascade.
+- **Deux repositories différents peuvent exécuter Claude Code en même temps.** La contrainte
+  « une seule exécution dans tout NOX » n'existe plus, et ne doit pas revenir sous la forme d'un
+  plafond chiffré : ni `MAX_GLOBAL_RUNS`, ni pool de travailleurs, ni file d'attente globale.
+- **Au plus une exécution Claude Code active par repository canonique.** C'est la seule règle
+  d'exclusion, et elle couvre exactement les statuts qui peuvent encore posséder un processus :
+  `QUEUED`, `RUNNING`, `CANCELLING`.
+- **C'est l'identité du repository qui fait autorité, jamais l'identifiant du projet.** Un
+  repository n'appartient normalement qu'à un projet, mais la sécurité d'exécution ne dépend pas
+  de cet invariant : deux projets visant le même dossier restent exclus l'un de l'autre. Un
+  séparateur final, un séparateur inversé, un segment `..` ou une différence de casse sous
+  Windows ne contournent rien.
+- **Une seule implémentation de cette identité**, dans `@nox/shared`, utilisée à l'identique par
+  le web et par le runner. C'est une clé de comparaison : elle ne sert jamais à ouvrir un
+  fichier, ni à lancer un processus, ni à être affichée.
+- **Le web et le runner vérifient l'exclusion chacun de son côté.** En base, l'écriture précède
+  le comptage — vérifier avant d'écrire laisserait passer deux appels simultanés. Dans le runner,
+  le contrôle est refait sur les processus réels, sans faire confiance au web.
+- **Le navigateur ne porte aucune autorité d'exécution.** Ni chemin, ni clé de verrou, ni
+  identifiant de processus : un projet et une tâche, revalidés côté serveur.
+- **Le registre du runner est indexé par exécution et par repository, jamais global.** Il
+  n'existe ni « exécution courante », ni processus courant, ni `cancel current`. Une exécution
+  qui se termine ne retire qu'elle-même : aucun vidage, aucune variable remise à `null`.
+- **Annuler ou faire échouer une exécution n'annule et ne met en pause aucun autre projet.**
+  Aucune fonction ne met en pause l'ensemble des files.
+- **Validation, correction et livraison Git restent propres à leur projet.** La borne de deux
+  corrections automatiques reste par cycle de travail d'une tâche ; les corrections d'un projet
+  n'ont aucun effet sur le compteur d'un autre.
+- **Une barrière de review humaine dans un projet ne bloque jamais un autre projet.**
+- **Un échec de livraison Git dans un projet ne bloque jamais un autre projet.**
+- **Les files avancent indépendamment ; il n'existe pas de vagues d'exécution.** NOX n'attend
+  jamais que toutes les files aient terminé une tâche pour passer aux suivantes.
+- **`advanceQueue` ne regarde et ne lance qu'un seul projet.** Aucune fonction ne choisit un
+  projet, ne compare deux files, ni ne fait avancer « la première file active ». La provenance
+  est conservée de bout en bout : ce qui est livré puis avancé est le projet de la tâche qui
+  vient de se terminer.
+- **Démarrer ou reprendre une file n'en démarre jamais une autre.**
+- **Le démarrage d'un processus ou du serveur web ne dispatche jamais une file active.** Même
+  avec plusieurs files `ACTIVE` en base : zéro exécution, zéro écriture Git, zéro validation,
+  zéro correction.
+- **Le rendu d'une page — accueil comprise — ne lance jamais rien.**
+- **Une action croisée entre projets est refusée par les contrôles d'appartenance.** Annulation,
+  stream, review, correction et livraison vérifient toutes la chaîne projet → tâche → exécution.
+- **Les dépendances entre tâches de projets différents n'existent pas**, et TASK-031 ne les
+  ouvre pas.
+- **TASK-031 ajoute de la concurrence, pas une file ni un ordonnanceur.** Ni `GlobalTaskQueue`,
+  ni priorité, ni équité, ni tourniquet : il n'y a pas de ressource partagée à répartir.
+- **Les politiques de livraison et de correction restent locales à chaque projet.** Aucun
+  héritage, aucun réglage global.

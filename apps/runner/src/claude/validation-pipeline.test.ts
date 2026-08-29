@@ -32,7 +32,12 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 
-import { RUN_VALIDATION_STATUS, TASK_KIND, type RunValidationResultView } from "@nox/shared";
+import {
+  DELIVERY_POLICY,
+  RUN_VALIDATION_STATUS,
+  TASK_KIND,
+  type RunValidationResultView,
+} from "@nox/shared";
 
 import type { ClaudeConfig } from "../config.ts";
 import {
@@ -212,6 +217,7 @@ async function launch(
       expectedGitHead: git(repository, "rev-parse", "HEAD").trim(),
       validationCommands: commands,
       taskKind: TASK_KIND.NORMAL,
+      deliveryPolicy: DELIVERY_POLICY.MANUAL,
       ...(correction === undefined ? {} : { correction }),
     },
     CLAUDE,
@@ -402,6 +408,7 @@ describe("validations — ce qui ne doit pas devenir une validation", () => {
         expectedGitHead: git(repository, "rev-parse", "HEAD").trim(),
         validationCommands: [VALIDATION],
         taskKind: TASK_KIND.NORMAL,
+        deliveryPolicy: DELIVERY_POLICY.MANUAL,
         correction,
       },
       CLAUDE,

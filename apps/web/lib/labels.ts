@@ -504,7 +504,7 @@ const GUIDED_BLOCKER_LABELS: Record<GuidedBlockerCode, string> = {
   [GUIDED_BLOCKER.REPOSITORY_NOT_READY]:
     "Le repository n'est pas dans un etat permettant de lancer une execution.",
   [GUIDED_BLOCKER.RUN_ACTIVE]:
-    "Une execution est en cours. NOX n'en lance qu'une a la fois, tous projets confondus.",
+    "Une execution est en cours sur cette tache. NOX n'en lance qu'une a la fois par repository ; les autres projets continuent d'avancer.",
   [GUIDED_BLOCKER.REVIEW_UNAVAILABLE]:
     "Aucun instantane de review n'est enregistre pour cette execution.",
   [GUIDED_BLOCKER.OPENAI_UNAVAILABLE]:

@@ -17,17 +17,30 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { PROJECT_STATUS, TASK_STATUS, TASK_STATUSES, type TaskStatus } from "@nox/shared";
+import {
+  DELIVERY_POLICY,
+  PROJECT_STATUS,
+  TASK_STATUS,
+  TASK_STATUSES,
+  type TaskStatus,
+} from "@nox/shared";
 
 import {
   CARD_SUMMARY_MAX_LENGTH,
+  PROJECT_EXECUTION_STATE,
   bootstrapCardLabel,
   cardSummary,
+  executionBadgeLabel,
+  executionSummary,
+  executionSummaryLabel,
+  executionTone,
   projectCard,
+  projectExecutionBadge,
   sortProjectCards,
   taskBreakdown,
   taskTotalLabel,
   waitingLabel,
+  type ProjectCard,
   type ProjectCardFacts,
 } from "./project-dashboard.ts";
 
@@ -49,6 +62,10 @@ function facts(overrides: Partial<ProjectCardFacts> = {}): ProjectCardFacts {
     lastTaskActivityAt: null,
     queuedCount: 0,
     queueActive: false,
+    activeRun: null,
+    validating: false,
+    deliveryPolicy: DELIVERY_POLICY.MANUAL,
+    blockingDelivery: null,
     ...overrides,
   };
 }
@@ -257,5 +274,148 @@ describe("sortProjectCards", () => {
 
   it("accepte une liste vide", () => {
     assert.deepEqual(sortProjectCards([]), []);
+  });
+});
+
+describe("etat d'execution d'un projet", () => {
+  it("annonce une execution en cours, avec sa tache", () => {
+    const badge = projectExecutionBadge(
+      facts({ activeRun: { taskCode: "TASK-004", isCorrection: false } }),
+    );
+
+    assert.equal(badge.state, PROJECT_EXECUTION_STATE.RUNNING);
+    assert.equal(executionBadgeLabel(badge), "Claude running · TASK-004");
+    assert.equal(executionTone(badge.state), "accent");
+  });
+
+  it("distingue une correction d'une execution initiale", () => {
+    const badge = projectExecutionBadge(
+      facts({ activeRun: { taskCode: "TASK-004", isCorrection: true } }),
+    );
+
+    assert.equal(badge.state, PROJECT_EXECUTION_STATE.CORRECTING);
+    assert.equal(executionBadgeLabel(badge), "Correcting · TASK-004");
+  });
+
+  it("annonce une validation autonome en cours", () => {
+    const badge = projectExecutionBadge(facts({ validating: true }));
+
+    assert.equal(badge.state, PROJECT_EXECUTION_STATE.VALIDATING);
+    assert.equal(executionBadgeLabel(badge), "Validating");
+  });
+
+  it("annonce une attente humaine", () => {
+    const badge = projectExecutionBadge(facts({ taskCounts: counts({ REVIEW: 1 }) }));
+
+    assert.equal(badge.state, PROJECT_EXECUTION_STATE.WAITING_REVIEW);
+    assert.equal(executionTone(badge.state), "warn");
+  });
+
+  it("annonce une livraison Git qui bloque, avec sa tache", () => {
+    const badge = projectExecutionBadge(facts({ blockingDelivery: { taskCode: "TASK-007" } }));
+
+    assert.equal(badge.state, PROJECT_EXECUTION_STATE.WAITING_DELIVERY);
+    assert.equal(executionBadgeLabel(badge), "Git delivery pending · TASK-007");
+  });
+
+  it("distingue une file active d'une file en pause", () => {
+    assert.equal(
+      projectExecutionBadge(facts({ queuedCount: 2, queueActive: true })).state,
+      PROJECT_EXECUTION_STATE.QUEUE_ACTIVE,
+    );
+    assert.equal(
+      projectExecutionBadge(facts({ queuedCount: 2, queueActive: false })).state,
+      PROJECT_EXECUTION_STATE.QUEUE_PAUSED,
+    );
+  });
+
+  it("dit « Idle » quand rien ne travaille et rien n'attend", () => {
+    assert.equal(projectExecutionBadge(facts()).state, PROJECT_EXECUTION_STATE.IDLE);
+  });
+
+  it("fait passer l'execution avant tout le reste", () => {
+    // Un projet peut a la fois executer, avoir une tache en review et une file
+    // active. Ce qui tourne se lit en premier ; le reste est sur sa page.
+    const badge = projectExecutionBadge(
+      facts({
+        activeRun: { taskCode: "TASK-004", isCorrection: false },
+        taskCounts: counts({ REVIEW: 1 }),
+        queuedCount: 3,
+        queueActive: true,
+        blockingDelivery: { taskCode: "TASK-002" },
+      }),
+    );
+
+    assert.equal(badge.state, PROJECT_EXECUTION_STATE.RUNNING);
+  });
+});
+
+describe("resume d'execution", () => {
+  function cardWith(id: string, overrides: Partial<ProjectCardFacts>): ProjectCard {
+    return projectCard(project({ id }), facts(overrides));
+  }
+
+  it("compte plusieurs projets en cours au meme instant", () => {
+    // Le fait central de TASK-031 : ce n'est plus un etat exceptionnel.
+    const summary = executionSummary([
+      cardWith("a", { activeRun: { taskCode: "TASK-001", isCorrection: false } }),
+      cardWith("b", { activeRun: { taskCode: "TASK-002", isCorrection: false } }),
+      cardWith("c", { activeRun: { taskCode: "TASK-003", isCorrection: true } }),
+    ]);
+
+    assert.equal(summary.projects, 3);
+    assert.equal(summary.running, 3);
+  });
+
+  it("compte les files actives et les attentes humaines separement", () => {
+    const summary = executionSummary([
+      cardWith("a", { queuedCount: 2, queueActive: true }),
+      cardWith("b", { taskCounts: counts({ REVIEW: 1 }) }),
+      cardWith("c", { blockingDelivery: { taskCode: "TASK-009" } }),
+      cardWith("d", {}),
+    ]);
+
+    assert.equal(summary.activeQueues, 1);
+    assert.equal(summary.waitingForHuman, 2);
+    assert.equal(summary.running, 0);
+  });
+
+  it("ne s'affiche pas sous deux projets", () => {
+    // Sur un seul projet, le resume repeterait la carte juste en dessous.
+    assert.equal(executionSummaryLabel(executionSummary([])), null);
+    assert.equal(executionSummaryLabel(executionSummary([cardWith("a", {})])), null);
+  });
+
+  it("se lit en une phrase des deux projets", () => {
+    const label = executionSummaryLabel(
+      executionSummary([
+        cardWith("a", { activeRun: { taskCode: "TASK-001", isCorrection: false } }),
+        cardWith("b", { taskCounts: counts({ REVIEW: 1 }) }),
+      ]),
+    );
+
+    assert.equal(label, "2 projets · 1 Claude en cours · 0 files actives · 1 en attente humaine");
+  });
+});
+
+describe("carte d'un projet - multi-projets", () => {
+  it("porte l'etat d'execution et la politique Git du projet", () => {
+    const card = projectCard(
+      project({}),
+      facts({
+        activeRun: { taskCode: "TASK-004", isCorrection: false },
+        deliveryPolicy: DELIVERY_POLICY.AUTO_COMMIT_PUSH,
+      }),
+    );
+
+    assert.equal(card.execution.state, PROJECT_EXECUTION_STATE.RUNNING);
+    // La politique est locale : deux cartes peuvent en afficher deux
+    // differentes, et aucune n'est heritee.
+    assert.equal(card.deliveryLabel, "Auto commit + push validated");
+  });
+
+  it("rend « Manual » pour un projet qui n'a rien choisi", () => {
+    const card = projectCard(project({}), facts());
+    assert.equal(card.deliveryLabel, "Manual");
   });
 });

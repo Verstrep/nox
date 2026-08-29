@@ -251,7 +251,8 @@ const DISPATCH_MESSAGES: Record<QueueDispatchOutcome, string> = {
   [QUEUE_DISPATCH.WAITING_REPOSITORY]:
     "Le repository ne satisfait pas les préconditions de lancement. Commitez vos changements, puis relancez avec Try next.",
   [QUEUE_DISPATCH.ACTIVE_RUN]:
-    "Une exécution est déjà en cours. NOX n'en lance qu'une à la fois, tous projets confondus.",
+    "Une exécution est déjà en cours sur ce repository. NOX n'en lance qu'une à la fois par repository ; " +
+    "les files des autres projets ne sont pas concernées.",
   [QUEUE_DISPATCH.FAILED_CURRENT]:
     "La tâche courante s'est mal terminée. Reprenez-la ou retirez-la de la file avant de continuer.",
   [QUEUE_DISPATCH.WAITING_CURRENT_TASK]:

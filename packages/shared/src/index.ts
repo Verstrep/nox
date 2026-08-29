@@ -111,6 +111,8 @@ export type {
 export { renderTaskMarkdown } from "./task-markdown.js";
 export type { TaskMarkdownDependency } from "./task-markdown.js";
 
+export { repositoryLockKey, sameRepository } from "./repository-identity.js";
+
 export {
   ACTIVE_RUN_STATUSES,
   FINAL_RUN_STATUSES,
@@ -282,6 +284,7 @@ export {
   isDeliveryTrigger,
   isUntrackedEntry,
   policyAllowsAutomatic,
+  policyAllowsLocalAhead,
   policyRequiresPush,
   readDeliveryPolicy,
   readDeliveryStatus,

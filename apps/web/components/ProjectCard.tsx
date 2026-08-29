@@ -3,6 +3,8 @@ import Link from "next/link";
 import { formatDateTime } from "@/lib/format";
 import {
   breakdownLabel,
+  executionBadgeLabel,
+  executionTone,
   taskTotalLabel,
   waitingLabel,
   type ProjectCard as Card,
@@ -15,10 +17,14 @@ import { StatusBadge } from "./StatusBadge";
 /**
  * Carte d'un projet sur le tableau de bord.
  *
- * Elle repond a quatre questions et s'arrete la : de quel projet s'agit-il, a
- * quoi sert-il, ou en est son travail, comment l'ouvrir. Le chemin du repository
- * y figure en second plan — utile pour reconnaitre un projet parmi plusieurs,
- * jamais assez pour dominer la carte.
+ * Elle repond a cinq questions et s'arrete la : de quel projet s'agit-il, a
+ * quoi sert-il, que fait-il en ce moment, ou en est son travail, comment
+ * l'ouvrir. Le chemin du repository y figure en second plan — utile pour
+ * reconnaitre un projet parmi plusieurs, jamais assez pour dominer la carte.
+ *
+ * Depuis TASK-031, plusieurs cartes peuvent afficher « Claude running » au meme
+ * instant : chaque projet decrit **son** travail, et aucune carte ne pretend
+ * decrire ce que fait NOX dans son ensemble.
  *
  * Tout ce qu'elle affiche est derive : aucun compteur, aucun etat d'avancement
  * et aucune « progression » n'est stocke en base.
@@ -50,7 +56,19 @@ export function ProjectCard({ card }: { card: Card }) {
               </p>
             )}
           </div>
-          <StatusBadge tone="muted">{card.status}</StatusBadge>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <StatusBadge
+              tone={executionTone(card.execution.state)}
+              withDot={
+                card.execution.state === "RUNNING" ||
+                card.execution.state === "CORRECTING" ||
+                card.execution.state === "VALIDATING"
+              }
+            >
+              {executionBadgeLabel(card.execution)}
+            </StatusBadge>
+            <StatusBadge tone="muted">{card.status}</StatusBadge>
+          </div>
         </div>
 
         <dl className="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm">
@@ -70,6 +88,10 @@ export function ProjectCard({ card }: { card: Card }) {
               </dd>
             </div>
           )}
+          <div className="flex items-center gap-2">
+            <dt className="text-xs uppercase tracking-wider text-zinc-600">Git</dt>
+            <dd className="text-zinc-300">{card.deliveryLabel}</dd>
+          </div>
         </dl>
 
         {card.breakdown.length === 0 ? null : (

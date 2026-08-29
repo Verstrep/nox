@@ -22,14 +22,28 @@ import {
   isClaudeRunEvent,
   type ClaudeRunEvent,
 } from "./claude-events.js";
+import { readDeliveryPolicy, type DeliveryPolicy } from "./git-delivery.js";
 import { isRunReviewSnapshot, type RunReviewSnapshot } from "./review.js";
 import { isRunnerRunId } from "./runs.js";
 import { RUN_STATUS, type RunStatus } from "./statuses.js";
 import { isTaskKind, type TaskKind } from "./tasks.js";
 
-/** Corps de `POST /claude/preflight`. */
+/**
+ * Corps de `POST /claude/preflight`.
+ *
+ * `deliveryPolicy` est la politique de livraison Git du projet, **relue en base
+ * par le serveur web** : le navigateur ne la porte jamais, exactement comme la
+ * nature d'une tache. Elle est transmise parce que la question « ce repository
+ * peut-il recevoir une autre tache ? » n'a pas la meme reponse selon ce que NOX
+ * a le droit d'y ecrire — une branche en avance est un incident sous `MANUAL`,
+ * et l'etat attendu sous `AUTO_COMMIT`.
+ *
+ * Un corps qui ne la declare pas est lu `MANUAL`, le defaut sur : c'est la
+ * lecture la plus stricte, celle qui n'assouplit rien.
+ */
 export type ClaudePreflightRequest = {
   repositoryPath: string;
+  deliveryPolicy: DeliveryPolicy;
 };
 
 /**
@@ -89,6 +103,17 @@ export type StartClaudeRunRequest = {
    * nommer le niveau de privilege.
    */
   taskKind: TaskKind;
+  /**
+   * Politique de livraison Git du projet, relue en base par le serveur web.
+   *
+   * Elle ne decide d'aucune permission d'ecriture ici — le runner ne livre rien
+   * sur cette route. Elle repond a une seule question, celle du preflight : une
+   * branche locale **en avance** sur son upstream est-elle un incident, ou
+   * l'etat normal de ce projet ? Sous `AUTO_COMMIT`, c'est l'etat normal.
+   *
+   * Absente ou illisible, elle est lue `MANUAL` : le controle le plus strict.
+   */
+  deliveryPolicy: DeliveryPolicy;
   /**
    * Correction ciblee : session a reprendre et etat de depart attendu.
    *
@@ -248,7 +273,13 @@ export function parseClaudePreflightRequest(value: unknown): ClaudePreflightRequ
   if (!isRecord(value) || typeof value["repositoryPath"] !== "string") {
     return null;
   }
-  return { repositoryPath: value["repositoryPath"] };
+  // Une politique absente ou illisible est lue `MANUAL` : le defaut sur
+  // n'assouplit aucun controle. C'est la meme lecture que partout ailleurs.
+  const policy: unknown = value["deliveryPolicy"];
+  return {
+    repositoryPath: value["repositoryPath"],
+    deliveryPolicy: readDeliveryPolicy(typeof policy === "string" ? policy : null),
+  };
 }
 
 /**
@@ -272,6 +303,12 @@ export function parseStartClaudeRunRequest(value: unknown): StartClaudeRunReques
     return null;
   }
 
+  // Comme sur le preflight : absente ou illisible, la politique est lue
+  // `MANUAL`. Contrairement a `taskKind`, elle n'ouvre aucune permission — la
+  // ramener au defaut le plus strict est donc la bonne lecture, la refuser
+  // serait un durcissement gratuit du contrat.
+  const declaredPolicy: unknown = value["deliveryPolicy"];
+
   const request: StartClaudeRunRequest = {
     runId: value["runId"],
     repositoryPath: value["repositoryPath"],
@@ -279,6 +316,9 @@ export function parseStartClaudeRunRequest(value: unknown): StartClaudeRunReques
     expectedGitHead: value["expectedGitHead"],
     validationCommands: value["validationCommands"] as string[],
     taskKind: value["taskKind"],
+    deliveryPolicy: readDeliveryPolicy(
+      typeof declaredPolicy === "string" ? declaredPolicy : null,
+    ),
   };
 
   // Le bloc de correction est **tout ou rien** : une session sans empreinte

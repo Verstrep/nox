@@ -24,13 +24,21 @@ import { DatabaseSync } from "node:sqlite";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { QUEUE_DISPATCH, TASK_PRIORITY, TASK_STATUS } from "@nox/shared";
+import {
+  DELIVERY_POLICIES,
+  DELIVERY_POLICY,
+  QUEUE_DISPATCH,
+  TASK_PRIORITY,
+  TASK_STATUS,
+  type DeliveryPolicy,
+} from "@nox/shared";
 import {
   addTaskDependency,
   createDatabaseClient,
   createProject,
   createTask,
   enqueueTask,
+  setProjectDeliveryPolicy,
   setQueueActive,
   toDatabaseFilePath,
   toSqliteUrl,
@@ -103,13 +111,16 @@ function ports(overrides: Partial<QueueDispatchPorts> = {}): {
   ports: QueueDispatchPorts;
   launched: string[];
   probed: string[];
+  policies: DeliveryPolicy[];
 } {
   const launched: string[] = [];
   const probed: string[] = [];
+  const policies: DeliveryPolicy[] = [];
 
   const base: QueueDispatchPorts = {
-    preflight: (repositoryPath: string) => {
+    preflight: (repositoryPath: string, deliveryPolicy: DeliveryPolicy) => {
       probed.push(repositoryPath);
+      policies.push(deliveryPolicy);
       return Promise.resolve({
         ok: true as const,
         value: {
@@ -132,7 +143,7 @@ function ports(overrides: Partial<QueueDispatchPorts> = {}): {
     },
   };
 
-  return { ports: { ...base, ...overrides }, launched, probed };
+  return { ports: { ...base, ...overrides }, launched, probed, policies };
 }
 
 before(async () => {
@@ -360,6 +371,41 @@ describe("advanceQueue — barrieres", () => {
 
     assert.equal(result.outcome, QUEUE_DISPATCH.STARTED);
     assert.deepEqual(launched, [next]);
+  });
+});
+
+describe("advanceQueue — politique de livraison transmise au preflight", () => {
+  it("transmet la politique enregistree du projet", async () => {
+    // La question « ce repository peut-il recevoir une autre tache ? » n'a pas la
+    // meme reponse selon ce que le projet autorise NOX a ecrire. La politique est
+    // relue en base ici, jamais recue d'un formulaire.
+    for (const policy of DELIVERY_POLICIES) {
+      const projectId = await newProject();
+      const taskId = await newReadyTask(projectId, `Tache ${policy}`);
+      await enqueueTask(db, { projectId, taskId });
+      await setQueueActive(db, projectId, true);
+      assert.ok((await setProjectDeliveryPolicy(db, projectId, policy)).ok);
+
+      const { ports: doubles, policies } = ports();
+      const result = await advanceQueue(db, projectId, doubles);
+
+      assert.equal(result.outcome, QUEUE_DISPATCH.STARTED, policy);
+      assert.deepEqual(policies, [policy]);
+    }
+  });
+
+  it("transmet MANUAL par defaut", async () => {
+    const projectId = await newProject();
+    const taskId = await newReadyTask(projectId, "A");
+    await enqueueTask(db, { projectId, taskId });
+    await setQueueActive(db, projectId, true);
+
+    const { ports: doubles, policies } = ports();
+    await advanceQueue(db, projectId, doubles);
+
+    // Le defaut structurel : un projet qui n'a jamais choisi n'obtient aucun
+    // assouplissement.
+    assert.deepEqual(policies, [DELIVERY_POLICY.MANUAL]);
   });
 });
 

@@ -192,6 +192,14 @@ export const CORRECTION_REFUSAL = {
   LIMIT_REACHED: "CORRECTION_LIMIT_REACHED",
   /** Une correction est deja reservee ou lancee sur cette execution. */
   ALREADY_RESERVED: "CORRECTION_ALREADY_RESERVED",
+  /**
+   * Le repository travaille deja.
+   *
+   * Une correction est une nouvelle execution : la regle « au plus une execution
+   * active par repository canonique » s'y applique entierement. Un autre projet
+   * qui execute Claude Code sur **son** repository n'entre pas dans ce refus.
+   */
+  REPOSITORY_RUN_ACTIVE: "CORRECTION_REPOSITORY_RUN_ACTIVE",
 } as const;
 
 export type CorrectionRefusalCode =

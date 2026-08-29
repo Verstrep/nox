@@ -1175,6 +1175,10 @@ conforme » qui obligerait à chercher.
 
 ### D-093 — Une seule exécution active, dans le runner
 
+> **Révisée par D-358.** La portée de cette exclusion est devenue le repository canonique : la
+> garantie qui comptait est conservée mot pour mot, elle est simplement énoncée là où elle
+> s'applique.
+
 **Décision.** Le runner refuse un second lancement tant qu'une exécution est active, tous
 projets confondus. La contrainte est vérifiée là, et pas dans le web.
 
@@ -5385,3 +5389,172 @@ reconnaissance qui se trompe est pire qu'une absence de reconnaissance.
 Le préflight Git existant suffit : un repository propre et synchronisé laisse la file continuer,
 exactement comme avant TASK-029. La surface de livraison, elle, se contente de dire ce qu'elle
 constate — sans en tirer de conclusion sur un commit qu'elle n'a pas créé.
+
+### D-358 — L'exclusion d'execution porte sur le repository, pas sur NOX
+
+**Decision.** Au plus une execution Claude Code active **par repository canonique**. Deux
+repositories differents peuvent en avoir chacun une, au meme instant, sans limite globale.
+
+**Justification.** La limitation historique protegeait quelque chose de reel : deux Claude Code
+qui ecrivent dans le meme dossier se marchent dessus, et plus rien n'est relisible ensuite. Mais
+elle protegeait ce cas en interdisant **tous** les autres. Deux projets sur deux dossiers
+differents ne partagent rien : ni fichiers, ni index Git, ni `HEAD`, ni file, ni review.
+
+Le prix de l'ancienne regle etait qu'un seul projet pouvait avancer a la fois — et comme une
+tache dure des minutes, cela voulait dire attendre. Le prix de la nouvelle est nul : la garantie
+qui comptait est conservee mot pour mot, elle est simplement enoncee la ou elle s'applique.
+
+Aucun plafond ne la remplace. Ni `MAX_GLOBAL_RUNS`, ni pool de travailleurs, ni file d'attente
+globale : une limite chiffree qu'aucun fait ne justifie serait une limitation de plus a expliquer,
+et un jour a desserrer. Les limites reelles — la machine, le fournisseur — s'expriment d'elles-
+memes, et chaque execution suit alors son propre echec.
+
+### D-359 — Le domaine du verrou est l'identite canonique du repository
+
+**Decision.** L'exclusion se calcule sur une cle derivee du chemin canonique du repository, pas
+sur `Project.id`. La cle vit dans `@nox/shared` ; le web et le runner utilisent la meme.
+
+**Justification.** Un repository n'appartient normalement qu'a un seul projet — TASK-025 le
+garantit par un index unique. Mais « normalement » n'est pas une garantie d'execution. Une base
+ancienne, une ligne ecrite a la main, une course de creation : il suffit de deux projets visant le
+meme dossier pour que la garantie tombe precisement la ou elle protege le plus.
+
+La securite d'execution ne doit pas dependre d'un invariant applicatif. Elle repose donc sur ce
+que le systeme de fichiers dit du dossier, pas sur ce que la base dit du projet.
+
+La cle ferme ce qu'une comparaison de chaines laisserait passer : un separateur final, un
+separateur inverse, un segment `..` residuel, une difference de casse sous Windows. Elle ne
+remplace pas la canonisation reelle — `realpath`, cote runner, seul a voir le disque — elle la
+prolonge dans un endroit ou Node n'est pas disponible.
+
+### D-360 — Le registre du runner possede plusieurs processus, chacun avec sa cle
+
+**Decision.** Le registre indexe chaque execution par son repository. Il n'existe plus
+d'« execution courante », plus de processus courant, plus de `cancel current`.
+
+**Justification.** `activeRunId()` rendait la premiere entree active trouvee. C'etait exact tant
+qu'il ne pouvait y en avoir qu'une ; des qu'il peut y en avoir trois, cette fonction designe un
+travail au hasard — et tout ce qui s'appuierait dessus viserait le mauvais processus.
+
+L'arret, lui, etait deja cible : `cancel(runId)` retrouve exactement le processus demande, et sa
+fonction d'arret vit dans une fermeture, hors d'atteinte. TASK-031 n'a donc rien eu a reecrire de
+ce cote — elle a supprime la seule lecture globale qui restait, et ajoute la cle qui manquait.
+
+Une entree qui se termine ne retire qu'elle-meme. Aucun `clear()`, aucune variable remise a
+`null` : un test lit la source pour s'en assurer, parce que c'est exactement le genre de
+raccourci qu'on ecrit un jour sans y penser.
+
+### D-361 — Le runner refait le controle, sans faire confiance au web
+
+**Decision.** Le web refuse en base une seconde execution sur un repository ; le runner la refuse
+de nouveau, sur les processus reels. Les deux barrieres sont independantes.
+
+**Justification.** Elles ne repondent pas a la meme question. Le web sait ce que la base croit ;
+le runner sait ce qui tourne. Un redemarrage du runner, une ligne restee active apres une panne,
+une requete forgee : chacun de ces cas fait mentir l'une des deux vues, et jamais les deux.
+
+Le navigateur, lui, ne porte rien : ni chemin, ni cle de verrou, ni identifiant de processus. Il
+transmet un projet et une tache ; le chemin est relu en base, la cle est derivee de la racine
+reelle. Une cle recue de l'exterieur serait une cle qu'on peut choisir.
+
+### D-362 — Les files avancent independamment, sans vagues ni ordonnanceur
+
+**Decision.** `advanceQueue(projectId)` ne regarde qu'un projet et ne peut lancer que le sien.
+Aucune fonction ne choisit un projet, n'en compare deux, ni ne les fait progresser ensemble.
+
+**Justification.** Un ordonnanceur suppose une ressource partagee a repartir. Ici il n'y en a
+pas : chaque repository est independant, et le seul conflit possible — deux executions au meme
+endroit — est deja tranche par le verrou. Priorites, equite, tourniquet : autant de mecanismes
+qui n'auraient rien resolu, et qu'il aurait fallu expliquer a l'utilisateur.
+
+Le corollaire compte autant : il n'existe pas de vague. NOX n'attend jamais que toutes les files
+aient fini une tache pour passer aux suivantes. Un projet dont la tache est rapide en enchaine
+trois pendant qu'un autre en termine une seule, et c'est le comportement souhaite — sans quoi le
+projet le plus lent imposerait son rythme a tous les autres.
+
+### D-363 — L'autorisation reste locale a un projet
+
+**Decision.** `Start queue` autorise **ce** projet, et lui seul. Il n'existe ni « demarrer tous
+les projets », ni autorisation heritee, ni activation en cascade.
+
+**Justification.** Une autorisation est un geste, et un geste porte sur ce qu'on regarde. Rendre
+la concurrence possible ne change rien a qui l'accorde : un utilisateur qui demarre la file d'un
+projet n'a pas dit un mot des autres.
+
+La meme regle vaut pour la politique de livraison Git et pour la borne de corrections
+automatiques : elles vivent sur la ligne du projet, et deux projets voisins peuvent parfaitement
+avoir trois politiques differentes. C'est plusieurs reglages a tenir ; c'est le prix pour qu'aucun
+projet n'herite d'un droit que personne ne lui a donne.
+
+### D-364 — Les barrieres restent locales : echec, pause, review, livraison
+
+**Decision.** Un echec, une pause, une attente de review ou une livraison bloquee n'arretent que
+le projet concerne. Aucune fonction ne met en pause l'ensemble des files.
+
+**Justification.** Ces quatre etats disent tous la meme chose : « ce travail-ci demande une
+decision ». Aucun ne dit quoi que ce soit du travail d'a cote. Les propager reviendrait a faire
+d'un incident local une panne generale — et c'est exactement ce qu'une limitation globale produit
+sans qu'on l'ait decide.
+
+Un push refuse dans un projet est le cas le plus parlant : il faut un humain pour trancher, et
+pendant qu'il y reflechit, rien ne justifie que les autres repositories cessent d'avancer.
+
+### D-365 — Le demarrage reste sans effet, y compris avec plusieurs files actives
+
+**Decision.** Plusieurs `executionQueueActive = true` en base est desormais un etat ordinaire. Il
+n'autorise toujours aucun demarrage au lancement du serveur, ni au rendu d'une page.
+
+**Justification.** Une autorisation permanente dit ce que NOX a le droit de faire quand un
+evenement applicatif survient — pas ce qu'il doit faire au boot. Redemarrer le serveur n'est pas
+un evenement de travail, et laisser trois projets partir a chaque redemarrage transformerait une
+commodite en surprise.
+
+Le passage de un a plusieurs rendait ce point plus sensible, pas plus vrai : la garantie
+existait deja, et TASK-031 s'est contentee de la verifier avec deux files actives plutot qu'une.
+
+### D-366 — Aucune dependance entre projets
+
+**Decision.** Une dependance relie deux taches d'un **meme** projet. Le service refuse une arete
+qui traverserait deux projets, et TASK-031 n'ouvre pas cette porte.
+
+**Justification.** Faire attendre un projet apres une tache d'un autre serait une capacite
+nouvelle, pas un effet de bord de la concurrence : il faudrait un graphe global, des cycles a
+detecter entre projets, un ecran pour les lire, et une reponse a « que se passe-t-il quand le
+projet attendu est supprime ? ».
+
+Rien de tout cela n'est demande aujourd'hui. Ce qui l'est — que deux projets n'attendent pas l'un
+l'autre — est exactement l'inverse.
+
+### D-367 — La readiness d'un repository depend de la politique de livraison
+
+**Decision.** Le preflight repond a la question « ce repository peut-il recevoir une autre
+tache ? », et cette question n'a pas la meme reponse selon ce que le projet autorise NOX a ecrire
+dans Git. Une branche **en retard** reste refusee sous toutes les politiques. Une branche **en
+avance** est refusee sous `MANUAL` et `AUTO_COMMIT_PUSH`, et acceptee sous `AUTO_COMMIT`.
+
+La politique est relue en base par le serveur web, transmise au runner sur `POST /claude/preflight`
+et `POST /claude/runs/start`, et **rejouee** par lui : le runner ne fait pas confiance au web, mais
+il n'a aucun moyen de la relire. Absente ou illisible, elle vaut `MANUAL` — le defaut sur, celui
+qui n'assouplit rien. Le navigateur ne la transmet jamais.
+
+**Justification.** `AUTO_COMMIT` commite le travail valide et ne le pousse pas : la branche locale
+est donc en avance sur son upstream apres chaque tache livree. C'est l'etat que cette politique
+**produit**, pas un incident. Le traiter comme un defaut de synchronisation arretait la file des la
+deuxieme tache, alors que le depot etait propre, que la livraison etait satisfaite et qu'aucun
+humain n'avait rien a faire.
+
+La cause tenait en une seule ligne : `ahead !== 0 || behind !== 0` fondait deux faits qui n'ont ni
+la meme origine ni les memes consequences. Une avance vient de NOX lui-meme sous `AUTO_COMMIT` ; un
+retard vient toujours de l'exterieur, et rend la relecture d'apres execution ambigue quelle que
+soit la politique.
+
+**Ce que cette decision ne fait pas.** Elle n'affaiblit aucune autre garde : dossier de travail
+sale, `HEAD` detache, upstream absent, `HEAD` change depuis le preflight restent des refus
+inchanges, et le preflight ne recoit aucune option de forcage. Elle ne touche pas a
+`deliverySatisfied` : `AUTO_COMMIT_PUSH` n'est toujours satisfaite qu'apres un push confirme, un
+push refuse arrete toujours la file, et `Retry push` ne cree jamais un second commit. Elle
+n'autorise aucune ecriture Git supplementaire — le preflight ne livre rien.
+
+**Ce qu'elle nomme.** Deux questions, deux fonctions, aucune ne repondant pour l'autre :
+`policyAllowsLocalAhead` decide de la readiness, `deliverySatisfied` decide de la livraison. Les
+confondre etait precisement le defaut.
