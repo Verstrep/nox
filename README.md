@@ -43,12 +43,12 @@ base SQLite dans le dossier du projet.
 | **Correction pilotée** | Repartir d'un échec que NOX a constaté, sans recopier un seul log — et, sous file active, le laisser reprendre au plus deux fois |
 | **Livraison Git** | Choisir, projet par projet, ce que NOX a le droit d'écrire : rien, un commit, ou un commit puis un push vers l'upstream existant |
 | **Plusieurs projets** | Faire avancer plusieurs repositories en même temps, chacun avec sa file, ses validations et sa politique Git |
-| **File d'exécution** | Inscrire plusieurs tâches prêtes, démarrer la file, et laisser NOX les lancer une à une — jamais sans autorisation explicite |
+| **Replanification** | Faire évoluer le plan des tâches futures depuis la conversation Architecte, et l'appliquer d'un seul geste avec le Project Plan |
 
 **Ce que NOX ne fait pas** : aucun lancement automatique, aucune boucle autonome entre les deux
-modèles, aucun commit, aucun push, aucun résumé silencieux, aucune estimation de coût. Les
-limites de chaque capacité sont détaillées dans
-[docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
+modèles, aucun résumé silencieux, aucune estimation de coût — et, tant que la politique de
+livraison du projet reste `Manual`, aucun commit et aucun push. Les limites de chaque capacité
+sont détaillées dans [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
 
 ## Architecture en un coup d'œil
 
@@ -248,7 +248,7 @@ proprement sur `Ctrl+C`.
 
 ```text
 Créer un projet          nom, description, chemin du repository Git
-        ↓
+        ↓  (et, plus tard, on y revient : Project change → Review → Apply)
 Documents                lire et écrire les Markdown du projet
         ↓
 Architect  (facultatif)  la conversation durable du projet
@@ -271,6 +271,11 @@ décision se prend déjà.
 La conversation Architecte d'un projet **ne se ferme pas**. Créer une tâche depuis une
 proposition n'y met pas fin : on y revient pour préparer la suivante, revenir sur une décision
 ou préparer une V2. L'ouvrir ne coûte aucun appel.
+
+C'est aussi de là que le projet **évolue**. Quand une exigence change, on le dit dans la
+conversation : l'Architecte peut proposer un changement de projet qui porte le Project Plan, le
+plan des tâches futures, ou les deux. Il se relit sur une page, se corrige, et s'applique d'un
+seul geste — `Apply project change`. Ce qui a déjà tourné n'est jamais réécrit.
 
 Deux points à retenir avant un premier lancement :
 
@@ -321,13 +326,14 @@ les contrats web ↔ runner et les documents Markdown déjà générés sont inc
 
 ## API du runner
 
-Seize routes, dont **une seule publique**. Toutes les autres exigent
+Vingt-trois routes, dont **une seule publique**. Toutes les autres exigent
 `Authorization: Bearer <NOX_RUNNER_TOKEN>`.
 
 | Route | Rôle |
 | --- | --- |
 | `GET`, `HEAD` `/health` | Sonde de disponibilité — sans authentification |
 | `POST /repositories/resolve` | Racine Git d'un chemin local |
+| `POST /repositories/inspect` | Inventaire en lecture seule d'un repository, sans lire aucun contenu |
 | `POST /repositories/documents/list` | Inventaire des Markdown reconnus |
 | `POST /repositories/documents/read` | Contenu et révision d'un document autorisé |
 | `POST /repositories/documents/update` | Remplace un document, après contrôle de révision |
@@ -335,6 +341,9 @@ Seize routes, dont **une seule publique**. Toutes les autres exigent
 | `POST /repositories/documents/delete` | Supprime un document, après contrôle de révision |
 | `POST /repositories/tasks/create-document` | Crée `tasks/<code>.md` (`201`), en créant `tasks/` s'il manque |
 | `POST /repositories/tasks/delete-document` | Supprime `tasks/<code>.md` |
+| `POST /repositories/tasks/delete-project-documents` | Retire les documents de tâches d'un projet supprimé, et rapporte leur révision |
+| `POST /repositories/validations/run` | Exécute une commande de validation enregistrée, sans interprète de commandes |
+| `POST /repositories/validations/state` | Empreinte de l'état suivi, avant et après un lot de validations |
 | `POST /claude/preflight` | Vérifie l'état Git et la présence de Claude Code, en lecture seule |
 | `POST /claude/runs/start` | Lance Claude Code (`202`), sans attendre la fin |
 | `POST /claude/runs/status` | État d'une exécution, depuis le registre en mémoire |
@@ -342,6 +351,9 @@ Seize routes, dont **une seule publique**. Toutes les autres exigent
 | `POST /claude/runs/cancel` | Enregistre un arrêt (`202`) |
 | `POST /claude/runs/review` | Relit l'instantané de review capturé à la fin de l'exécution |
 | `POST /claude/corrections/preflight` | Vérifie qu'une reprise ciblée est possible |
+| `POST /repositories/delivery/inspect` | État Git d'une livraison candidate, en lecture seule |
+| `POST /repositories/delivery/commit` | Crée le commit d'une livraison validée, sur les chemins exacts du candidat |
+| `POST /repositories/delivery/push` | Pousse vers l'upstream déjà configuré, jamais en forçant |
 
 **Tester la sonde :**
 
@@ -399,6 +411,8 @@ NOX/
 │   │   ├── components/     Composants d'interface réutilisables
 │   │   └── lib/            Logique métier hors React
 │   │       ├── architect/  Architecte OpenAI — serveur uniquement
+│   │       ├── backlog/    Planification initiale du backlog de V1
+│   │       ├── replan/     Changement de projet et replanification du travail futur
 │   │       ├── runner/     Client HTTP du runner — serveur uniquement
 │   │       └── ...         Tâches, exécutions, review, workflow, mémoire, libellés
 │   │

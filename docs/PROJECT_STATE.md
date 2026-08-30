@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md). Il ne décrit pas non plus la cible : voir
 > [PROJECT_BRIEF.md](PROJECT_BRIEF.md) et [V1_SCOPE.md](V1_SCOPE.md).
 
-**Dernière mise à jour** : 29 août 2026, à l'issue de `TASK-031`.
+**Dernière mise à jour** : 30 août 2026, à l'issue de `TASK-032`.
 
 ---
 
@@ -27,9 +27,15 @@ Project Plan  →  V1 Backlog  →  Tâche   →  Claude Code  →  Review Git
            Mémoire projet
 ```
 
-L'Architecte occupe deux rôles distincts : il **converse** — une tâche à la fois, en réponse
-à un message — et il **planifie** — un backlog entier, en réponse à l'état du projet. Deux
+Et la boucle revient à son point de départ : depuis la conversation du projet, un **changement
+de projet** fait évoluer le brief, le plan et le plan des tâches futures, qui repartent dans la
+file d'exécution ordinaire.
+
+L'Architecte occupe deux rôles distincts : il **converse** — en réponse à un message, et il
+peut y proposer une tâche, une mise à jour du projet, ou une replanification du travail futur —
+et il **planifie** — un backlog entier, en réponse à l'état du projet, sans conversation. Deux
 workflows, deux prompts, deux contrats de sortie ; aucun des deux ne peut déclencher l'autre.
+`backlog/2` crée le **premier** plan d'un projet ; `replan/1` fait évoluer celui qui existe.
 
 Ce que NOX **ne fait pas**, et n'a jamais prétendu faire : aucun lancement automatique de
 Claude Code, aucun passage automatique en `READY`, aucune boucle autonome entre les deux
@@ -60,15 +66,21 @@ deux exécutions sur un **même** repository — l'est toujours, et l'est deux f
 dans le runner. Aucune autorisation ne s'est élargie : démarrer la file d'un projet n'a jamais
 rien dit des autres, et c'est encore vrai.
 
+`TASK-032` n'en crée aucune non plus, et referme la boucle : quand une exigence change, on le
+dit dans la conversation du projet, et l'Architecte peut **proposer** un changement — le
+Project Plan, le plan des tâches futures, ou les deux ensemble. Une proposition ne modifie
+toujours rien : elle se relit sur une page, se corrige, et s'applique d'un seul geste humain.
+Le passé — ce qui a tourné, ce qui est en file, l'amorçage — n'est jamais réécrit.
+
 | Chiffre | Valeur |
 | --- | --- |
 | Workspaces | 4 — `web`, `runner`, `shared`, `database` |
-| Modèles Prisma | 29 |
-| Migrations appliquées | 22 |
+| Modèles Prisma | 30 |
+| Migrations appliquées | 23 |
 | Routes du runner | 23, dont une seule publique (`GET /health`) |
-| Pages de l'application web | 36 |
-| Tests automatisés | 4 212, dont 6 ignorés sous Windows |
-| Décisions consignées | 367 |
+| Pages de l'application web | 39 |
+| Tests automatisés | 4 382, dont 6 ignorés sous Windows |
+| Décisions consignées | 377 |
 
 ---
 
@@ -783,12 +795,70 @@ l'un des travaux en cours.
   les exécutions en cours, exactement comme avant : chacune est alors marquée bloquée, et NOX ne
   prétend pas savoir ce que les processus ont fait. La concurrence ne change rien à cette limite,
   et n'attribue jamais l'exécution d'un repository au mauvais projet.
-- **Aucune replanification** depuis la conversation du projet.
 
 **Frontières.** Zéro appel à OpenAI : choisir quoi lancer est déterministe. Le navigateur ne
 porte ni chemin, ni clé de verrou, ni identifiant de processus — un projet et une tâche,
 revalidés côté serveur. Aucune action ne traverse deux projets : annulation, review, correction
 et livraison vérifient toutes la chaîne projet → tâche → exécution.
+
+### 2.15 Changement de projet depuis la conversation — replanification
+
+**Disponible.** Depuis la conversation principale d'un projet, un message qui change une
+exigence peut recevoir bien plus qu'une réponse : l'Architecte peut proposer un **changement de
+projet**, qui porte le Project Brief et le Living V1 Plan, le plan des tâches futures, ou les
+deux ensemble.
+
+Quand un tour propose les deux, ils forment **une seule intention** : une carte dans le fil, une
+page de revue, un bouton `Apply project change`. Deux revues auraient rendu possible l'état que
+cette capacité existe pour empêcher — un plan qui décrit un produit, et un backlog qui en
+construit un autre.
+
+**Ce qui est replanifiable, et ce qui ne l'est pas.** Une tâche qui a une exécution, qui est
+inscrite dans la file, dont le statut n'est plus un statut d'avant-exécution, ou qui est
+`TASK-000`, est **verrouillée** : l'Architecte la voit dans un inventaire compact, ne reçoit pas
+son contrat, et ne peut pas la réécrire. Les autres sont **modifiables**, et leur contrat complet
+lui est transmis. La classification est celle de `TASK-024`, pas une seconde règle.
+
+**Ce que le fournisseur rend.** L'état cible complet des tâches futures — pas une suite
+d'opérations. NOX dérive lui-même ce que ce plan fait au plan courant : conservée, modifiée,
+retirée, ajoutée, déplacée, dépendances changées. Le fournisseur ne pose jamais ces étiquettes.
+
+La revue affiche le brief et le plan champ par champ, puis le sort de chaque tâche. Tout le
+contrat est éditable — titre, priorité, objectif, contexte, hors périmètre, documents, critères,
+modes de vérification, commandes, modes d'exécution, liens critère-commande, dépendances, ordre —
+avec exactement les règles de l'éditeur de tâche future et la garde des commandes de `TASK-027`.
+On peut ajouter une tâche, en retirer une, et restaurer un retrait sans redemander un tour.
+
+**Ce que l'application fait.** Une transaction SQLite, tout ou rien : brief, plan, mises à jour,
+suppressions, créations, ordre de planification, dépendances, transitions `READY → DRAFT`,
+attribution des codes, proposition et mise à jour liée passées à `APPLIED`. Les documents
+Markdown suivent, et seules les tâches réellement changées sont réécrites.
+
+**Limites.**
+
+- **Au plus un changement en attente par projet.** Tant qu'il attend, l'Architecte n'en propose
+  pas d'autre — la conversation, elle, continue normalement.
+- **Un projet sans backlog initial appliqué n'est pas replanifiable.** L'interface renvoie vers
+  la planification initiale : il n'existe pas de second chemin pour créer un premier plan.
+- **Un changement conçu sur un état devenu obsolète est refusé.** Brief modifié, plan modifié,
+  tâche éditée, inscrite en file, lancée, ajoutée ou retirée depuis : l'application refuse et dit
+  ce qu'elle peut nommer. Il n'existe ni fusion, ni « appliquer quand même ».
+- **`TASK-000` jamais exécutée bloque un changement qui toucherait le brief ou le plan.** Elle a
+  été rédigée à partir de l'état produit d'alors. NOX ne la réécrit ni ne la supprime : c'est un
+  geste humain.
+- **Aucune sauvegarde intermédiaire de la revue.** Les corrections vivent dans le formulaire
+  jusqu'à l'application ; un refus les rend, une fermeture d'onglet les perd.
+- **Le plan de travail transmis est borné.** Au-delà du budget, le tour est refusé avec
+  `REPLAN_CONTEXT_TOO_LARGE` : les contrats modifiables ne sont jamais tronqués en silence.
+
+**Frontières.** Relire, éditer, appliquer ou écarter : zéro appel à OpenAI, zéro exécution de
+Claude Code, zéro validation, zéro correction, zéro livraison Git, zéro démarrage de file. Une
+file active n'est ni mise en pause, ni vidée, ni avancée ; les tâches nées d'un changement
+naissent `DRAFT` et hors file. Les identifiants et les codes de tâches sont immuables, et aucun
+code n'est jamais recyclé. Le navigateur n'envoie que des identifiants et les valeurs saisies —
+aucun statut, aucun code, aucun chemin, et aucun drapeau de forçage, qui n'existe pas.
+
+---
 
 ## 3. Où en est l'écart avec la cible
 
@@ -839,11 +909,27 @@ d'un échec, il n'a besoin de personne pour la recopier. `TASK-029` lève la der
 systématique : le commit, qui arrêtait la file après chaque tâche. `TASK-031` lève la dernière
 limitation de capacité : un repository ne bloque plus artificiellement un autre repository.
 
-### 3.5 Ce qui reste à faire
+### 3.5 Résolu par `TASK-032` : le plan futur évolue depuis la conversation
 
-- **Aucune replanification structurée** depuis la conversation du projet.
+La dernière limitation de cette liste — *une fois le backlog appliqué, le plan des tâches
+futures ne change plus qu'à la main, tâche par tâche* — n'existe plus. Une exigence qui change
+se dit dans la conversation du projet, et l'Architecte propose un changement complet : le
+Project Plan et le plan des tâches futures, relus ensemble, appliqués d'un geste.
 
-Voir [ROADMAP.md](ROADMAP.md), `TASK-032`.
+Le cycle de `TASK-021` — proposer, relire, corriger, appliquer — est réutilisé une troisième
+fois. Ce qui s'applique n'est ni un état, ni un lot : c'est un **état cible**, dont NOX dérive
+lui-même ce qu'il fait au plan courant.
+
+### 3.6 Ce qui reste à faire
+
+**Le périmètre de V1 prévu est couvert.** Aucune capacité annoncée dans
+[V1_SCOPE.md](V1_SCOPE.md) § 2 n'est manquante, et aucune étape de la roadmap n'est ouverte.
+
+Ce qui reste n'est pas une fonctionnalité : c'est un **premier pilote réel de bout en bout**.
+Un vrai projet, un vrai repository, un vrai modèle, du début à la livraison. C'est lui qui dira
+ce qui mérite une étape suivante — pas une liste écrite d'avance.
+
+Voir [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -855,22 +941,21 @@ un document modifié à la main ne remonte pas dans NOX.
 
 Aucun de ces éléments n'est commencé. Les lister évite de les croire disponibles.
 
-**Conception et planification.** Amorçage d'un projet vide, dépendances entre tâches,
-modification d'une spécification après création, replanification depuis la conversation,
-ajout d'une tâche vierge dans une revue de backlog, ordre global entre tâches existantes et
-nouvelles, historique de versions du Project Brief ou du Living V1 Plan, matérialisation
-automatique de l'état structuré en Markdown, extraction automatique de mémoire depuis une
-proposition de projet ou un backlog, déduplication sémantique entre tâches.
+**Conception et planification.** Historique de versions du Project Brief ou du Living V1 Plan,
+matérialisation automatique et continue de l'état structuré en Markdown, extraction automatique
+de mémoire depuis une conversation, une proposition de projet ou un backlog, déduplication
+sémantique entre tâches, dépendances entre tâches de projets différents, sauvegarde
+intermédiaire d'une revue de changement de projet.
 
-**Exécution.** File d'exécution, plusieurs agents en parallèle, worktrees, plusieurs comptes
-Claude, exécution automatique de l'étape recommandée, cron, scheduler, notifications,
-orchestration parallèle, runner multi-projets.
+**Exécution.** Plusieurs agents en parallèle sur un **même** repository, worktrees automatiques,
+plusieurs comptes Claude, exécution automatique de l'étape recommandée, cron, scheduler,
+notifications, ordonnanceur global entre projets.
 
-**Livraison.** Commit, push, génération d'un message de commit ou d'une PR, restauration Git.
+**Livraison.** Génération d'un message de commit rédigé par un modèle, pull requests,
+restauration Git, résolution de conflits, changement de branche, création d'un upstream.
 
-**Interface.** Tableau de bord d'un projet, tableau de bord multi-projets, indicateur
-« prochaine étape » ailleurs que sur la page d'une tâche, suppression de projet ou
-d'exécution, archivage, corbeille, renommage, déplacement, suppression en masse.
+**Interface.** Recherche, filtres et pagination sur le tableau de bord, archivage, corbeille,
+déplacement d'un projet, suppression en masse, tableau d'audit des changements de projet.
 
 **IA.** Boucle autonome OpenAI ↔ Claude, approbation ou correction automatique, review
 déclenchée en arrière-plan, sélection libre du contexte, lecture du code source par OpenAI,
@@ -920,6 +1005,14 @@ par une vérification exécutée à la main, sur un vrai repository.
 - **Le correctif de lecture des lignes Bash n'a pas été revu en exécution réelle.** Il a été
   vérifié contre le faux Claude et contre la ligne exacte relevée dans une transcription de
   session.
+- **La chaîne complète n'a jamais été parcourue de bout en bout sur un vrai projet.** Chaque
+  capacité a été vérifiée à la main, l'une après l'autre ; leur enchaînement — de la première
+  phrase de description jusqu'à une livraison relue, puis un changement de projet — ne l'a pas
+  encore été. C'est l'objet du premier pilote réel, et c'est aujourd'hui la seule réserve
+  ouverte qui porte sur le produit entier.
+- **Le changement de projet n'a été vu qu'à travers un faux fournisseur.** Les trois écrans
+  sont rendus et vérifiés par `functional-032` sur un vrai serveur web, mais aucune
+  replanification réelle n'a encore été proposée par un modèle.
 
 ---
 
@@ -933,7 +1026,7 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
    fonctionnels appellent les mêmes fonctions serveur qu'elles ; les pages, elles, sont bien
    lues par HTTP. Leurs règles sont couvertes par des tests unitaires, leur câblage par le
    build.
-3. **Cinq tests sont ignorés sous Windows** : quatre portent sur les liens symboliques de
+3. **Six tests sont ignorés sous Windows** : cinq portent sur les liens symboliques de
    fichier, un sur l'empreinte de dossier de travail. Tous demandent un privilège que le poste
    n'accorde pas. Les cas d'évasion correspondants restent couverts par des jonctions.
 4. **Les scripts fonctionnels ne sont pas versionnés.** Ils vivent dans le dossier de travail
@@ -947,6 +1040,13 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 7. **Le jeton du runner est en clair dans `.env`.** C'est le modèle de menace assumé d'un outil
    local mono-utilisateur.
 8. **Versions figées** : TypeScript 5.9, ESLint 9, Node ≥ 22.18 requis.
+9. **La revue d'un changement de projet ne se sauvegarde pas.** Les corrections humaines vivent
+   dans le formulaire jusqu'à l'application ; un refus les rend, une fermeture d'onglet les
+   perd. Le brouillon persistant a été écarté pour cette étape, et reste possible sans
+   changement de modèle : `providerJson` et `appliedJson` sont déjà distincts.
+10. **La section historique d'une revue de changement liste toutes les tâches verrouillées**,
+    et non les seules tâches réellement citées par la cible. Elle est repliée, donc elle ne
+    noie pas la page, mais elle en dit plus que nécessaire sur un gros projet.
 
 ---
 
@@ -954,7 +1054,6 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `TASK-020` : `e6b4c89` (`docs: consolidate NOX project documentation`),
-  contenant `TASK-018`. `TASK-019` a été volontairement sautée : l'audit de `TASK-018` a conclu
-  qu'une tâche de nettoyage dédiée n'était pas justifiée.
-- `TASK-020` reste **locale**, non indexée et non commitée.
+- Commit de départ de `TASK-032` : `e0a716c`
+  (`feat: allow independent repositories to run concurrently`), contenant `TASK-031`.
+- `TASK-032` reste **locale**, non indexée et non commitée.

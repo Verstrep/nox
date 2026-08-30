@@ -5110,6 +5110,8 @@ même information. La première est un récit, la seconde est une preuve. Les m�
 chronologique rendrait impossible de savoir laquelle on lit — ce qui annulerait tout l'intérêt de
 TASK-027.
 
+## Décisions de TASK-028 — Boucle de correction pilotée par la validation
+
 ### D-337 — Une preuve de NOX déclenche une correction ; un récit, jamais
 
 **Décision.** Seule une validation que **NOX** a exécutée lui-même peut ouvrir une correction
@@ -5238,6 +5240,8 @@ une course perdue d'avance.
 
 Ce n'est pas un détail d'ordonnancement : c'est l'événement de finalisation qui produit désormais
 tout ce qu'il doit produire, au lieu d'en laisser une partie à l'écran qui l'affichera.
+
+## Décisions de TASK-029 — Livraison Git d'un travail validé
 
 ### D-347 — La politique de livraison est une autorisation distincte de celle de la file
 
@@ -5389,6 +5393,8 @@ reconnaissance qui se trompe est pire qu'une absence de reconnaissance.
 Le préflight Git existant suffit : un repository propre et synchronisé laisse la file continuer,
 exactement comme avant TASK-029. La surface de livraison, elle, se contente de dire ce qu'elle
 constate — sans en tirer de conclusion sur un commit qu'elle n'a pas créé.
+
+## Décisions de TASK-031 — Orchestration multi-projets
 
 ### D-358 — L'exclusion d'execution porte sur le repository, pas sur NOX
 
@@ -5558,3 +5564,179 @@ n'autorise aucune ecriture Git supplementaire — le preflight ne livre rien.
 **Ce qu'elle nomme.** Deux questions, deux fonctions, aucune ne repondant pour l'autre :
 `policyAllowsLocalAhead` decide de la readiness, `deliverySatisfied` decide de la livraison. Les
 confondre etait precisement le defaut.
+
+## Décisions de TASK-032 — Replanification depuis la conversation projet
+
+### D-368 — La conversation principale est l'origine d'un changement de projet
+
+**Décision.** Une replanification part d'un message de la conversation projet, jamais d'un écran
+dédié, jamais d'un second fil. L'Architecte propose un changement dans le tour où l'utilisateur
+lui dit que quelque chose a changé.
+
+**Justification.** Un écran de replanification séparé aurait redemandé, sous une autre forme, le
+contexte que la conversation possède déjà : ce qu'on construit, pourquoi, et ce qui vient d'être
+décidé. Deux surfaces qui reçoivent la même intention finissent par la comprendre différemment.
+
+C'est aussi la seule façon d'obtenir un enchaînement humain naturel — « en fait, les utilisateurs
+n'ont pas besoin d'export PDF, mais d'un partage par lien » — sans que l'utilisateur ait à
+traduire lui-même cette phrase en une liste de tâches à modifier.
+
+**Ce qu'elle écarte.** Un écran « Replan » indépendant, un second modèle de conversation, une
+reprise de la planification initiale à chaque évolution.
+
+### D-369 — `backlog/2` planifie, `replan/1` replanifie
+
+**Décision.** Deux prompts, deux contrats de sortie, deux moments. `backlog/2` crée le premier
+plan d'un projet à partir du brief et du plan, sans conversation. `replan/1` fait évoluer un plan
+qui existe déjà, depuis la conversation, avec l'état de planification courant. Un projet sans
+backlog `APPLIED` n'est pas replanifiable.
+
+**Justification.** Les deux ne répondent pas à la même question. Planifier, c'est découper une
+intention en travail. Replanifier, c'est décider ce qui, du travail déjà décidé, reste vrai. Un
+prompt unique aurait dû faire les deux, et aurait fini par réinventer le plan à chaque évolution
+— ce qui est exactement le comportement qu'un utilisateur ne pardonne pas.
+
+**Ce qu'elle écarte.** Un second chemin de planification initiale. Un projet neuf ne peut pas
+obtenir son premier plan par une replanification, et l'interface le renvoie vers `backlog/2`.
+
+### D-370 — Le passé est immuable, le futur est replanifiable
+
+**Décision.** Une tâche qui possède une exécution, qui est inscrite dans la file, dont le statut
+n'est plus un statut d'avant-exécution, ou qui est `TASK-000`, est **verrouillée** : son contrat
+n'est pas transmis au fournisseur, et rien ne peut le réécrire. Les autres sont modifiables. La
+classification est celle de `TASK-024`.
+
+**Justification.** Réécrire le contrat d'une tâche déjà exécutée rendrait sa review
+incompréhensible : on relirait un diff produit pour une spécification qui n'existe plus. Une
+tâche inscrite en file porte, elle, un ordre déjà préparé — la modifier reviendrait à changer ce
+qui va partir sans que personne l'ait redemandé.
+
+`TASK-000` mérite une mention à part : elle prépare les fondations à partir du brief et du plan
+d'alors. Un changement de projet appliqué avant qu'elle ait tourné la laisserait construire pour
+un produit qui n'existe plus. NOX refuse, nomme la cause, et ne la réécrit ni ne la supprime à la
+place de l'utilisateur.
+
+**Ce qu'elle écarte.** Une option « replanifier aussi le passé », un mode « forcer », une
+réécriture silencieuse de `TASK-000`.
+
+### D-371 — Un état cible complet, jamais une suite d'opérations
+
+**Décision.** Le fournisseur rend la liste complète des tâches futures telles qu'elles devraient
+être. Il ne dit ni « ajoute », ni « supprime », ni « déplace ». NOX dérive `KEEP`, `UPDATE`,
+`REMOVE`, `ADD`, le déplacement et le changement de dépendances en comparant cet état au plan
+courant.
+
+**Justification.** Une suite d'opérations aurait obligé NOX à faire confiance au modèle sur ce
+que son propre patch fait — la confiance qu'il refuse partout ailleurs. Un `REMOVE TASK-007` mal
+placé supprime du travail, et rien dans le payload ne permet de s'en apercevoir avant
+l'application.
+
+Un état cible se compare. La comparaison est déterministe, elle se teste, et elle affiche à
+l'utilisateur ce qui va réellement se passer — pas ce que le modèle a annoncé.
+
+**Ce qu'elle écarte.** Des opérations de patch, une confiance accordée aux étiquettes du
+fournisseur, un affichage qui répéterait ce que le modèle dit faire.
+
+### D-372 — Contrat, position et dépendances sont trois axes indépendants
+
+**Décision.** Un élément porte un changement principal — `KEEP`, `UPDATE`, `REMOVE`, `ADD` — et
+deux drapeaux séparés : déplacé, dépendances modifiées. L'autorité sur le premier est
+`taskContractChanged`, celle de `TASK-024`, importée et non réimplémentée.
+
+**Justification.** Confondre les trois aurait deux conséquences immédiates, toutes deux
+invisibles jusqu'à la file. Un simple réordonnancement compté comme une modification ferait
+redescendre en `DRAFT` des tâches que personne n'a touchées, et réécrirait leurs documents — donc
+salirait un repository, donc arrêterait une file. Et un résumé qui additionnerait les trois axes
+annoncerait un nombre que rien ne vérifie.
+
+Deux écritures équivalentes d'un même contrat donnent `KEEP` : la canonicalisation de `TASK-024`
+est la seule autorité, et un formulaire ouvert puis refermé ne dégrade rien.
+
+**Ce qu'elle écarte.** Un compteur unique de « tâches changées », une seconde définition locale
+de « ce contrat a changé ».
+
+### D-373 — Le code d'une tâche est immuable, l'ordre du plan ne l'est pas
+
+**Décision.** L'identifiant et le code d'une tâche existante ne changent jamais, et aucun
+formulaire ne les porte. Un code n'est attribué qu'à l'application, depuis
+`Project.nextTaskSequence`, réservé atomiquement dans la transaction, et jamais recyclé.
+`planningOrder` porte l'ordre du plan, distinct du code.
+
+**Justification.** Un code de tâche circule : dans un document Markdown, dans un message de
+commit, dans une conversation, dans une note. Le renuméroter pour qu'il « suive l'ordre »
+casserait tout ce qui le cite. Réutiliser le code d'une tâche supprimée serait pire : deux
+travaux différents porteraient le même nom dans l'historique.
+
+`TASK-006, TASK-011, TASK-007` est donc un plan parfaitement valide, et c'est l'ordre qui le dit.
+
+**Ce qu'elle écarte.** Une renumérotation à l'application, un code proposé par le navigateur, un
+code recyclé pour boucher un trou.
+
+### D-374 — Un tour qui propose les deux forme une seule décision humaine
+
+**Décision.** Quand un tour porte une mise à jour du projet **et** une replanification, les deux
+se lient. Une carte dans le fil, une page de revue, un `Apply project change`, un `Dismiss`, une
+transaction. La mise à jour n'a plus de carte propre.
+
+**Justification.** Deux revues et deux boutons auraient rendu possible l'état que cette étape
+existe pour empêcher : un Project Plan qui décrit un produit, et un backlog qui en construit un
+autre. Cet état-là n'est rattrapable par personne, parce que rien ne signale qu'il existe.
+
+Une mise à jour **seule** garde intégralement le parcours de `TASK-021` : forcer les propositions
+historiques dans la revue combinée aurait réécrit leur histoire pour un confort
+d'implémentation.
+
+**Ce qu'elle écarte.** `Apply Project Update` puis `Apply Replan`, deux transactions, un ordre
+d'application à retenir.
+
+### D-375 — Un état devenu obsolète est refusé, et il n'existe aucun forçage
+
+**Décision.** L'empreinte de planification est recalculée **dans** la transaction qui écrit, et
+comparée à celle vue par le fournisseur. Toute divergence — brief, plan, tâche éditée, inscrite
+en file, lancée, ajoutée, retirée, déplacée — refuse l'application et nomme ce qu'elle peut
+nommer. Il n'existe ni fusion, ni « appliquer quand même », ni paramètre `force`, `applyAnyway`
+ou `ignoreStale`.
+
+**Justification.** C'est la même raison qu'en `TASK-021` et `TASK-022`, appliquée à un objet plus
+gros. Une proposition décrit un plan *à partir d'un état*. Si l'état a changé, elle décrit un
+plan pour un projet qui n'existe plus, et l'appliquer supprimerait ou réécrirait du travail que
+personne n'a réexaminé.
+
+Recalculer l'empreinte **avant** la transaction aurait laissé une fenêtre entre le contrôle et
+l'écriture — assez pour qu'une tâche parte en file entre les deux.
+
+**Ce qu'elle écarte.** Une fusion automatique, un bouton de forçage, une péremption stockée en
+base : elle se dérive, et il n'existe aucun statut `STALE`.
+
+### D-376 — Appliquer un changement n'a aucun effet d'exécution
+
+**Décision.** Relire, éditer, appliquer ou écarter un changement de projet n'appelle ni OpenAI,
+ni Claude Code, ni aucune validation, correction ou livraison Git, et ne démarre, ne met en pause
+et ne fait avancer aucune file. Les tâches créées naissent `DRAFT` et hors file.
+
+**Justification.** Un changement de plan est une décision de conception. Lui laisser déclencher
+du travail ferait d'un clic de revue le point de départ d'une exécution que personne n'a
+demandée — et, avec une file active, d'une chaîne entière.
+
+C'est aussi ce qui rend la revue relisible sans risque : on peut l'ouvrir, l'éditer, la refermer,
+runner arrêté et sans configuration OpenAI.
+
+**Ce qu'elle écarte.** Un enchaînement « appliquer puis lancer », une mise en file automatique
+des tâches nouvelles, une file mise en pause « par prudence » à l'application.
+
+### D-377 — Le pilote réel remplace la fonctionnalité suivante
+
+**Décision.** `TASK-032` achève le périmètre de V1 prévu. L'étape suivante n'est pas une
+`TASK-033` : c'est un premier pilote réel de bout en bout, sur un vrai projet, avec un vrai
+modèle. Aucune fonctionnalité nouvelle n'est écrite avant qu'il ait tourné.
+
+**Justification.** Toutes les étapes depuis `TASK-008` ont été validées par une vérification
+manuelle sur un vrai repository, et c'est cette pratique qui a révélé la forme réelle des
+événements de Claude Code, la structure de ses lignes Bash, et plusieurs frictions qu'aucun test
+n'aurait montrées. La chaîne complète, elle, n'a jamais été parcourue d'un bout à l'autre.
+
+Écrire maintenant une liste de « polish », d'« observabilité » ou d'« outillage de pilote »
+décrirait les manques qu'on imagine. Le pilote décrira ceux qu'on rencontre.
+
+**Ce qu'elle écarte.** Une `TASK-033` écrite d'avance, une roadmap de fonctionnalités
+spéculatives, une V1 déclarée finie sans avoir été utilisée.

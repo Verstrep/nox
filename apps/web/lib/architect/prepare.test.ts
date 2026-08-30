@@ -23,6 +23,7 @@ const ENVIRONMENT: Record<string, string | undefined> = {
 const BASE: PrepareArchitectInput = {
   sessionKind: "TASK_DESIGN_LEGACY",
   projectName: "NOX",
+  replan: null,
   repositoryPath: ROOT,
   documents: [
     {

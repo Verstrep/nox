@@ -211,16 +211,45 @@ L'autorisation, elle, reste locale : démarrer la file d'un projet n'accorde rie
 chaque projet garde sa politique de livraison Git. NOX n'ordonnance rien — il n'y a ni priorité,
 ni équité, ni plafond global : les projets n'ont simplement plus de raison de s'attendre.
 
+### 1.20 Évolution d'un projet depuis la conversation Architecte
+
+Une exigence qui change se dit dans la conversation principale du projet, et l'Architecte peut y
+proposer un **changement de projet** : le Project Brief et le Living V1 Plan, le plan des tâches
+futures, ou les deux ensemble. Il n'y a pas de seconde conversation, pas de second écran de
+planification, et pas de retour à une planification neuve.
+
+### 1.21 Replanification structurée des tâches futures
+
+Le plan des tâches futures se refait entièrement : une tâche se modifie, se retire, se déplace,
+et de nouvelles s'ajoutent, dépendances comprises. Le passé — ce qui a tourné, ce qui est en
+file, l'amorçage — n'est jamais réécrit, et les identifiants comme les codes des tâches
+existantes sont immuables.
+
+La planification **initiale** et la **replanification** restent deux workflows distincts :
+`backlog/2` crée le premier plan d'un projet, `replan/1` fait évoluer celui qui existe.
+
+### 1.22 Revue combinée Project Plan / plan des tâches
+
+Quand un tour propose une mise à jour du projet **et** une replanification, les deux forment une
+seule intention humaine : une carte, une page de revue, un bouton. Tout y est éditable avec les
+règles de l'éditeur de tâche future, et l'application est une transaction unique — tout ou rien.
+
+Un changement conçu sur un état devenu obsolète est refusé, jamais fusionné, et il n'existe
+aucun forçage.
+
 ---
 
 ## 2. Capacités nécessaires à la V1 visée
 
-Ces capacités **n'existent pas**. Elles constituent l'écart entre l'état actuel et la V1.
+**Aucune.** Le périmètre de V1 prévu est couvert par les capacités de la section 1.
 
-### 2.1 Replanification depuis la conversation du projet
+Ce qui reste n'est pas une fonctionnalité : c'est le **premier pilote réel de bout en bout** —
+un vrai projet, un vrai repository, un vrai modèle, de la première phrase de description
+jusqu'à une livraison relue. C'est le critère de réussite énoncé en tête de ce document, et il
+ne se vérifie qu'en le faisant.
 
-Revenir dans la conversation principale et réordonner le plan restant, sans repartir d'une
-planification neuve.
+Ce pilote dira ce qui mérite une capacité de plus. Rien n'est inscrit ici d'avance : une liste
+écrite avant l'observation décrirait les manques qu'on imagine, pas ceux qu'on rencontre.
 
 ---
 

@@ -232,13 +232,29 @@ async function populate(projectId: string): Promise<{ taskId: string; bootstrapI
       generationId: generation.id,
     },
   });
-  await db.architectProjectUpdate.create({
+  const projectUpdate = await db.architectProjectUpdate.create({
     data: {
       generationId: generation.id,
       projectId,
       status: "PENDING",
       reason: "Le brief a bouge.",
       proposedJson: "{}",
+    },
+  });
+
+  // Replanification du meme tour, liee a cette mise a jour : les deux forment
+  // un seul changement, et la suppression doit emporter les deux.
+  await db.architectReplanProposal.create({
+    data: {
+      generationId: generation.id,
+      projectId,
+      projectUpdateId: projectUpdate.id,
+      status: "PENDING",
+      rationale: "Le perimetre a change.",
+      targetCount: 1,
+      newCount: 1,
+      providerJson: "{}",
+      planningFingerprint: REVISION_A,
     },
   });
 
@@ -418,6 +434,7 @@ async function countAll(projectId: string): Promise<Record<string, number>> {
     run: await db.run.count({ where: byTask }),
     taskQueueEntry: await db.taskQueueEntry.count({ where: { projectId } }),
     taskDependency: await db.taskDependency.count({ where: byTask }),
+    architectReplanProposal: await db.architectReplanProposal.count({ where: { projectId } }),
     architectProjectUpdate: await db.architectProjectUpdate.count({ where: { projectId } }),
     architectMessage: await db.architectMessage.count({ where: { session: { projectId } } }),
     architectGeneration: await db.architectGeneration.count({ where: { session: { projectId } } }),
@@ -491,6 +508,7 @@ describe("deleteProjectState", () => {
         run: 0,
         taskQueueEntry: 0,
         taskDependency: 0,
+        architectReplanProposal: 0,
         architectProjectUpdate: 0,
         architectMessage: 0,
         architectGeneration: 0,
@@ -619,6 +637,7 @@ describe("deleteProjectState", () => {
       run: 0,
       taskQueueEntry: 0,
       taskDependency: 0,
+      architectReplanProposal: 0,
       architectProjectUpdate: 0,
       architectMessage: 0,
       architectGeneration: 0,

@@ -12,10 +12,11 @@ son prompt est écrit.
 
 ---
 
-## Phase de fondation — terminée
+## Étapes terminées
 
-`TASK-001` → `TASK-017`. Dix-sept étapes qui ont construit la chaîne complète, d'un dossier
-vide à une exécution relue.
+`TASK-001` → `TASK-032`. La chaîne complète, d'un dossier vide à une livraison relue, puis
+retour à la conversation du projet pour faire évoluer le plan restant. `TASK-019` a été
+sautée, `TASK-030` absorbée par `TASK-025` : les deux sont expliquées plus bas.
 
 | # | Étape | Ce qu'elle a apporté |
 | --- | --- | --- |
@@ -45,10 +46,15 @@ vide à une exécution relue.
 | 25 | Tableau de bord et cycle de vie | Accueil centrée projets, suppression d'un projet de NOX, repository préservé |
 | 26 | File d'exécution | Intention persistée, autorisation explicite, sélection déterministe |
 | 27 | Validation autonome | Classification écrite avant l'exécution, preuves obtenues par NOX lui-même |
+| 28 | Correction pilotée par la validation | Contexte d'échec local, relance bornée à deux tentatives |
+| 29 | Livraison Git contrôlée | Politique par projet, candidat figé, aucune réconciliation |
+| 31 | Runner multi-projets | Concurrence par repository, aucune file ni ordonnanceur global |
+| 32 | Replanification depuis la conversation | État cible du travail futur, revue combinée, application atomique |
 
-**Ce que la fondation ne fait pas, et n'a jamais prétendu faire** : aucun lancement
-automatique, aucune boucle autonome entre les deux modèles, aucun commit, aucun push, aucun
-résumé silencieux, aucune estimation de coût.
+**Ce que NOX ne fait pas, et n'a jamais prétendu faire** : aucun lancement automatique,
+aucune boucle autonome entre les deux modèles, aucun résumé silencieux, aucune estimation de
+coût — et, tant que la politique de livraison du projet reste `Manual`, aucun commit et aucun
+push.
 
 ---
 
@@ -112,7 +118,8 @@ suivi de « fonctionnalités avancées ». Elle est plus précise parce que la f
 est finie.
 
 Le cap tient en une phrase : **faire passer NOX d'un outil qui exécute des tâches à un outil
-qui tient un projet.**
+qui tient un projet.** Depuis `TASK-032`, la boucle ci-dessous est fermée : elle revient à la
+conversation, et le plan restant y évolue.
 
 ```text
 1 Project
@@ -134,6 +141,10 @@ Architect review
 Human validation only when necessary
     ↓
 Validated delivery
+    ↓
+Back to the project conversation
+    ↓
+Project change  →  replanned future work
 ```
 
 ### `TASK-023` — Amorçage d'un projet — `TASK-000` — terminée
@@ -247,10 +258,58 @@ priorité, aucune équité, aucun plafond chiffré. Elle n'élargit aucune autor
 file d'un projet n'en démarre aucun autre —, ne dispatche rien au démarrage du serveur, et
 n'ouvre pas les dépendances entre projets.
 
-### `TASK-032` — Replanification depuis la conversation principale — **suivante**
+### `TASK-032` — Replanification depuis la conversation principale — terminée
 
-La boucle se referme : revenir dans la conversation du projet et réordonner le plan restant.
-C'est la dernière étape prévue avant le premier vrai projet pilote de bout en bout.
+La boucle se referme. Une exigence qui change se dit dans la conversation du projet, et
+l'Architecte peut y proposer un **changement de projet** : le Project Brief et le Living V1
+Plan, le plan des tâches futures, ou les deux ensemble — une seule intention, une seule revue,
+un seul `Apply project change`.
+
+Le passé est immuable et le futur est replanifiable : une tâche qui a tourné, qui est en file,
+ou qui est `TASK-000` n'est jamais réécrite ; les autres se modifient, se retirent, se
+déplacent, et de nouvelles s'ajoutent avec leurs dépendances. Le fournisseur rend un **état
+cible**, jamais des opérations — NOX dérive lui-même ce que cet état fait au plan courant.
+L'identifiant et le code d'une tâche existante sont immuables, et aucun code n'est recyclé.
+
+La planification initiale reste `backlog/2` ; la replanification est `replan/1`. Deux prompts,
+deux moments, aucun des deux ne fait le travail de l'autre.
+
+Ce que cette étape **ne fait pas** : elle ne modifie rien avant un geste humain, ne fusionne
+jamais un état devenu obsolète, n'offre aucun forçage, n'appelle ni Claude Code ni le runner à
+l'application, ne touche jamais à Git, et ne démarre, ne met en pause et ne vide aucune file.
+
+**Elle achève le périmètre de V1 prévu.**
+
+---
+
+## Prochaine étape — `FIRST NOX V1 REAL PILOT`
+
+Ce n'est pas une `TASK-033`, et il ne faut pas en écrire une avant.
+
+Le périmètre de V1 prévu est couvert : la chaîne complète existe, de la première phrase de
+description d'un projet jusqu'à une livraison Git relue, et revient à la conversation pour
+faire évoluer le plan. Ce qui manque n'est plus une capacité — c'est l'**observation d'un vrai
+usage**.
+
+Le pilote consiste à conduire un vrai projet, sur un vrai repository, avec un vrai modèle, de
+bout en bout. Ce qu'il doit mesurer :
+
+| Ce qu'on observe | Ce que cela dirait |
+| --- | --- |
+| Nombre et nature des interventions humaines | Où NOX demande de l'aide sans en avoir besoin, et l'inverse |
+| Endroits où la chaîne s'arrête | Quel arrêt est une garde utile, et lequel est une friction |
+| Justesse des classifications `HUMAN` / `AUTOMATED` | Si le contrat écrit avant l'exécution tient à l'usage |
+| Qualité du backlog initial | Si `backlog/2` produit un découpage réellement exécutable |
+| Qualité des replanifications | Si `replan/1` fait évoluer le plan sans le réinventer |
+| Corrections automatiques | Si deux tentatives suffisent, et ce qu'elles réparent vraiment |
+| Blocages de livraison Git | Ce qui empêche un commit qui aurait dû passer |
+| Confusions d'interface | Ce qui se relit deux fois avant d'être compris |
+| Répétitions d'information | Ce que NOX fait redire à l'utilisateur |
+| Décisions d'Architecte perdues | Ce qui est décidé dans une conversation et n'atteint jamais une tâche |
+| Qualité réelle du projet construit | La seule mesure qui compte pour finir |
+
+Aucune fonctionnalité nouvelle ne sera écrite avant que ce pilote ait tourné. Une liste écrite
+d'avance décrirait les manques qu'on imagine, pas ceux qu'on rencontre.
 
 ---
 

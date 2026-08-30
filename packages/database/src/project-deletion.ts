@@ -68,6 +68,10 @@ export const PROJECT_DELETION_ORDER = [
   "run",
   "taskQueueEntry",
   "taskDependency",
+  // La replanification avant la mise a jour a laquelle elle se lie, et avant les
+  // generations : ses deux liens sont `Cascade`, mais l'ordre explicite reste la
+  // seule facon de rendre la suppression lisible — et verifiable par un test.
+  "architectReplanProposal",
   "architectProjectUpdate",
   "architectMessage",
   "architectGeneration",
@@ -185,6 +189,20 @@ export async function deleteProjectState(
     const byTask = { task: { projectId } };
     const byRun = { run: { task: { projectId } } };
 
+    // Les taches lachent leur provenance de replan **avant** toute suppression.
+    //
+    // Ce geste est nomme parce qu'il ne va pas de soi. `Task.replanProposalId`
+    // est en `Restrict` : une proposition de replan n'est pas supprimable tant
+    // qu'une tache la designe. Or une replanification pend au tour de
+    // conversation qui l'a produite, et un `ArchitectGeneration` doit disparaitre
+    // **avant** les taches — son `appliedTaskId` les designe, en `Restrict` lui
+    // aussi. Sans cette ligne, chaque table attendrait l'autre et la suppression
+    // d'un projet replanifie serait impossible.
+    //
+    // Rien n'est perdu qui survivrait de toute facon : le projet entier part
+    // dans la meme transaction, provenance comprise.
+    await tx.task.updateMany({ where: { projectId }, data: { replanProposalId: null } });
+
     const counts: ProjectDeletionCounts = {
       // Petits-enfants d'une execution.
       runEvent: (await tx.runEvent.deleteMany({ where: byRun })).count,
@@ -221,6 +239,13 @@ export async function deleteProjectState(
       taskDependency: (await tx.taskDependency.deleteMany({ where: byTask })).count,
       // L'Architecte avant les taches : une session et une generation peuvent
       // referencer la tache qu'elles ont fait creer, en `Restrict`.
+      //
+      // La replanification passe en premier : elle se lie a une mise a jour de
+      // projet et a un tour, tous deux en `Cascade`. La provenance qui la
+      // retenait vient d'etre relachee juste au-dessus.
+      architectReplanProposal: (
+        await tx.architectReplanProposal.deleteMany({ where: { projectId } })
+      ).count,
       architectProjectUpdate: (
         await tx.architectProjectUpdate.deleteMany({ where: { projectId } })
       ).count,

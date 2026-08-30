@@ -118,6 +118,7 @@ describe("l'attente n'est pas un message", () => {
       sessionKind: "PROJECT",
       projectName: "NOX",
       repositoryPath: "D:/Projets/Dev/nox",
+      replan: null,
       documents: [],
       inventory: [],
       tasks: [],

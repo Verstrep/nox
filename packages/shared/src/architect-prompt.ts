@@ -81,11 +81,40 @@ export const ARCHITECT_PROMPT_VERSION = "architect/3";
  */
 export const ARCHITECT_PROMPT_VERSION_V4 = "architect/4";
 
-/** Version de prompt correspondant au role d'une session. */
-export function architectPromptVersion(kind: ArchitectSessionKind): string {
-  return kind === ARCHITECT_SESSION_KIND.PROJECT
-    ? ARCHITECT_PROMPT_VERSION_V4
-    : ARCHITECT_PROMPT_VERSION;
+/**
+ * Version du prompt d'une conversation projet, depuis TASK-032.
+ *
+ * `architect/5` : l'architecte lit, en plus de l'etat structure, le **plan des
+ * taches** — ce qui est deja fait ou commence, et ce qui reste modifiable — et
+ * peut proposer un nouvel etat cible des taches futures.
+ *
+ * Les versions precedentes ne sont pas reecrites. Une generation enregistree
+ * porte sa version, et se relit avec elle : `architect/4` decrivait un
+ * architecte qui ne pouvait pas replanifier, et c'est ce qu'il faut continuer a
+ * lire dans son historique.
+ */
+export const ARCHITECT_PROMPT_VERSION_V5 = "architect/5";
+
+/**
+ * Version de prompt correspondant a ce que ce tour contient reellement.
+ *
+ * Le role de la session decide d'abord ; la presence d'un plan de travail
+ * ensuite. Un projet qui n'a jamais eu de backlog applique ne recoit ni la
+ * section du plan, ni les consignes de replanification : il parle donc encore
+ * `architect/4`, et se comporte exactement comme avant TASK-032.
+ *
+ * Faire dependre la version de ce qui est **transmis**, et non d'un reglage,
+ * evite la seule erreur qui compte : etiqueter une generation d'une version dont
+ * elle n'a pas recu les regles.
+ */
+export function architectPromptVersion(
+  kind: ArchitectSessionKind,
+  replanAvailable = false,
+): string {
+  if (kind !== ARCHITECT_SESSION_KIND.PROJECT) {
+    return ARCHITECT_PROMPT_VERSION;
+  }
+  return replanAvailable ? ARCHITECT_PROMPT_VERSION_V5 : ARCHITECT_PROMPT_VERSION_V4;
 }
 
 /** Delimiteurs du contexte projet. */
@@ -188,6 +217,63 @@ export type ArchitectPromptMessage = {
   proposal?: ArchitectTaskProposal | null;
 };
 
+/**
+ * Une tache verrouillee, telle que l'architecte la voit.
+ *
+ * Un inventaire compact, jamais un contrat complet : le passe sert a comprendre
+ * ce qui existe deja, pas a etre reecrit. Recopier quarante contrats
+ * historiques consommerait le budget qui doit revenir aux taches futures — les
+ * seules que l'architecte peut reellement modifier.
+ */
+export type ArchitectPromptLockedTask = {
+  id: string;
+  code: string;
+  title: string;
+  status: string;
+  /** Pourquoi elle est verrouillee, en un mot du vocabulaire de NOX. */
+  lockReason: string;
+  /** Objectif resume, ou `null` quand le budget ne le permet pas. */
+  objective: string | null;
+  /** Codes des taches attendues. */
+  dependsOn: readonly string[];
+};
+
+/** Une tache future modifiable, avec son contrat complet. */
+export type ArchitectPromptEditableTask = {
+  id: string;
+  code: string;
+  title: string;
+  status: string;
+  priority: string;
+  objective: string;
+  context: string | null;
+  outOfScope: string | null;
+  documentReferences: readonly string[];
+  criteria: readonly {
+    text: string;
+    verificationMode: string;
+    humanInstructions: string | null;
+    /** Positions, dans `commands`, des commandes qui prouvent ce critere. */
+    validationCommandIndexes: readonly number[];
+  }[];
+  commands: readonly { command: string; executionMode: string }[];
+  /** Codes des taches attendues. */
+  dependsOn: readonly string[];
+};
+
+/**
+ * Le plan des taches, coupe en deux par ce qui peut etre replanifie.
+ *
+ * La separation n'est pas cosmetique : c'est le contrat de TASK-032 rendu
+ * visible. Ce qui est verrouille se lit ; ce qui est modifiable se replanifie.
+ */
+export type ArchitectPromptPlanningState = {
+  locked: readonly ArchitectPromptLockedTask[];
+  editable: readonly ArchitectPromptEditableTask[];
+  /** Taches verrouillees non transmises, faute de place. */
+  omittedLocked: number;
+};
+
 export type ArchitectPromptInput = {
   /**
    * Role de la session, qui decide de la version du prompt.
@@ -216,6 +302,15 @@ export type ArchitectPromptInput = {
   contextDocuments: readonly ArchitectPromptDocument[];
   /** Taches recentes, de la plus recente a la plus ancienne. */
   recentTasks: readonly ArchitectPromptTask[];
+  /**
+   * Plan des taches du projet, depuis TASK-032.
+   *
+   * `null` quand la replanification n'est pas disponible — une session de
+   * conception de tache, ou un projet qui n'a jamais eu de backlog applique. La
+   * section disparait alors entierement, et l'architecte ne voit rien qui
+   * l'inviterait a replanifier un projet qui n'a pas encore de plan.
+   */
+  planningState: ArchitectPromptPlanningState | null;
   /** Liste **fermee** des documents referencables par la proposition. */
   availableDocuments: readonly string[];
   /** Messages deja echanges, du plus ancien au plus recent. Peut etre vide. */
@@ -491,9 +586,182 @@ function renderProjectUpdateInstructions(): string[] {
   ];
 }
 
-function renderInstructions(kind: ArchitectSessionKind): string {
+/**
+ * Consignes de replanification, ajoutees en `architect/5`.
+ *
+ * Elles disent trois choses, et elles les disent dans cet ordre parce que c'est
+ * celui des erreurs possibles : ce qui est intouchable, ce qu'un etat cible
+ * signifie, et ce qu'il ne faut surtout pas faire par zele.
+ */
+function renderReplanInstructions(): string[] {
+  return [
+    "",
+    "## Replanifier les taches futures",
+    "",
+    "Le champ `replan` te permet de proposer un nouvel etat du plan de travail.",
+    "Il est **independant** de `state`, de `proposal` et de `projectUpdate`.",
+    "",
+    "Une regle avant toutes les autres :",
+    "",
+    "> **Le passe est immuable. Le futur est replanifiable.**",
+    "",
+    "Une tache qui a commence, qui est terminee, qui est inscrite dans la file, ou",
+    "qui est la tache d'amorcage, n'est **jamais** reecrite. Elle est un fait :",
+    "un prompt a ete envoye, un travail a ete relu, des validations ont tourne.",
+    "La reecrire ferait mentir tout ce qui la cite.",
+    "",
+    "Si une nouvelle decision remet en cause du travail deja livre, la reponse",
+    "correcte est une **nouvelle tache future** qui change ce comportement — pas",
+    "une modification de la tache historique. Dis-le explicitement dans",
+    "`rationale`.",
+    "",
+    "### Un etat cible, pas des operations",
+    "",
+    "`futureTasks` est l'etat cible **complet** du plan de travail. Tu ne rends ni",
+    "`supprimer`, ni `deplacer`, ni `modifier le champ X` : tu rends la liste des",
+    "taches futures telle qu'elle devrait etre apres ton changement.",
+    "",
+    "- Une tache future que tu conserves : reprends-la avec son `existingTaskId`",
+    "  et son contrat, **exactement** tel qu'il t'a ete donne si tu n'y changes",
+    "  rien.",
+    "- Une tache future que tu modifies : meme `existingTaskId`, contrat corrige.",
+    "- Une tache nouvelle : `existingTaskId` a `null`, et un `tempId` court et",
+    "  stable dans ta reponse.",
+    "- Une tache future que tu supprimes : ne la mets pas dans la liste.",
+    "",
+    "L'ordre du tableau est l'ordre de planification propose.",
+    "",
+    "C'est NOX qui derive ensuite ce qui est conserve, modifie, ajoute, supprime",
+    "ou deplace. Ne l'annonce pas toi-meme dans les champs structures.",
+    "",
+    "### Ne reecris pas ce que tu ne changes pas",
+    "",
+    "La faute la plus couteuse ici est la reformulation gratuite. Si une tache",
+    "future n'est pas concernee par la decision de l'utilisateur, recopie-la mot",
+    "pour mot : titre, objectif, contexte, criteres, commandes, dependances. Une",
+    "paraphrase produit une modification que l'utilisateur devra relire pour rien,",
+    "et noie les vrais changements.",
+    "",
+    "Ne profite pas d'un replan pour uniformiser le style, decouper une tache qui",
+    "va bien, ou ajouter des fonctionnalites adjacentes — export, administration,",
+    "aide, demonstration, reglages — que personne n'a demandees.",
+    "",
+    "### Dependances",
+    "",
+    "`dependsOn` designe les taches attendues : le code ou l'identifiant d'une",
+    "tache existante de ce projet, ou le `tempId` d'une tache nouvelle de ta",
+    "propre reponse. Une tache future peut dependre d'une tache terminee : c'est",
+    "legitime, et cela documente pourquoi elle existe.",
+    "",
+    "Ne fais jamais attendre une tache que tu supprimes, et ne cree jamais de",
+    "cycle.",
+    "",
+    "### Avec une mise a jour du projet",
+    "",
+    "Quand tu proposes `projectUpdate` **et** `replan` dans le meme tour, ils",
+    "forment un seul changement. Concois alors le plan cible en fonction de",
+    "l'etat **propose** du brief et du plan, pas de l'ancien : ce serait proposer",
+    "un futur qui contredit le plan qui l'accompagne.",
+    "",
+    "A l'inverse, un changement purement de sequencement — « fais la persistance",
+    "avant l'ecran de statistiques » — ne demande aucune mise a jour du projet :",
+    "`projectUpdate` reste vide, `replan` suffit.",
+    "",
+    "Et si une decision change reellement le perimetre de la V1, ne replanifie",
+    "pas les taches sans proposer aussi le plan correspondant : le plan et le",
+    "backlog se contrediraient.",
+    "",
+    "### Quand ne pas replanifier",
+    "",
+    "Laisse `replan` a `UNCHANGED` — c'est le cas de l'immense majorite des tours.",
+    "Une question, une comparaison, une explication, une reflexion a voix haute ne",
+    "replanifient rien. Attends une decision.",
+    "",
+    "Un plan cible vide est legitime si l'utilisateur reduit sa V1 et que tout le",
+    "reste est deja fait. N'invente pas une tache « recette finale » pour eviter",
+    "une liste vide.",
+    "",
+    "### Justification",
+    "",
+    "`rationale` dit, en quelques lignes : quelle decision declenche le",
+    "changement, quelles taches futures sont touchees, pourquoi le travail deja",
+    "engage reste intact, et — s'il faut changer un comportement deja livre —",
+    "quelle nouvelle tache s'en charge. Pas un essai.",
+    "",
+    "### Tu proposes ; l'utilisateur applique",
+    "",
+    "Ne dis jamais que tu as modifie, supprime ou cree des taches au seul motif",
+    "que tu viens de le proposer. Rien n'a change tant que le nouvel etat",
+    "n'apparait pas dans le contexte d'un tour suivant.",
+  ];
+}
+
+function renderLockedTask(task: ArchitectPromptLockedTask): string {
+  const lines = [
+    `- ${task.code} — ${neutralizeArchitectMarkers(task.title)}`,
+    `  statut : ${task.status} · verrouillee : ${task.lockReason} · id : ${task.id}`,
+  ];
+  if (task.objective !== null) {
+    lines.push(`  objectif : ${neutralizeArchitectMarkers(task.objective)}`);
+  }
+  if (task.dependsOn.length > 0) {
+    lines.push(`  attend : ${task.dependsOn.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+function renderEditableTask(task: ArchitectPromptEditableTask): string {
+  const lines = [
+    `### ${task.code} — ${neutralizeArchitectMarkers(task.title)}`,
+    "",
+    `- id : ${task.id}`,
+    `- statut : ${task.status}`,
+    `- priorite : ${task.priority}`,
+    `- objectif : ${neutralizeArchitectMarkers(task.objective)}`,
+  ];
+  if (task.context !== null) {
+    lines.push(`- contexte : ${neutralizeArchitectMarkers(task.context)}`);
+  }
+  if (task.outOfScope !== null) {
+    lines.push(`- hors perimetre : ${neutralizeArchitectMarkers(task.outOfScope)}`);
+  }
+  if (task.documentReferences.length > 0) {
+    lines.push(`- documents : ${task.documentReferences.join(", ")}`);
+  }
+  if (task.dependsOn.length > 0) {
+    lines.push(`- attend : ${task.dependsOn.join(", ")}`);
+  }
+
+  lines.push("- commandes :");
+  if (task.commands.length === 0) {
+    lines.push("  aucune");
+  } else {
+    for (const [index, command] of task.commands.entries()) {
+      lines.push(
+        `  ${String(index)}. ${neutralizeArchitectMarkers(command.command)} (${command.executionMode})`,
+      );
+    }
+  }
+
+  lines.push("- criteres :");
+  for (const criterion of task.criteria) {
+    lines.push(`  - ${neutralizeArchitectMarkers(criterion.text)} (${criterion.verificationMode})`);
+    if (criterion.humanInstructions !== null) {
+      lines.push(`    consigne : ${neutralizeArchitectMarkers(criterion.humanInstructions)}`);
+    }
+    if (criterion.validationCommandIndexes.length > 0) {
+      lines.push(`    preuves : ${criterion.validationCommandIndexes.join(", ")}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function renderInstructions(kind: ArchitectSessionKind, replanAvailable: boolean): string {
   const projectUpdate =
     kind === ARCHITECT_SESSION_KIND.PROJECT ? renderProjectUpdateInstructions() : [];
+  const replan =
+    kind === ARCHITECT_SESSION_KIND.PROJECT && replanAvailable ? renderReplanInstructions() : [];
 
   return [
     "Tu es l'architecte produit et technique **durable** de ce projet.",
@@ -607,6 +875,7 @@ function renderInstructions(kind: ArchitectSessionKind): string {
     "decision importante n'y figure pas, dis-le a l'utilisateur — c'est une",
     "information utile, et lui seul peut l'y ajouter.",
     ...projectUpdate,
+    ...replan,
     "",
     "## Ce que tu ne fais jamais",
     "",
@@ -713,6 +982,53 @@ export function renderArchitectPrompt(input: ArchitectPromptInput): ArchitectPro
     );
   }
 
+  if (input.planningState !== null) {
+    const { locked, editable, omittedLocked } = input.planningState;
+
+    blocks.push(
+      section(
+        "Travail deja engage",
+        [
+          "Ces taches ne sont **jamais** replanifiables : elles ont commence, sont",
+          "terminees, sont inscrites dans la file d'execution, ou sont la tache",
+          "d'amorcage du repository. Elles te servent a comprendre ce qui existe",
+          "deja et a ne pas le reproposer.",
+          "",
+          "Tu peux les designer comme dependance d'une tache future. Tu ne peux ni",
+          "les modifier, ni les supprimer, ni les recopier dans le plan cible.",
+          "",
+          locked.length === 0
+            ? "Aucune tache engagee."
+            : locked.map(renderLockedTask).join("\n"),
+          ...(omittedLocked > 0
+            ? [
+                "",
+                `${String(omittedLocked)} tache(s) engagee(s) plus ancienne(s) ne sont pas listees ici.`,
+              ]
+            : []),
+        ].join("\n"),
+      ),
+    );
+
+    blocks.push(
+      section(
+        "Plan des taches futures",
+        [
+          "Ces taches n'ont jamais ete executees, ne sont pas en file, et sont donc",
+          "modifiables. Elles sont donnees dans l'ordre de planification actuel,",
+          "avec leur contrat complet.",
+          "",
+          "Si tu replanifies, l'etat cible que tu rends **remplace entierement**",
+          "cette liste : une tache absente de ta cible sera supprimee.",
+          "",
+          editable.length === 0
+            ? "Aucune tache future. Le plan de travail est vide."
+            : editable.map(renderEditableTask).join("\n\n"),
+        ].join("\n"),
+      ),
+    );
+  }
+
   // La documentation du repository passe **apres** l'etat durable de NOX — brief,
   // plan, memoire, taches. L'ordre porte une hierarchie : ce que l'utilisateur a
   // valide dans NOX est courant par construction, alors qu'un document du depot
@@ -778,8 +1094,8 @@ export function renderArchitectPrompt(input: ArchitectPromptInput): ArchitectPro
   );
 
   return {
-    version: architectPromptVersion(input.sessionKind),
-    instructions: renderInstructions(input.sessionKind),
+    version: architectPromptVersion(input.sessionKind, input.planningState !== null),
+    instructions: renderInstructions(input.sessionKind, input.planningState !== null),
     input: blocks.join("\n\n"),
   };
 }

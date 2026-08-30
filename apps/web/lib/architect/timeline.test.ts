@@ -13,6 +13,8 @@ import { describe, it } from "node:test";
 
 import { ARCHITECT_MESSAGE_ROLE } from "@nox/shared";
 
+import type { TimelineProjectChange } from "../replan/change.ts";
+
 import {
   buildArchitectTimeline,
   type TimelineMessage,
@@ -52,6 +54,26 @@ function update(
   return { generationId, updateId, status, briefChanges: 2, planChanges: 0 };
 }
 
+function change(
+  generationId: string,
+  proposalId: string,
+  status: TimelineProjectChange["status"] = "PENDING",
+): TimelineProjectChange {
+  return {
+    generationId,
+    proposalId,
+    updateId: null,
+    status,
+    briefChanges: 0,
+    planChanges: 0,
+    added: 1,
+    updated: 1,
+    removed: 0,
+    orderChanged: false,
+    stale: false,
+  };
+}
+
 /** Resume lisible du fil : « u a T:TASK-001 ». */
 function shape(entries: ReturnType<typeof buildArchitectTimeline>): string {
   return entries
@@ -61,6 +83,9 @@ function shape(entries: ReturnType<typeof buildArchitectTimeline>): string {
       }
       if (entry.kind === "update") {
         return `U:${entry.status}`;
+      }
+      if (entry.kind === "change") {
+        return `C:${entry.status}`;
       }
       return entry.role === ARCHITECT_MESSAGE_ROLE.USER ? "u" : "a";
     })
@@ -254,6 +279,39 @@ describe("propositions de mise a jour du projet", () => {
 
     assert.equal(entries.filter((entry) => entry.kind === "message").length, 2);
     const card = entries.find((entry) => entry.kind === "update");
+    assert.ok(card !== undefined);
+    assert.equal("content" in card, false);
+    assert.equal("role" in card, false);
+  });
+
+  it("place un changement de projet apres la reponse qui l'a produit", () => {
+    const entries = buildArchitectTimeline(
+      [user("1", "g1"), architect("2", "g1"), user("3", "g2")],
+      [],
+      [],
+      [change("g1", "p1")],
+    );
+
+    assert.equal(shape(entries), "u a C:PENDING u");
+  });
+
+  it("n'oublie pas un changement dont le tour n'a laisse aucun message", () => {
+    const entries = buildArchitectTimeline([user("1", null)], [], [], [change("g9", "p9")]);
+    assert.equal(shape(entries), "u C:PENDING");
+  });
+
+  it("ne cree aucun message pour un changement de projet", () => {
+    // Une carte n'est pas un message : elle n'a ni role, ni contenu, et ne peut
+    // donc pas entrer dans le transcript transmis au fournisseur.
+    const entries = buildArchitectTimeline(
+      [user("1", "g1"), architect("2", "g1")],
+      [],
+      [],
+      [change("g1", "p1", "APPLIED")],
+    );
+
+    assert.equal(entries.filter((entry) => entry.kind === "message").length, 2);
+    const card = entries.find((entry) => entry.kind === "change");
     assert.ok(card !== undefined);
     assert.equal("content" in card, false);
     assert.equal("role" in card, false);

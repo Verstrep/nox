@@ -504,6 +504,7 @@ export {
   ARCHITECT_SESSION_STATUSES,
   ARCHITECT_TURN_SCHEMA_VERSION,
   ARCHITECT_TURN_SCHEMA_VERSION_V3,
+  ARCHITECT_TURN_SCHEMA_VERSION_V4,
   ARCHITECT_TURN_STATE,
   ARCHITECT_TURN_STATES,
   EMPTY_ARCHITECT_USAGE,
@@ -557,6 +558,7 @@ export {
   USER_MESSAGE_CLOSE,
   USER_MESSAGE_OPEN,
   ARCHITECT_PROMPT_VERSION_V4,
+  ARCHITECT_PROMPT_VERSION_V5,
   BRIEF_CLOSE,
   BRIEF_OPEN,
   PLAN_CLOSE,
@@ -944,3 +946,66 @@ export type {
   TrackedStateRequest,
   TrackedStateSuccess,
 } from "./validation-runner.js";
+
+// --- Replanification (TASK-032) ----------------------------------------------
+
+export {
+  REPLAN_CHANGE,
+  REPLAN_CHANGES,
+  REPLAN_FIELD,
+  REPLAN_FIELDS,
+  REPLAN_LIMITS,
+  REPLAN_MAX_OUTPUT_TOKENS,
+  REPLAN_MODE,
+  REPLAN_MODES,
+  REPLAN_PROMPT_VERSION,
+  REPLAN_PROPOSAL_STATUS,
+  REPLAN_PROPOSAL_STATUSES,
+  REPLAN_SCHEMA_VERSION,
+  buildReplanSchema,
+  checkReplanTargetGraph,
+  isReplanChange,
+  isReplanMode,
+  isReplanProposal,
+  isReplanProposalStatus,
+  readArchitectReplan,
+} from "./replan.js";
+
+export type {
+  ArchitectPromptEditableTask,
+  ArchitectPromptLockedTask,
+  ArchitectPromptPlanningState,
+} from "./architect-prompt.js";
+
+export type {
+  ArchitectReplan,
+  ReplanChange,
+  ReplanField,
+  ReplanMode,
+  ReplanProposal,
+  ReplanProposalStatus,
+  ReplanRefusal,
+  ReplanResult,
+  ReplanSourceState,
+  ReplanSourceTask,
+  ReplanTargetTask,
+} from "./replan.js";
+
+export {
+  REPLAN_LOCK_REASON,
+  REPLAN_LOCK_REASONS,
+  REPLAN_UNAVAILABLE,
+  classifyReplanTask,
+  classifyReplanTasks,
+  isReplanLockReason,
+  lockedTaskIsHistorical,
+  replanAvailability,
+} from "./replan-classification.js";
+
+export type {
+  ReplanAvailability,
+  ReplanClassifiedTask,
+  ReplanLockReason,
+  ReplanTaskFacts,
+  ReplanUnavailableCode,
+} from "./replan-classification.js";

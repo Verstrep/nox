@@ -360,6 +360,16 @@ export type TaskRowInput = CreateTaskInput & {
   /** Position dans l'ordre valide par l'humain, a partir de 0. */
   backlogItemPosition?: number | null;
   /**
+   * Replanification qui a cree cette tache, le cas echeant.
+   *
+   * Distincte de `backlogProposalId`, et jamais un remplacement : une tache
+   * creee par le backlog initial puis modifiee par un replan reste une tache du
+   * backlog. Seule une tache **nee** d'une replanification porte ce lien.
+   */
+  replanProposalId?: string | null;
+  /** Position dans le plan de travail futur, ou `null` pour l'ordre historique. */
+  planningOrder?: number | null;
+  /**
    * Plan de verification explicite.
    *
    * Absent, la tache recoit les defauts surs — chaque critere `HUMAN` avec
@@ -412,6 +422,8 @@ export async function writeTaskRow(
       documentSyncStatus: TASK_DOCUMENT_SYNC_STATUS.PENDING,
       backlogProposalId: input.backlogProposalId ?? null,
       backlogItemPosition: input.backlogItemPosition ?? null,
+      replanProposalId: input.replanProposalId ?? null,
+      planningOrder: input.planningOrder ?? null,
       documentReferences: {
         create: input.documentReferences.map((path, position) => ({ position, path })),
       },

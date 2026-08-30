@@ -1003,3 +1003,57 @@ doit le dire explicitement et la justifier.
   ni priorité, ni équité, ni tourniquet : il n'y a pas de ressource partagée à répartir.
 - **Les politiques de livraison et de correction restent locales à chaque projet.** Aucun
   héritage, aucun réglage global.
+
+### 8.21 Replanification depuis la conversation projet
+
+- **La conversation principale du projet est l'endroit d'où le projet évolue.** Un changement
+  d'exigence s'y dit, et l'Architecte peut y proposer une mise à jour du projet, une
+  replanification du travail futur, ou les deux. Il n'existe ni seconde conversation, ni second
+  écran de planification, ni retour à une planification neuve.
+- **La planification initiale et la replanification sont deux workflows distincts.**
+  `backlog/2` crée le **premier** plan d'un projet ; `replan/1` fait évoluer celui qui existe.
+  Un projet sans backlog `APPLIED` n'est pas replanifiable, et l'interface renvoie vers la
+  planification initiale : aucun second chemin ne crée un premier plan.
+- **Le passé est immuable, le futur est replanifiable.** Une tâche qui possède une exécution,
+  qui est inscrite dans la file, dont le statut n'est plus un statut d'avant-exécution, ou qui
+  est `TASK-000`, est verrouillée. Son contrat n'est pas transmis au fournisseur, et rien ne
+  peut le réécrire. La classification est celle de TASK-024, jamais une seconde règle.
+- **`TASK-000` n'est jamais réécrite par une replanification**, et un changement qui modifierait
+  réellement le brief ou le plan est refusé tant qu'elle n'a pas tourné. NOX ne la réécrit ni ne
+  la supprime à la place de l'utilisateur.
+- **Le fournisseur rend un état cible complet, jamais des opérations.** `KEEP`, `UPDATE`,
+  `REMOVE`, `ADD`, le déplacement et le changement de dépendances sont **dérivés** par NOX en
+  comparant la cible au plan courant. Le fournisseur ne pose aucune de ces étiquettes.
+- **Contrat, position et dépendances sont trois axes indépendants.** L'autorité sur le premier
+  est `taskContractChanged` ; deux écritures équivalentes d'un même contrat donnent `KEEP`. Un
+  reordonnancement seul ne dégrade aucun statut et ne réécrit aucun document.
+- **L'identifiant et le code d'une tâche existante sont immuables.** Aucun formulaire ne les
+  porte, et le navigateur n'en propose jamais.
+- **Un code n'est attribué qu'à l'application, et jamais recyclé.** Il vient de
+  `Project.nextTaskSequence`, réservé atomiquement dans la transaction. `planningOrder` est
+  l'ordre du plan, distinct du code : `TASK-006, TASK-011, TASK-007` est un plan valide.
+- **Une mise à jour du projet et une replanification issues du même tour forment une seule
+  décision humaine.** Une carte, une revue, un `Apply project change`, un `Dismiss`. Jamais deux
+  boutons, jamais deux transactions.
+- **Une proposition ne modifie rien.** Ni brief, ni plan, ni tâche, ni document, ni file. Seule
+  une application explicitement humaine change quelque chose.
+- **`providerJson` est immuable, et `appliedJson` porte ce que l'humain a retenu.** Les tâches
+  supprimées y figurent nommément — code, titre et contrat d'alors — pour rester racontables.
+- **L'application relit tout dans la transaction qui écrit** : proposition, statut, mise à jour
+  liée, brief, plan, tâches, statuts, exécutions, nature, file, dépendances, `nextTaskSequence`,
+  et l'empreinte de planification recalculée depuis la base. Le graphe final est revalidé par
+  `checkReplanTargetGraph`.
+- **Un état devenu obsolète est refusé, jamais fusionné.** Aucun chemin de code ne mène d'un
+  conflit à un appel, et il n'existe ni « appliquer quand même », ni drapeau de forçage : pas de
+  `force`, pas d'`applyAnyway`, pas d'`ignoreStale`.
+- **Les tâches créées naissent `DRAFT` et hors file.**
+- **Appliquer ou écarter un changement n'a aucun effet d'exécution.** Zéro appel à OpenAI, zéro
+  Claude Code, zéro validation, zéro correction, zéro livraison Git, zéro démarrage, pause ou
+  avancement de file. Ce sont des écritures SQLite, puis des documents Markdown.
+- **Les documents Markdown suivent la transaction, ils ne la conditionnent pas.** Seules les
+  tâches réellement changées sont réécrites ; une suppression retire le document dont NOX
+  connaît la révision, et un document divergent produit un refus nommé, jamais un écrasement.
+- **Une référence croisée entre projets est refusée**, et sans confirmer l'existence de la ligne
+  visée : une proposition d'un autre projet est introuvable, pas « refusée ».
+- **TASK-032 achève le périmètre de V1 prévu.** Ce qui vient ensuite est un pilote réel, pas une
+  fonctionnalité écrite d'avance.

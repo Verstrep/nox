@@ -34,6 +34,13 @@ import {
   readArchitectProjectUpdate,
   type ArchitectProjectUpdateProposal,
 } from "./project-plan.js";
+import {
+  REPLAN_MODE,
+  buildReplanSchema,
+  readArchitectReplan,
+  type ArchitectReplan,
+  type ReplanSourceState,
+} from "./replan.js";
 import { createStatusGuard } from "./statuses.js";
 import { TASK_PRIORITIES, isTaskPriority, type TaskPriority } from "./tasks.js";
 
@@ -66,9 +73,23 @@ export const ARCHITECT_TURN_SCHEMA_VERSION = 2;
  */
 export const ARCHITECT_TURN_SCHEMA_VERSION_V3 = 3;
 
+/**
+ * Version du contrat de tour d'une conversation projet, depuis TASK-032.
+ *
+ * Elle ajoute un champ, et un seul : `replan`. Le meme principe que la version 3
+ * avant elle — un tour dit quelle version il suivait, et se relit avec elle. Les
+ * generations enregistrees en version 3 le restent, et leurs tours passes
+ * demeurent lisibles sans migration.
+ *
+ * Ce champ ne remplace pas `projectUpdate` : les deux coexistent, et le cas
+ * central de TASK-032 est justement celui ou un meme tour propose les deux.
+ */
+export const ARCHITECT_TURN_SCHEMA_VERSION_V4 = 4;
+
 export type ArchitectTurnSchemaVersion =
   | typeof ARCHITECT_TURN_SCHEMA_VERSION
-  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V3;
+  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V3
+  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V4;
 
 /**
  * Issue d'un tour de conversation.
@@ -344,10 +365,19 @@ export function architectSessionGenerationLimit(kind: ArchitectSessionKind): num
  */
 export function architectTurnSchemaVersion(
   kind: ArchitectSessionKind,
+  /**
+   * Le plan de travail est-il transmis a ce tour ?
+   *
+   * Faire dependre la version de ce qui est reellement envoye, et non d'un
+   * reglage : un projet qui n'a pas encore de plan ne recoit pas de champ
+   * `replan`, et se comporte donc exactement comme avant TASK-032.
+   */
+  replanAvailable = false,
 ): ArchitectTurnSchemaVersion {
-  return kind === ARCHITECT_SESSION_KIND.PROJECT
-    ? ARCHITECT_TURN_SCHEMA_VERSION_V3
-    : ARCHITECT_TURN_SCHEMA_VERSION;
+  if (kind !== ARCHITECT_SESSION_KIND.PROJECT) {
+    return ARCHITECT_TURN_SCHEMA_VERSION;
+  }
+  return replanAvailable ? ARCHITECT_TURN_SCHEMA_VERSION_V4 : ARCHITECT_TURN_SCHEMA_VERSION_V3;
 }
 
 /**
@@ -643,6 +673,18 @@ export type ArchitectTurn = {
    * c'est meme le cas le plus courant au debut d'un projet.
    */
   projectUpdate: ArchitectProjectUpdateProposal | null;
+  /**
+   * Ce que ce tour dit du **futur** du projet, depuis TASK-032.
+   *
+   * `{ mode: UNCHANGED }` dans l'immense majorite des tours, et toujours dans
+   * les versions 2 et 3, ou le champ n'apparait meme pas dans le schema.
+   *
+   * **Independant de `state` et de `projectUpdate`.** Le cas central est
+   * pourtant celui ou les deux vont ensemble : une decision qui change le
+   * perimetre change generalement le plan **et** les taches qui restent a faire.
+   * Les separer dans le contrat permet de le dire, sans jamais l'imposer.
+   */
+  replan: ArchitectReplan;
 };
 
 export type ArchitectTurnResult =
@@ -664,6 +706,14 @@ export function readArchitectTurn(
   value: unknown,
   availableDocuments: readonly string[],
   expectedVersion: ArchitectTurnSchemaVersion = ARCHITECT_TURN_SCHEMA_VERSION,
+  /**
+   * Etat source contre lequel une replanification est validee.
+   *
+   * Relu en base par le serveur, jamais recu du navigateur. Absent, une
+   * replanification proposee est **refusee** plutot que lue contre rien : sans
+   * cet etat, NOX ne saurait dire ni ce qui est modifiable, ni ce qui existe.
+   */
+  replanSource: ReplanSourceState | null = null,
 ): ArchitectTurnResult {
   if (!isRecord(value)) {
     return refuse("turn", "La reponse de l'architecte n'est pas une structure lisible.");
@@ -707,7 +757,10 @@ export function readArchitectTurn(
   // fournisseur qui en rendrait un malgre tout serait simplement ignore : une
   // session de conception de tache n'a jamais eu le droit d'en proposer.
   let projectUpdate: ArchitectProjectUpdateProposal | null = null;
-  if (expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V3) {
+  if (
+    expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V3 ||
+    expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V4
+  ) {
     const rawUpdate: unknown = value["projectUpdate"];
     if (isRecord(rawUpdate)) {
       const readUpdate = readArchitectProjectUpdate(rawUpdate);
@@ -715,6 +768,29 @@ export function readArchitectTurn(
         return refuse(readUpdate.refusal.field, readUpdate.refusal.message);
       }
       projectUpdate = readUpdate.proposal;
+    }
+  }
+
+  // La replanification se lit **apres** la mise a jour du projet, et
+  // independamment d'elle comme de `state`. Les combinaisons sont toutes
+  // legitimes, y compris un `CONTINUE` qui replanifie sans proposer de tache :
+  // c'est meme la forme attendue depuis TASK-032, ou la conversation propose un
+  // changement de plan plutot qu'une tache isolee.
+  let replan: ArchitectReplan = { mode: REPLAN_MODE.UNCHANGED };
+  if (expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V4) {
+    const rawReplan: unknown = value["replan"];
+    if (isRecord(rawReplan) && rawReplan["mode"] === REPLAN_MODE.PROPOSED) {
+      if (replanSource === null) {
+        return refuse(
+          "replan",
+          "L'architecte propose un nouveau plan alors que ce projet ne peut pas encore etre replanifie.",
+        );
+      }
+      const readReplan = readArchitectReplan(rawReplan, replanSource, availableDocuments);
+      if (!readReplan.ok) {
+        return refuse(readReplan.refusal.field, readReplan.refusal.message);
+      }
+      replan = readReplan.replan;
     }
   }
 
@@ -736,6 +812,7 @@ export function readArchitectTurn(
         questions,
         proposal: null,
         projectUpdate,
+        replan,
       },
     };
   }
@@ -768,6 +845,7 @@ export function readArchitectTurn(
       questions: [],
       proposal: validated.proposal,
       projectUpdate,
+      replan,
     },
   };
 }
@@ -844,9 +922,17 @@ export function buildArchitectTurnSchema(
 
   const required = ["schemaVersion", "state", "message", "questions", "proposal"];
 
-  if (version === ARCHITECT_TURN_SCHEMA_VERSION_V3) {
+  if (
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V3 ||
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V4
+  ) {
     properties["projectUpdate"] = projectUpdateSchema();
     required.push("projectUpdate");
+  }
+
+  if (version === ARCHITECT_TURN_SCHEMA_VERSION_V4) {
+    properties["replan"] = buildReplanSchema();
+    required.push("replan");
   }
 
   return { type: "object", additionalProperties: false, required, properties };

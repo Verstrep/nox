@@ -298,8 +298,8 @@ export async function writeArchitectProjectUpdate(
     proposed: ArchitectProjectUpdateProposal;
     baseState: ProjectUpdateBase;
   },
-): Promise<void> {
-  await tx.architectProjectUpdate.create({
+): Promise<string> {
+  const row = await tx.architectProjectUpdate.create({
     data: {
       generationId: input.generationId,
       projectId: input.projectId,
@@ -309,7 +309,11 @@ export async function writeArchitectProjectUpdate(
       baseBriefRevision: input.baseState.briefRevision,
       basePlanRevision: input.baseState.planRevision,
     },
+    select: { id: true },
   });
+  // L'identifiant est rendu depuis TASK-032 : une replanification du meme tour
+  // s'y lie, et les deux forment alors un seul changement de projet.
+  return row.id;
 }
 
 /** Lit une proposition par son identifiant. */

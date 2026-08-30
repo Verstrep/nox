@@ -19,6 +19,7 @@ import process from "node:process";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { loadReplanState } from "@/lib/replan/load";
 import { applyArchitectProposal } from "@/lib/architect/apply";
 import { architectOpeningMessage } from "@/lib/architect/composer";
 import { loadArchitectConfig } from "@/lib/architect/config";
@@ -157,6 +158,10 @@ export async function reviewTurnAction(
       structuredState: await loadStructuredState(db, loaded.project),
       projectId,
       planTools: projectPlanTools(loaded.project.repositoryPath),
+      // Relu a chaque tour, comme la memoire et l'etat structure : une tache
+      // inscrite en file entre deux messages doit apparaitre verrouillee au tour
+      // suivant. Une session de conception de tache ne replanifie rien.
+      planningState: await loadReplanState(db, loaded.session.kind, projectId),
       // Le modele n'entre que dans l'empreinte d'entree : une configuration
       // incomplete n'empeche ni de preparer, ni de relire ce qui partirait.
       model: config.ok ? config.config.model : "",
@@ -216,6 +221,10 @@ export async function sendTurnAction(
       structuredState: await loadStructuredState(db, loaded.project),
       projectId,
       planTools: projectPlanTools(loaded.project.repositoryPath),
+      // Relu a chaque tour, comme la memoire et l'etat structure : une tache
+      // inscrite en file entre deux messages doit apparaitre verrouillee au tour
+      // suivant. Une session de conception de tache ne replanifie rien.
+      planningState: await loadReplanState(db, loaded.session.kind, projectId),
       model: config.config.model,
       provider: new OpenAIArchitectProvider({ apiKey: config.config.apiKey }),
       environment: process.env,
@@ -282,6 +291,10 @@ export async function sendMessageAction(
       structuredState: await loadStructuredState(db, loaded.project),
       projectId,
       planTools: projectPlanTools(loaded.project.repositoryPath),
+      // Relu a chaque tour, comme la memoire et l'etat structure : une tache
+      // inscrite en file entre deux messages doit apparaitre verrouillee au tour
+      // suivant. Une session de conception de tache ne replanifie rien.
+      planningState: await loadReplanState(db, loaded.session.kind, projectId),
       model: config.config.model,
       provider: new OpenAIArchitectProvider({ apiKey: config.config.apiKey }),
       environment: process.env,

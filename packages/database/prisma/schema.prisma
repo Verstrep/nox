@@ -161,6 +161,7 @@ model Project {
   brief              ProjectBrief?
   v1Plan             ProjectV1Plan?
   projectUpdates     ArchitectProjectUpdate[]
+  replanProposals    ArchitectReplanProposal[]
   backlogGenerations ArchitectBacklogGeneration[]
   backlogProposals   ArchitectBacklogProposal[]
   queueEntries       TaskQueueEntry[]
@@ -430,6 +431,103 @@ model ArchitectProjectUpdate {
   generation ArchitectGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
   project    Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  /// Replanification proposee dans le meme tour, le cas echeant.
+  ///
+  /// Quand elle existe, les deux propositions forment **un** changement de
+  /// projet : elles s'appliquent ensemble et s'ecartent ensemble.
+  replanProposal ArchitectReplanProposal?
+
+  @@index([projectId, createdAt])
+}
+
+/// Replanification des taches futures proposee par l'Architecte lors d'un tour.
+///
+/// ## Une proposition, jamais une ecriture
+///
+/// Le fournisseur peut proposer un nouvel etat cible du plan de travail. Il ne
+/// l'applique pas : seule une action humaine explicite le fait, et elle rejoue
+/// **toutes** les validations — un etat valide il y a vingt minutes ne prouve
+/// rien sur l'etat d'aujourd'hui.
+///
+/// ## Ce que cette table ne contient pas
+///
+/// Ni les taches verrouillees, ni le brief, ni le plan de V1. La cible ne porte
+/// que le **futur** : les taches deja engagees restent ou elles sont, et l'etat
+/// structure du projet reste l'affaire de `ArchitectProjectUpdate`, auquel cette
+/// proposition se lie quand les deux viennent du meme tour.
+model ArchitectReplanProposal {
+  id           String @id @default(cuid())
+  generationId String @unique
+  projectId    String
+
+  /// Mise a jour du projet proposee dans le meme tour, le cas echeant.
+  ///
+  /// L'index unique porte des deux cotes : un tour produit au plus une mise a
+  /// jour et au plus une replanification, et les deux forment alors un seul
+  /// changement logique. `Cascade` : sans la mise a jour a laquelle elle est
+  /// liee, cette replanification ne raconte plus la meme histoire.
+  projectUpdateId String? @unique
+
+  /// `PENDING`, `APPLIED` ou `DISMISSED`.
+  ///
+  /// Il n'existe volontairement pas de statut `STALE` : la peremption se derive
+  /// de la comparaison entre les empreintes enregistrees et celles
+  /// d'aujourd'hui. La persister obligerait a la recalculer a chaque changement
+  /// du projet, et laisserait des propositions marquees perimees alors que
+  /// l'etat est revenu a ce qu'il etait.
+  status String
+
+  /// Pourquoi le modele propose ce changement. Contenu, jamais instruction.
+  rationale String
+
+  /// Nombre d'elements de la cible, et nombre de taches nouvelles parmi eux.
+  ///
+  /// Derives, et stockes : ils permettent d'afficher une carte de proposition
+  /// sans deserialiser la cible entiere a chaque rendu de la conversation.
+  targetCount Int
+  newCount    Int
+
+  /// `ReplanProposal` serialise, tel que le fournisseur l'a rendu.
+  ///
+  /// **Immuable.** Aucune ecriture ne le reecrit, y compris quand l'utilisateur
+  /// modifie la cible avant de l'appliquer : ce champ repond a « qu'a repondu le
+  /// modele ? », et cette question a une seule reponse.
+  providerJson String
+
+  /// Cible reellement appliquee par l'humain, serialisee.
+  ///
+  /// `null` tant que la proposition n'est pas `APPLIED`. Sans cette colonne, une
+  /// proposition modifiee avant application ne laisserait aucune trace de ce qui
+  /// a ete retenu — et une tache supprimee par ce replan ne serait plus
+  /// explicable nulle part.
+  appliedJson String?
+
+  /// Revisions du brief et du plan au moment de la proposition.
+  ///
+  /// Capturees a la preparation du tour, jamais relues apres l'appel : ce sont
+  /// celles que le fournisseur a reellement vues.
+  baseBriefRevision String?
+  basePlanRevision  String?
+
+  /// Empreinte de l'etat de planification vu par le fournisseur.
+  ///
+  /// Elle couvre les taches verrouillees, les contrats modifiables, les
+  /// dependances, l'ordre de planification et l'appartenance a la file. Toute
+  /// divergence a l'application refuse la proposition — jamais ne la fusionne.
+  planningFingerprint String
+
+  appliedAt   DateTime?
+  dismissedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  /// `Cascade` comme les messages : une proposition ne raconte rien sans son tour.
+  generation    ArchitectGeneration     @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  project       Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectUpdate ArchitectProjectUpdate? @relation(fields: [projectUpdateId], references: [id], onDelete: Cascade)
+
+  /// Taches creees par l'application de cette replanification.
+  tasks Task[]
+
   @@index([projectId, createdAt])
 }
 
@@ -583,6 +681,48 @@ model Task {
 
   backlogProposal ArchitectBacklogProposal? @relation(fields: [backlogProposalId], references: [id], onDelete: Restrict)
 
+  /// Replanification qui a cree cette tache, le cas echeant.
+  ///
+  /// Elle ne remplace jamais `backlogProposalId` : une tache issue du backlog
+  /// initial puis **modifiee** par un replan reste une tache creee par ce
+  /// backlog. Reecrire sa provenance ferait perdre la reponse a « d'ou vient
+  /// cette tache ? », qui n'a qu'une seule bonne reponse. C'est la proposition
+  /// de replan appliquee, elle, qui documente la modification.
+  ///
+  /// `Restrict` comme les autres liens de provenance : une proposition de replan
+  /// n'est pas supprimable tant qu'une tache la designe. Retracer d'ou vient une
+  /// tache vaut mieux qu'une suppression silencieuse.
+  ///
+  /// La suppression d'un projet leve ce lien **explicitement**, avant de
+  /// supprimer quoi que ce soit — voir `deleteProjectState`. Ce n'est pas un
+  /// contournement : une replanification pend au tour de conversation qui l'a
+  /// produite, et un `ArchitectGeneration` doit disparaitre avant les taches,
+  /// dont son `appliedTaskId` depend. Sans ce geste nomme, chaque table
+  /// attendrait l'autre.
+  replanProposalId String?
+
+  replanProposal ArchitectReplanProposal? @relation(fields: [replanProposalId], references: [id], onDelete: Restrict)
+
+  /// Position de cette tache dans le plan de travail **futur**, a partir de 0.
+  ///
+  /// ## Pourquoi un ordre separe du code
+  ///
+  /// Un code de tache est un identifiant historique : il est attribue une fois,
+  /// ne change jamais, et ne dit rien de l'ordre dans lequel le travail doit
+  /// avancer. Un replan qui voudrait faire passer une tache avant une autre n'a
+  /// donc aucun moyen de l'exprimer — sauf a renumeroter les codes, ce que NOX
+  /// n'a pas le droit de faire.
+  ///
+  /// `backlogItemPosition` ne suffisait pas : il decrit une position **dans un
+  /// backlog**, vaut `null` pour toute tache ecrite a la main, et deux backlogs
+  /// appliques produisent deux positions 0.
+  ///
+  /// `null` signifie « ordre historique » : les lecteurs retombent alors sur
+  /// l'ordre des codes, deterministe et vrai. Aucune valeur n'a ete fabriquee a
+  /// la migration : inventer un ordre que personne n'a exprime aurait produit
+  /// une intention fausse.
+  planningOrder Int?
+
   /// Dependances sortantes : les taches que celle-ci attend.
   dependencies TaskDependency[] @relation("TaskDependencyFrom")
 
@@ -601,6 +741,8 @@ model Task {
   @@unique([projectId, sequence])
   @@index([projectId, status])
   @@index([backlogProposalId, backlogItemPosition])
+  @@index([replanProposalId])
+  @@index([projectId, planningOrder])
 }
 
 /// Une execution : un passage de Claude Code sur une tache.
@@ -1435,6 +1577,9 @@ model ArchitectGeneration {
   appliedTask   Task?                   @relation("TaskFromGeneration", fields: [appliedTaskId], references: [id], onDelete: Restrict)
   messages      ArchitectMessage[]
   projectUpdate ArchitectProjectUpdate?
+
+  /// Replanification proposee par ce tour, le cas echeant.
+  replanProposal ArchitectReplanProposal?
 
   @@unique([sessionId, sequence])
   @@unique([appliedTaskId])

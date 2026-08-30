@@ -36,6 +36,7 @@ import {
   getArchitectSession,
   listArchitectProjectUpdatesForSession,
   loadProjectStructuredState,
+  loadReplanPlanningState,
   saveProjectV1Plan,
   toDatabaseFilePath,
   toSqliteUrl,
@@ -179,6 +180,10 @@ async function send(
     ),
     projectId: project.id,
     planTools: projectPlanTools(project.repositoryPath),
+    // L'etat reel du projet, comme la Server Action le lit. Ces projets n'ont
+    // aucun backlog applique : la replanification y est donc indisponible, et le
+    // tour parle encore `architect/4` — exactement comme avant TASK-032.
+    planningState: await loadReplanPlanningState(db, project.id),
     model: "modele-de-test",
     provider,
     environment: ENVIRONMENT,

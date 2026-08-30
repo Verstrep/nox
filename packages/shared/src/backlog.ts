@@ -260,8 +260,16 @@ function refuse(field: string, message: string): ArchitectBacklogResult {
   return { ok: false, refusal: { field, message } };
 }
 
-/** Lit un texte obligatoire, normalise et borne. */
-function readRequiredText(value: unknown, max: number): string | null {
+/**
+ * Lit un texte obligatoire, normalise et borne.
+ *
+ * Ces lecteurs et les deux validateurs de contrat plus bas sont **exportes**
+ * depuis TASK-032 : `replan/1` propose exactement le meme contrat de tache que
+ * `backlog/2`, avec les memes bornes et les memes gardes. Deux implementations
+ * presque identiques auraient diverge au premier ajout de champ — et celle qui
+ * aurait tort serait celle qui laisse passer.
+ */
+export function readProposedText(value: unknown, max: number): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -273,7 +281,7 @@ function readRequiredText(value: unknown, max: number): string | null {
 }
 
 /** Lit un texte facultatif. `null` et `""` disent la meme chose : rien. */
-function readOptionalText(value: unknown, max: number): string | null | undefined {
+export function readOptionalProposedText(value: unknown, max: number): string | null | undefined {
   if (value === null || value === undefined) {
     return null;
   }
@@ -294,7 +302,7 @@ function readOptionalText(value: unknown, max: number): string | null | undefine
  * un critere sous deux formulations identiques, et une liste qui dit deux fois
  * la meme chose ne dit rien de plus.
  */
-function readList(value: unknown, limits: { max: number; length: number }): string[] | null {
+export function readProposedList(value: unknown, limits: { max: number; length: number }): string[] | null {
   if (value === undefined || value === null) {
     return [];
   }
@@ -342,7 +350,7 @@ function readBacklogTask(
     };
   }
 
-  const title = readRequiredText(value["title"], ARCHITECT_BACKLOG_LIMITS.title);
+  const title = readProposedText(value["title"], ARCHITECT_BACKLOG_LIMITS.title);
   if (title === null) {
     return { ok: false, refusal: { field: at("title"), message: `${label} n'a pas de titre exploitable.` } };
   }
@@ -355,7 +363,7 @@ function readBacklogTask(
     };
   }
 
-  const objective = readRequiredText(value["objective"], ARCHITECT_BACKLOG_LIMITS.objective);
+  const objective = readProposedText(value["objective"], ARCHITECT_BACKLOG_LIMITS.objective);
   if (objective === null) {
     return {
       ok: false,
@@ -363,12 +371,12 @@ function readBacklogTask(
     };
   }
 
-  const context = readOptionalText(value["context"], ARCHITECT_BACKLOG_LIMITS.context);
+  const context = readOptionalProposedText(value["context"], ARCHITECT_BACKLOG_LIMITS.context);
   if (context === undefined) {
     return { ok: false, refusal: { field: at("context"), message: `Le contexte de ${label} est trop long.` } };
   }
 
-  const acceptanceCriteria = readList(
+  const acceptanceCriteria = readProposedList(
     value["acceptanceCriteria"],
     ARCHITECT_BACKLOG_LIMITS.criteria,
   );
@@ -391,7 +399,7 @@ function readBacklogTask(
     };
   }
 
-  const outOfScope = readList(value["outOfScope"], ARCHITECT_BACKLOG_LIMITS.outOfScope);
+  const outOfScope = readProposedList(value["outOfScope"], ARCHITECT_BACKLOG_LIMITS.outOfScope);
   if (outOfScope === null) {
     return {
       ok: false,
@@ -399,7 +407,7 @@ function readBacklogTask(
     };
   }
 
-  const documentReferences = readList(
+  const documentReferences = readProposedList(
     value["documentReferences"],
     ARCHITECT_BACKLOG_LIMITS.documents,
   );
@@ -424,7 +432,7 @@ function readBacklogTask(
     }
   }
 
-  const validationCommands = readList(
+  const validationCommands = readProposedList(
     value["validationCommands"],
     ARCHITECT_BACKLOG_LIMITS.commands,
   );
@@ -494,7 +502,7 @@ export function readArchitectBacklogProposal(
     );
   }
 
-  const message = readRequiredText(value["message"], ARCHITECT_BACKLOG_LIMITS.message);
+  const message = readProposedText(value["message"], ARCHITECT_BACKLOG_LIMITS.message);
   if (message === null) {
     return refuse("message", "La reponse de planification ne porte aucun resume exploitable.");
   }
@@ -717,7 +725,7 @@ function readIndexes(value: unknown, count: number): number[] | null {
 }
 
 /** Valide les commandes d'un element de version 2. */
-function readBacklogCommands(
+export function readProposedTaskCommands(
   value: unknown,
   label: string,
   at: (field: string) => string,
@@ -749,7 +757,7 @@ function readBacklogCommands(
         refusal: { field: at("validationCommands"), message: `Une commande de ${label} n'est pas lisible.` },
       };
     }
-    const command = readRequiredText(raw["command"], ARCHITECT_BACKLOG_LIMITS.commands.length);
+    const command = readProposedText(raw["command"], ARCHITECT_BACKLOG_LIMITS.commands.length);
     if (command === null) {
       return {
         ok: false,
@@ -819,7 +827,7 @@ function readBacklogCommands(
 }
 
 /** Valide les criteres d'un element de version 2. */
-function readBacklogCriteria(
+export function readProposedTaskCriteria(
   value: unknown,
   label: string,
   at: (field: string) => string,
@@ -853,7 +861,7 @@ function readBacklogCriteria(
       };
     }
 
-    const text = readRequiredText(raw["text"], ARCHITECT_BACKLOG_LIMITS.criteria.length);
+    const text = readProposedText(raw["text"], ARCHITECT_BACKLOG_LIMITS.criteria.length);
     if (text === null) {
       return {
         ok: false,
@@ -887,7 +895,7 @@ function readBacklogCriteria(
     }
 
     if (verificationMode === VERIFICATION_MODE.HUMAN) {
-      const instructions = readRequiredText(
+      const instructions = readProposedText(
         raw["humanInstructions"],
         MAX_HUMAN_INSTRUCTIONS_LENGTH,
       );
@@ -987,7 +995,7 @@ function readBacklogTaskV2(
     };
   }
 
-  const title = readRequiredText(value["title"], ARCHITECT_BACKLOG_LIMITS.title);
+  const title = readProposedText(value["title"], ARCHITECT_BACKLOG_LIMITS.title);
   if (title === null) {
     return { ok: false, refusal: { field: at("title"), message: `${label} n'a pas de titre exploitable.` } };
   }
@@ -1000,7 +1008,7 @@ function readBacklogTaskV2(
     };
   }
 
-  const objective = readRequiredText(value["objective"], ARCHITECT_BACKLOG_LIMITS.objective);
+  const objective = readProposedText(value["objective"], ARCHITECT_BACKLOG_LIMITS.objective);
   if (objective === null) {
     return {
       ok: false,
@@ -1008,12 +1016,12 @@ function readBacklogTaskV2(
     };
   }
 
-  const context = readOptionalText(value["context"], ARCHITECT_BACKLOG_LIMITS.context);
+  const context = readOptionalProposedText(value["context"], ARCHITECT_BACKLOG_LIMITS.context);
   if (context === undefined) {
     return { ok: false, refusal: { field: at("context"), message: `Le contexte de ${label} est trop long.` } };
   }
 
-  const outOfScope = readList(value["outOfScope"], ARCHITECT_BACKLOG_LIMITS.outOfScope);
+  const outOfScope = readProposedList(value["outOfScope"], ARCHITECT_BACKLOG_LIMITS.outOfScope);
   if (outOfScope === null) {
     return {
       ok: false,
@@ -1021,7 +1029,7 @@ function readBacklogTaskV2(
     };
   }
 
-  const documentReferences = readList(
+  const documentReferences = readProposedList(
     value["documentReferences"],
     ARCHITECT_BACKLOG_LIMITS.documents,
   );
@@ -1048,12 +1056,12 @@ function readBacklogTaskV2(
 
   // Les commandes sont lues avant les criteres : un critere automatise se juge
   // sur ce que ses preuves sont reellement, donc elles doivent exister d'abord.
-  const commands = readBacklogCommands(value["validationCommands"], label, at);
+  const commands = readProposedTaskCommands(value["validationCommands"], label, at);
   if (!commands.ok) {
     return { ok: false, refusal: commands.refusal };
   }
 
-  const criteria = readBacklogCriteria(
+  const criteria = readProposedTaskCriteria(
     value["acceptanceCriteria"],
     label,
     at,
@@ -1103,7 +1111,7 @@ export function readArchitectBacklogProposalV2(
     };
   }
 
-  const message = readRequiredText(value["message"], ARCHITECT_BACKLOG_LIMITS.message);
+  const message = readProposedText(value["message"], ARCHITECT_BACKLOG_LIMITS.message);
   if (message === null) {
     return {
       ok: false,

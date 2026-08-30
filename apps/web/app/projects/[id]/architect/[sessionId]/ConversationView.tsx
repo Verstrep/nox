@@ -12,6 +12,8 @@ import {
   latestArchitectProposal,
   latestArchitectQuestions,
   listArchitectSessionTasks,
+  listReplanProposalsForSession,
+  loadReplanPlanningState,
   type ArchitectSessionView,
   type Project,
 } from "@nox/database";
@@ -21,6 +23,8 @@ import process from "node:process";
 
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { loadTimelineProjectChanges } from "@/lib/replan/change";
+import { loadReplanState } from "@/lib/replan/load";
 import { ARCHITECT_ENVIRONMENT_VARIABLES, loadArchitectConfig } from "@/lib/architect/config";
 import {
   architectComposerTitle,
@@ -114,20 +118,40 @@ export async function ArchitectConversation({
         structuredState: await loadStructuredState(db, project),
         projectId: project.id,
         planTools: projectPlanTools(project.repositoryPath),
+        // Relu a chaque rendu, comme la memoire : l'apercu doit decrire le plan
+        // actuel, pas celui qui existait a l'ouverture de la conversation.
+        planningState: await loadReplanState(db, session.kind, project.id),
         model: config.ok ? config.config.model : "",
         environment: process.env,
       });
 
   // Evenements locaux, derives de la base : un rafraichissement les retrouve
   // tels quels, sans qu'aucun etat de navigateur soit conserve.
+  const structured = await loadStructuredState(db, project);
+  const proposals = await listReplanProposalsForSession(db, sessionId);
+
+  // Une mise a jour du projet liee a une replanification n'a pas sa propre
+  // carte : les deux forment un seul changement, et l'afficher deux fois
+  // inviterait a le trancher en deux fois.
+  const linkedUpdateIds = new Set(
+    proposals
+      .map((proposal) => proposal.projectUpdateId)
+      .filter((id): id is string => id !== null),
+  );
+  const updates = (await loadTimelineProjectUpdates(db, project, sessionId, structured)).filter(
+    (update) => !linkedUpdateIds.has(update.updateId),
+  );
+
   const entries = buildArchitectTimeline(
     session.messages,
     await listArchitectSessionTasks(db, sessionId),
-    await loadTimelineProjectUpdates(
+    updates,
+    await loadTimelineProjectChanges(
       db,
       project,
-      sessionId,
-      await loadStructuredState(db, project),
+      proposals,
+      await loadReplanPlanningState(db, project.id),
+      structured,
     ),
   );
 

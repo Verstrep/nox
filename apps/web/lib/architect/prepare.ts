@@ -35,6 +35,7 @@ import {
 import type { ProjectUpdateBase } from "@nox/database";
 import { createHash } from "node:crypto";
 
+import type { ReplanPlanningBundle } from "../replan/planning-context.ts";
 import { buildArchitectContext, type FetchedArchitectDocument } from "./context.ts";
 import {
   architectContextFingerprint,
@@ -71,6 +72,20 @@ export type PrepareArchitectInput = {
   /** Modele lu dans la configuration serveur ; entre dans l'empreinte d'entree. */
   model: string;
   environment: Record<string, string | undefined>;
+  /**
+   * Plan de travail transmis, depuis TASK-032.
+   *
+   * `null` quand la replanification n'est pas disponible — session de conception
+   * de tache, ou projet sans backlog initial applique. Le contexte ne porte alors
+   * aucune section de plan, et le schema du tour n'ouvre aucun champ `replan` :
+   * l'architecte n'a rien qui l'inviterait a replanifier un projet qui n'a pas
+   * encore de plan.
+   *
+   * Il est construit **avant** cette preparation, parce qu'il peut refuser : un
+   * plan qui ne tient pas dans son budget arrete le tour, il ne se laisse pas
+   * couper en silence.
+   */
+  replan: ReplanPlanningBundle | null;
 };
 
 export type PreparedArchitectGeneration = {
@@ -108,6 +123,16 @@ export type PreparedArchitectGeneration = {
    * Le controle de peremption ne detecterait plus rien.
    */
   baseStructuredState: ProjectUpdateBase;
+  /**
+   * Plan de travail **vu par le fournisseur** pour ce tour.
+   *
+   * Meme role que `baseStructuredState`, et meme raison : c'est la seule source
+   * autorisee de l'empreinte de planification d'une proposition, et de l'etat
+   * source contre lequel la reponse sera validee. Relire le plan a l'arrivee de
+   * la reponse serait plus simple et faux — l'utilisateur peut avoir inscrit une
+   * tache en file pendant l'appel.
+   */
+  replan: ReplanPlanningBundle | null;
 };
 
 /**
@@ -195,6 +220,7 @@ export function prepareArchitectGeneration(
     projectBrief: bundle.projectBrief,
     projectV1Plan: bundle.projectV1Plan,
     recentTasks: bundle.recentTasks,
+    planningState: input.replan?.promptState ?? null,
     availableDocuments: bundle.availableDocuments,
     transcript,
     newMessage,
@@ -210,11 +236,12 @@ export function prepareArchitectGeneration(
     turnFingerprint: architectTurnFingerprint({ contextFingerprint, transcript, newMessage }),
     window,
     transcriptChars,
-    turnSchemaVersion: architectTurnSchemaVersion(input.sessionKind),
+    turnSchemaVersion: architectTurnSchemaVersion(input.sessionKind, input.replan !== null),
     baseStructuredState: {
       briefRevision: bundle.projectBrief?.revision ?? null,
       planRevision: bundle.projectV1Plan?.revision ?? null,
     },
+    replan: input.replan,
     inputHash: architectInputHash({
       promptVersion: prompt.version,
       model: input.model,

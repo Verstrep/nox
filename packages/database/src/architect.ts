@@ -31,7 +31,9 @@ import {
   isArchitectTurnState,
   type ArchitectContextManifest,
   type ArchitectErrorCode,
+  REPLAN_PROPOSAL_STATUS,
   type ArchitectProjectUpdateProposal,
+  type ReplanProposal,
   type ArchitectGenerationStatus,
   type ArchitectMessageRole,
   type ArchitectSessionKind,
@@ -825,6 +827,24 @@ export type FinishGenerationInput = {
     proposed: ArchitectProjectUpdateProposal;
     baseState: ProjectUpdateBase;
   } | null;
+  /**
+   * Replanification proposee par ce tour, a enregistrer avec lui.
+   *
+   * Meme transaction que la conclusion, les messages et la mise a jour du
+   * projet. Quand les deux propositions viennent du meme tour, la
+   * replanification recoit l'identifiant de la mise a jour : elles deviennent un
+   * seul changement, applique ou ecarte d'un geste.
+   *
+   * Un projet qui porte deja une proposition en attente en refuse une seconde.
+   * Le tour aboutit malgre tout — la conversation continue, la reponse est
+   * enregistree —, et `replanRefused` le dit a l'appelant.
+   */
+  replan?: {
+    projectId: string;
+    proposal: ReplanProposal;
+    baseState: ProjectUpdateBase;
+    planningFingerprint: string;
+  } | null;
 };
 
 /** Statut de session correspondant a l'issue d'une generation. */
@@ -904,13 +924,46 @@ export async function finishArchitectGeneration(
       }
     }
 
+    let projectUpdateId: string | null = null;
     if (input.projectUpdate !== undefined && input.projectUpdate !== null) {
-      await writeArchitectProjectUpdate(tx, {
+      projectUpdateId = await writeArchitectProjectUpdate(tx, {
         generationId: row.id,
         projectId: input.projectUpdate.projectId,
         proposed: input.projectUpdate.proposed,
         baseState: input.projectUpdate.baseState,
       });
+    }
+
+    if (input.replan !== undefined && input.replan !== null) {
+      // Un projet ne porte qu'une proposition en attente. Le controle vit dans
+      // cette transaction : deux tours conclus au meme instant ne peuvent pas en
+      // produire deux, et la seconde est refusee plutot que d'ecraser la
+      // premiere en silence.
+      const pending = await tx.architectReplanProposal.count({
+        where: {
+          projectId: input.replan.projectId,
+          status: REPLAN_PROPOSAL_STATUS.PENDING,
+        },
+      });
+      if (pending === 0) {
+        await tx.architectReplanProposal.create({
+          data: {
+            generationId: row.id,
+            projectId: input.replan.projectId,
+            projectUpdateId,
+            status: REPLAN_PROPOSAL_STATUS.PENDING,
+            rationale: input.replan.proposal.rationale,
+            targetCount: input.replan.proposal.futureTasks.length,
+            newCount: input.replan.proposal.futureTasks.filter(
+              (task) => task.tempId !== null,
+            ).length,
+            providerJson: JSON.stringify(input.replan.proposal),
+            baseBriefRevision: input.replan.baseState.briefRevision,
+            basePlanRevision: input.replan.baseState.planRevision,
+            planningFingerprint: input.replan.planningFingerprint,
+          },
+        });
+      }
     }
 
     // La session suit l'issue de sa derniere generation — sauf si elle a ete

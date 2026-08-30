@@ -54,6 +54,7 @@ function input(overrides: Partial<ArchitectPromptInput> = {}): ArchitectPromptIn
   return {
     sessionKind: ARCHITECT_SESSION_KIND.PROJECT,
     projectName: "Suivi de lectures",
+    planningState: null,
     instructionDocuments: [
       { path: "CLAUDE.md", revision: "a".repeat(64), truncated: false, content: "# Regles" },
     ],

@@ -34,6 +34,27 @@ OpenAI ni la base de données.
 Cette contrainte a un but précis : **concentrer en un seul endroit ce qui touche au système de
 fichiers et aux processus**. Cet endroit est le runner, sans exception.
 
+Le cycle de vie d'un projet, lui, est une boucle qui revient à son point de départ :
+
+```text
+Conversation projet
+    → Project Brief · Living V1 Plan     (intention produit, validée par l'humain)
+    → Backlog initial  (backlog/2)       (le premier découpage)
+    → TASK-000                           (les fondations du repository)
+    → Tâches READY → file d'exécution
+    → Claude Code
+    → Validation autonome → correction bornée
+    → Review humaine seulement si nécessaire
+    → Livraison Git selon la politique du projet
+    → retour à la conversation projet
+    → Changement de projet  (replan/1)   (le plan futur évolue)
+    → tâches ordinaires, et la boucle recommence
+```
+
+La planification **initiale** et la **replanification** sont deux workflows distincts :
+`backlog/2` crée le premier plan d'un projet, `replan/1` fait évoluer celui qui existe. Aucun
+des deux ne peut faire le travail de l'autre.
+
 En parallèle de cette chaîne, l'application web dispose de sa propre persistance :
 
 ```text
@@ -166,7 +187,7 @@ structurelle.
 
 ### 3.4 `packages/database` — l'accès aux données
 
-Schéma Prisma, migrations versionnées, et fonctions d'accès. Vingt modèles :
+Schéma Prisma, migrations versionnées, et fonctions d'accès. Trente modèles :
 
 ```text
 Project ─┬─ mainArchitectSessionId  →  la conversation principale
@@ -174,15 +195,24 @@ Project ─┬─ mainArchitectSessionId  →  la conversation principale
          ├─ Task ─┬─ TaskAcceptanceCriterion
          │        ├─ TaskDocumentReference
          │        ├─ TaskValidationCommand
+         │        ├─ TaskDependency · TaskQueueEntry · GitDelivery
          │        └─ Run ─┬─ RunEvent
          │                ├─ RunFileChange
          │                ├─ RunValidationResult
+         │                ├─ AutonomousValidationBatch
+         │                ├─ CorrectionAttempt
          │                ├─ ReviewFeedback
          │                └─ ArchitectRunReview
-         ├─ ProjectMemoryEntry
+         ├─ ProjectBrief · ProjectV1Plan · ProjectMemoryEntry
          └─ ArchitectSession ─┬─ ArchitectMessage
-                              └─ ArchitectGeneration
+                              └─ ArchitectGeneration ─┬─ ArchitectProjectUpdate
+                                                      └─ ArchitectReplanProposal
 ```
+
+`ArchitectProjectUpdate` et `ArchitectReplanProposal` pendent au **même** tour de conversation
+et se lient l'une à l'autre : c'est ce lien qui fait d'un changement de projet une intention
+unique, relue sur une page et appliquée d'un geste, plutôt que deux propositions à trancher
+séparément.
 
 Les fonctions reçoivent le client en paramètre, ce qui permet aux tests de viser une base
 temporaire. Les chaînes lues en base — statuts, priorités, états de synchronisation — sont
@@ -1468,6 +1498,81 @@ une liste dont la moitié désigne des fichiers absents, et contourné silencieu
 champ signifie. Les documents à créer sont décrits comme livrables — on ne demande pas de lire
 ce qu'on demande d'écrire.
 
+### 6.14 Replanification depuis la conversation projet
+
+Le cycle de V1 se referme ici. Une exigence change, l'utilisateur le dit dans la conversation
+du projet, et l'Architecte peut proposer **un** changement : le Project Plan, le plan des
+tâches futures, ou les deux ensemble.
+
+```text
+Conversation projet
+    ↓  (un message humain = un appel)
+Architecte  →  ProjectUpdate ?  +  Replan ?
+    ↓
+Un changement de projet         ← une carte dans le fil
+    ↓  Review
+Brief/Plan · état cible des tâches futures
+    ↓  édition humaine
+Apply project change            ← une transaction SQLite
+    ↓
+Plan futur structuré  →  file d'exécution ordinaire
+```
+
+**Le passé est immuable, le futur est replanifiable.** Une tâche qui a une exécution, qui est
+inscrite dans la file, dont le statut n'est plus un statut d'avant-exécution, ou qui est la
+tâche d'amorçage, est **verrouillée** : l'Architecte la voit en inventaire compact, ne reçoit
+pas son contrat, et ne peut pas la réécrire. Les autres — les tâches futures — sont
+**modifiables**, et leur contrat complet lui est transmis. La classification est exactement
+celle de `TASK-024` : une seule autorité, pas une seconde règle parallèle.
+
+**Deux planifications, deux prompts, deux moments.** `backlog/2` construit le premier backlog
+d'un projet, à partir du brief et du plan, sans conversation. `replan/1` fait évoluer un plan
+qui existe déjà, depuis la conversation, avec le plan de travail courant. Un projet sans
+backlog initial appliqué n'est pas replanifiable : l'interface renvoie vers la planification
+initiale, et il n'existe pas de second chemin pour créer un premier plan.
+
+**Un état cible, pas des opérations.** Le fournisseur rend la liste complète des tâches futures
+telles qu'elles devraient être. Il ne dit ni « ajoute », ni « supprime », ni « déplace » : NOX
+dérive ces étiquettes lui-même en comparant l'état cible au plan courant. Une suite d'opérations
+aurait obligé à faire confiance à un modèle sur ce que son propre patch fait — exactement la
+confiance que NOX refuse partout ailleurs.
+
+La comparaison distingue **trois axes indépendants** : le contrat a-t-il changé, la position
+a-t-elle changé, les dépendances ont-elles changé. L'autorité sur le premier est
+`taskContractChanged`, celle de `TASK-024`, importée et non réimplémentée : deux écritures
+équivalentes du même contrat produisent `KEEP`, jamais `UPDATE`. C'est ce qui permet à un
+simple réordonnancement de laisser une tâche `READY` en `READY`, et de ne réécrire aucun
+document.
+
+**Les identités.** Une tâche existante garde son identifiant et son code : les deux sont
+immuables, et aucun formulaire ne les porte. Une tâche proposée porte un identifiant temporaire
+— `N1`, `N2` — qui vit le temps de la revue, sert à ce que les dépendances puissent la
+désigner, et disparaît à l'application, où un vrai code lui est attribué par
+`Project.nextTaskSequence`. Aucun code n'est jamais recyclé, et aucun n'est réservé avant
+l'écriture. `planningOrder` est l'ordre du plan, distinct du code : `TASK-006, TASK-011,
+TASK-007` est un plan parfaitement valide.
+
+**Une application, une transaction.** Relecture de la proposition, contrôle de péremption,
+révisions attendues du brief et du plan, écriture du brief et du plan, mises à jour,
+suppressions, créations, ordre de planification, dépendances, transitions `READY → DRAFT`,
+réservation des numéros, proposition et mise à jour liée passées à `APPLIED`, cible appliquée
+enregistrée : tout ou rien.
+
+Le contrôle de péremption est refait **dans** la transaction — l'empreinte de planification y
+est recalculée depuis la base, jamais lue avant. Une divergence refuse l'application et nomme
+ce qu'elle peut nommer. Il n'existe ni fusion, ni « appliquer quand même », ni drapeau de
+forçage : NOX ne réconcilie jamais deux états tout seul.
+
+**Ce que l'application n'est pas.** Aucun appel à OpenAI, aucune exécution de Claude Code,
+aucune validation, aucune correction, aucune livraison Git, aucun démarrage de file. Une file
+active n'est ni mise en pause, ni vidée, ni avancée, et les tâches nées d'un changement
+naissent `DRAFT` et hors file. Les documents Markdown suivent la transaction, ne la
+conditionnent pas, et seules les tâches réellement changées sont réécrites.
+
+**Ce qui reste conservé.** `providerJson` n'est jamais réécrit ; `appliedJson` porte ce que
+l'humain a retenu, ordre compris, et décrit nommément les tâches supprimées — leur code, leur
+titre et leur contrat d'alors. Une tâche disparue de la base doit rester racontable.
+
 ---
 ## 7. Invariants transverses
 
@@ -1494,3 +1599,7 @@ serait un changement d'architecture.
 | Une correction ne renégocie jamais le contrat | Elle essaie de satisfaire ce qui a été gelé au premier lancement |
 | Un automatisme est borné, et la borne est une constante | Deux corrections automatiques par cycle, jamais réglables depuis un écran |
 | Un Client Component n'importe jamais un module serveur | Les types et fabriques de formulaire vivent dans des modules purs, séparés de ceux qui calculent ou lisent |
+| Le passé est immuable, le futur est replanifiable | Une tâche lancée, en file, ou d'amorçage n'est jamais réécrite par une replanification |
+| L'identité d'une tâche ne bouge jamais | Identifiant et code sont immuables ; un code n'est attribué qu'à l'application, et jamais recyclé |
+| Une proposition ne modifie rien | Seule une application humaine explicite change le projet, son plan ou ses tâches |
+| Un état devenu obsolète est refusé, jamais fusionné | Ni « appliquer quand même », ni résolution automatique, ni drapeau de forçage |

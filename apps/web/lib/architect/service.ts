@@ -40,6 +40,7 @@ import {
   ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SCHEMA_NAME,
   ARCHITECT_TURN_STATE,
+  REPLAN_MODE,
   buildArchitectTurnSchema,
   checkArchitectText,
   readArchitectTurn,
@@ -62,6 +63,7 @@ import {
   type ProjectPlanTools,
   type ProjectStructuredState,
   type ProjectUpdateBase,
+  type ReplanPlanningState,
 } from "@nox/database";
 
 import { listProjectDocuments, readProjectDocument } from "../runner/client.ts";
@@ -69,6 +71,11 @@ import { describeRunnerFailure, type RunnerFailure } from "../runner/errors.ts";
 import { ARCHITECT_DOCUMENT_ALLOWLIST, type FetchedArchitectDocument } from "./context.ts";
 import { diffArchitectManifests, type ArchitectContextChange } from "./context-diff.ts";
 import { ARCHITECT_REQUEST_TIMEOUT_MS } from "./config.ts";
+import {
+  REPLAN_CONTEXT_ERROR,
+  buildReplanPlanningContext,
+  type ReplanPlanningBundle,
+} from "../replan/planning-context.ts";
 import { prepareArchitectGeneration, type PreparedArchitectGeneration } from "./prepare.ts";
 import { checkProviderProjectUpdate } from "./project-update.ts";
 import type { ArchitectProvider } from "./provider.ts";
@@ -181,6 +188,17 @@ export type TurnInput = {
    * assemblages differents finiraient par accepter ce que l'autre refuse.
    */
   planTools: ProjectPlanTools;
+  /**
+   * Etat de planification du projet, relu en base a chaque tour.
+   *
+   * Relu, jamais fige : une tache inscrite en file entre deux messages doit
+   * apparaitre verrouillee au tour suivant, et une tache terminee doit quitter
+   * la liste des modifiables. C'est le meme traitement que la memoire et l'etat
+   * structure.
+   *
+   * `null` pour une session de conception de tache : elle ne replanifie rien.
+   */
+  planningState: ReplanPlanningState | null;
   model: string;
   environment: Record<string, string | undefined>;
   ports?: ArchitectRepositoryPorts;
@@ -237,8 +255,32 @@ export async function prepareArchitectTurn(input: TurnInput): Promise<PrepareTur
     return fetched;
   }
 
+  // Le plan de travail est construit **avant** la preparation, parce qu'il peut
+  // refuser : un projet sans backlog initial n'est pas replanifiable, et un plan
+  // qui ne tient pas dans son budget arrete le tour plutot que d'etre coupe.
+  //
+  // Un refus de disponibilite n'est pas une erreur : la conversation continue
+  // sans section de plan, exactement comme avant TASK-032. Seul un depassement
+  // de budget arrete le tour.
+  let replan: ReplanPlanningBundle | null = null;
+  if (input.planningState !== null) {
+    const context = buildReplanPlanningContext({
+      tasks: input.planningState.tasks,
+      appliedBacklogCount: input.planningState.appliedBacklogCount,
+      briefRevision: input.structuredState.brief.prompt?.revision ?? null,
+      planRevision: input.structuredState.plan.prompt?.revision ?? null,
+      sanitize: input.planTools.sanitize,
+    });
+    if (context.ok) {
+      replan = context.bundle;
+    } else if (context.code === REPLAN_CONTEXT_ERROR.CONTEXT_TOO_LARGE) {
+      return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CONTEXT_TOO_LARGE };
+    }
+  }
+
   const prepared = prepareArchitectGeneration({
     sessionKind: input.session.kind,
+    replan,
     projectName: input.projectName,
     repositoryPath: input.repositoryPath,
     documents: fetched.context.documents,
@@ -540,6 +582,11 @@ async function dispatchArchitectTurn(
     result.value.raw,
     input.prepared.availableDocuments,
     input.prepared.turnSchemaVersion,
+    // L'etat source du replan vient de la **preparation** du tour, jamais d'une
+    // relecture faite ici : l'utilisateur peut avoir inscrit une tache en file
+    // pendant que l'appel etait en vol, et la proposition serait alors validee
+    // contre un etat que le fournisseur n'a jamais vu.
+    input.prepared.replan?.source ?? null,
   );
   if (!validated.ok) {
     // La reponse respectait le schema strict et reste inacceptable : c'est
@@ -618,6 +665,17 @@ async function dispatchArchitectTurn(
     ],
     // Ecrite dans la meme transaction que la conclusion du tour et ses messages.
     projectUpdate,
+    // La replanification aussi, et pour la meme raison. Son empreinte de
+    // planification est celle vue par le fournisseur, capturee a la preparation.
+    replan:
+      turn.replan.mode === REPLAN_MODE.PROPOSED && input.prepared.replan !== null
+        ? {
+            projectId: input.projectId,
+            proposal: turn.replan,
+            baseState: input.prepared.baseStructuredState,
+            planningFingerprint: input.prepared.replan.planningFingerprint,
+          }
+        : null,
   });
 
   if (generation === null) {

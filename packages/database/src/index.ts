@@ -386,3 +386,37 @@ export {
   type VerificationCriterionInput,
   type VerificationPlanClient,
 } from "./verification-plan.js";
+
+export {
+  getPendingReplanProposal,
+  getReplanProposal,
+  getReplanProposalForGeneration,
+  listReplanProposals,
+  listReplanProposalsForSession,
+  writeReplanProposal,
+  type ReplanProposalRecord,
+  type WriteReplanProposalInput,
+  type WriteReplanProposalResult,
+} from "./replan.js";
+
+export {
+  loadReplanPlanningState,
+  type ReplanPlanningState,
+  type ReplanStateClient,
+  type ReplanStateTask,
+} from "./replan-state.js";
+
+export {
+  BOOTSTRAP_REQUIRES_REFRESH,
+  applyReplanProposal,
+  dismissReplanProposal,
+  listReplanCreatedTasks,
+  type ApplyReplanInput,
+  type ApplyReplanResult,
+  type DismissReplanResult,
+  type ReplanApplyItem,
+  type ReplanAppliedTask,
+  type ReplanApplyOutcome,
+  type ReplanRemovedTask,
+  type ReplanStaleDetail,
+} from "./replan-apply.js";

@@ -31,6 +31,8 @@
 
 import type { ArchitectMessageRole, ArchitectProjectUpdateStatus } from "@nox/shared";
 
+import type { TimelineProjectChange } from "../replan/change.ts";
+
 export type TimelineMessage = {
   id: string;
   role: ArchitectMessageRole;
@@ -60,7 +62,8 @@ export type TimelineProjectUpdate = {
 export type ArchitectTimelineEntry =
   | ({ kind: "message" } & TimelineMessage)
   | ({ kind: "task"; id: string } & TimelineTask)
-  | ({ kind: "update"; id: string } & TimelineProjectUpdate);
+  | ({ kind: "update"; id: string } & TimelineProjectUpdate)
+  | ({ kind: "change"; id: string } & TimelineProjectChange);
 
 /**
  * Entrelace les messages et les taches creees.
@@ -77,6 +80,7 @@ export function buildArchitectTimeline(
   messages: readonly TimelineMessage[],
   tasks: readonly TimelineTask[],
   updates: readonly TimelineProjectUpdate[] = [],
+  changes: readonly TimelineProjectChange[] = [],
 ): ArchitectTimelineEntry[] {
   const byGeneration = new Map<string, TimelineTask[]>();
   for (const task of tasks) {
@@ -98,6 +102,19 @@ export function buildArchitectTimeline(
     }
   }
 
+  // Un changement de projet est une carte a lui seul, meme lorsqu'il porte une
+  // mise a jour du projet : c'est **une** intention, et l'afficher en deux
+  // cartes inviterait a la trancher en deux fois.
+  const changesByGeneration = new Map<string, TimelineProjectChange[]>();
+  for (const change of changes) {
+    const existing = changesByGeneration.get(change.generationId);
+    if (existing === undefined) {
+      changesByGeneration.set(change.generationId, [change]);
+    } else {
+      existing.push(change);
+    }
+  }
+
   // Position du dernier message de chaque generation : c'est la seule apres
   // laquelle un evenement peut se placer sans couper un tour en deux.
   const lastMessageOf = new Map<string, number>();
@@ -110,6 +127,7 @@ export function buildArchitectTimeline(
   const entries: ArchitectTimelineEntry[] = [];
   const placed = new Set<string>();
   const placedUpdates = new Set<string>();
+  const placedChanges = new Set<string>();
 
   messages.forEach((message, index) => {
     entries.push({ kind: "message", ...message });
@@ -122,6 +140,10 @@ export function buildArchitectTimeline(
     // La proposition de mise a jour precede la tache creee : la premiere est ce
     // que l'architecte a propose a ce tour, la seconde ce que l'utilisateur en a
     // fait ensuite. Lire la consequence avant la proposition serait deroutant.
+    for (const change of changesByGeneration.get(generationId) ?? []) {
+      entries.push({ kind: "change", id: `change:${change.proposalId}`, ...change });
+      placedChanges.add(change.proposalId);
+    }
     for (const update of updatesByGeneration.get(generationId) ?? []) {
       entries.push({ kind: "update", id: `update:${update.updateId}`, ...update });
       placedUpdates.add(update.updateId);
@@ -131,6 +153,12 @@ export function buildArchitectTimeline(
       placed.add(task.taskId);
     }
   });
+
+  for (const change of changes) {
+    if (!placedChanges.has(change.proposalId)) {
+      entries.push({ kind: "change", id: `change:${change.proposalId}`, ...change });
+    }
+  }
 
   for (const update of updates) {
     if (!placedUpdates.has(update.updateId)) {

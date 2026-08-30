@@ -32,6 +32,9 @@ import {
 const BASE: ArchitectPromptInput = {
   sessionKind: ARCHITECT_SESSION_KIND.TASK_DESIGN_LEGACY,
   projectName: "NOX",
+  // Aucun plan transmis : c'est l'etat d'avant TASK-032, et celui de toute
+  // session de conception de tache.
+  planningState: null,
   projectMemory: [],
   projectBrief: null,
   projectV1Plan: null,

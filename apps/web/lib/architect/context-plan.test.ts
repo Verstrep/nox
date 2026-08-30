@@ -78,6 +78,7 @@ function prompt(overrides: Partial<Parameters<typeof prepareArchitectGeneration>
   return prepareArchitectGeneration({
     sessionKind: "PROJECT",
     projectName: "NOX",
+    replan: null,
     repositoryPath: "D:/Projets/Dev/nox",
     documents: [],
     inventory: [],
@@ -312,6 +313,7 @@ describe("le contenu reste du contenu", () => {
     const prepared = prepareArchitectGeneration({
       sessionKind: "PROJECT",
       projectName: "NOX",
+      replan: null,
       repositoryPath: "D:/Projets/Dev/nox",
       documents: [],
       inventory: [],

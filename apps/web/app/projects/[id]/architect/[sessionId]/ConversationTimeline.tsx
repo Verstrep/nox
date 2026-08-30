@@ -1,4 +1,8 @@
-import { ARCHITECT_MESSAGE_ROLE, ARCHITECT_PROJECT_UPDATE_STATUS } from "@nox/shared";
+import {
+  ARCHITECT_MESSAGE_ROLE,
+  ARCHITECT_PROJECT_UPDATE_STATUS,
+  REPLAN_PROPOSAL_STATUS,
+} from "@nox/shared";
 import { architectProposalOfMessage, type ArchitectSessionView } from "@nox/database";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -7,6 +11,7 @@ import type { ArchitectTimelineEntry } from "@/lib/architect/timeline";
 import { formatIsoDateTime } from "@/lib/format";
 import { architectMessageRoleLabel } from "@/lib/labels";
 import { planChangeCountLabel, planUrl, projectUpdateUrl } from "@/lib/plan-display";
+import { projectChangeUrl, replanSummaryLines } from "@/lib/replan/display";
 import { taskUrl } from "@/lib/task-display";
 
 import { ArchitectBubble, UserBubble } from "./MessageBubble";
@@ -51,6 +56,14 @@ export function ConversationTimeline({
   return (
     <ol className="flex flex-col gap-5">
       {entries.map((entry) => {
+        if (entry.kind === "change") {
+          return (
+            <li key={entry.id}>
+              <ProjectChangeCard projectId={projectId} entry={entry} />
+            </li>
+          );
+        }
+
         if (entry.kind === "update") {
           return (
             <li key={entry.id}>
@@ -278,6 +291,131 @@ function ProjectUpdateCard({
       </div>
       <p className="mt-1.5 text-xs text-zinc-600">
         Une proposition ne change rien tant que vous ne l&apos;avez pas appliquee.
+      </p>
+    </>
+  );
+}
+
+/**
+ * La carte d'un changement de projet.
+ *
+ * ## Une intention, une carte
+ *
+ * Un tour peut proposer une mise a jour du projet **et** une replanification.
+ * Les deux forment un seul changement : ils se relisent sur une page et
+ * s'appliquent d'un geste. Deux cartes auraient invite a trancher en deux fois,
+ * et rendu possible l'etat que TASK-032 existe pour empecher.
+ *
+ * ## Elle est derivee de la base, jamais d'un etat React
+ *
+ * Son statut vient d'`ArchitectReplanProposal`. Un rafraichissement rend donc
+ * exactement la meme carte, et deux onglets ouverts sur la meme conversation ne
+ * peuvent pas en montrer deux versions differentes.
+ *
+ * ## Ce n'est pas un message
+ *
+ * Elle n'entre ni dans le transcript, ni dans le prompt, ni dans le decompte de
+ * jetons. L'architecte decouvrira le nouvel etat au tour suivant, par le
+ * contexte — pas par une phrase qu'on lui aurait fait dire.
+ *
+ * ## Aucun JSON brut
+ *
+ * Des nombres et des mots. Le payload du fournisseur vit derriere `Inspect`,
+ * a un clic de la revue, et n'a rien a faire dans un fil de conversation.
+ */
+function ProjectChangeCard({
+  projectId,
+  entry,
+}: {
+  projectId: string;
+  entry: Extract<ArchitectTimelineEntry, { kind: "change" }>;
+}) {
+  if (entry.status === REPLAN_PROPOSAL_STATUS.APPLIED) {
+    return (
+      <>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-4 py-3">
+          <p className="text-sm font-medium text-emerald-200">
+            <span aria-hidden="true">✓ </span>
+            {"Project change applied"}
+          </p>
+          <Link
+            href={projectChangeUrl(projectId, entry.proposalId)}
+            className="shrink-0 rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-zinc-500 hover:text-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+          >
+            View change
+          </Link>
+        </div>
+        <p className="mt-1.5 text-xs text-zinc-600">
+          Evenement local. Il n&apos;entre pas dans la conversation transmise.
+        </p>
+      </>
+    );
+  }
+
+  if (entry.status === REPLAN_PROPOSAL_STATUS.DISMISSED) {
+    return (
+      <>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-zinc-800 bg-zinc-950/40 px-4 py-3">
+          <p className="text-sm text-zinc-400">{"Project change dismissed"}</p>
+          <Link
+            href={projectChangeUrl(projectId, entry.proposalId)}
+            className="shrink-0 rounded-md border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 transition-colors hover:border-zinc-600 hover:text-zinc-200"
+          >
+            View change
+          </Link>
+        </div>
+        <p className="mt-1.5 text-xs text-zinc-600">
+          Evenement local. Il n&apos;entre pas dans la conversation transmise.
+        </p>
+      </>
+    );
+  }
+
+  const lines = replanSummaryLines({
+    added: entry.added,
+    updated: entry.updated,
+    removed: entry.removed,
+    dependencyChanged: 0,
+    orderChanged: entry.orderChanged,
+  });
+
+  return (
+    <>
+      <div className="rounded-md border border-teal-400/30 bg-teal-400/5 px-4 py-3">
+        <h4 className="text-sm font-medium text-teal-100">Proposed project change</h4>
+        <dl className="mt-3 flex flex-col gap-1.5">
+          {/*
+            Une section vide ne s'affiche pas : un changement qui ne touche que
+            les taches futures ne doit pas laisser croire qu'il touche le plan.
+          */}
+          {entry.updateId === null ? null : (
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <dt className="text-xs text-zinc-400">Project Plan</dt>
+              <dd className="text-xs text-zinc-300">
+                {planChangeCountLabel(entry.briefChanges + entry.planChanges)}
+              </dd>
+            </div>
+          )}
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <dt className="text-xs text-zinc-400">Future Tasks</dt>
+            <dd className="text-xs text-zinc-300">
+              {lines.length === 0 ? "No change" : lines.join(" · ")}
+            </dd>
+          </div>
+        </dl>
+        <div className="mt-4 flex justify-end">
+          <Link
+            href={projectChangeUrl(projectId, entry.proposalId)}
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-zinc-500 hover:text-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+          >
+            Review
+          </Link>
+        </div>
+      </div>
+      <p className="mt-1.5 text-xs text-zinc-600">
+        {entry.stale
+          ? "Le projet a change depuis : ce changement reste lisible, mais NOX refusera de l'appliquer."
+          : "Une proposition ne change rien tant que vous ne l'avez pas appliquee."}
       </p>
     </>
   );
