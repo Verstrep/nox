@@ -754,6 +754,19 @@ export type {
 } from "./backlog.js";
 
 export {
+  ARCHITECT_BACKLOG_DIAGNOSTIC_LIMITS,
+  ARCHITECT_BACKLOG_FAILURE,
+  architectBacklogFailureCategory,
+  describeBacklogDiagnosticField,
+  sanitizeBacklogDiagnosticText,
+} from "./backlog-diagnostic.js";
+
+export type {
+  ArchitectBacklogDiagnostic,
+  ArchitectBacklogFailureCategory,
+} from "./backlog-diagnostic.js";
+
+export {
   BACKLOG_PROMPT_VERSION,
   BACKLOG_PROMPT_VERSION_1,
   EXISTING_TASK_CLOSE,

@@ -37,6 +37,7 @@
  */
 
 import {
+  ARCHITECT_BACKLOG_FAILURE,
   ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_SCHEMA_NAME_2,
   ARCHITECT_ERROR,
@@ -46,6 +47,7 @@ import {
   formatTaskCode,
   readArchitectBacklogProposalV2,
   taskDocumentPath,
+  type ArchitectBacklogDiagnostic,
   type ArchitectBacklogProposalV2,
   type ArchitectBacklogTaskProposalV2,
   type ArchitectErrorCode,
@@ -143,7 +145,14 @@ export async function prepareProjectBacklog(
 
 export type GenerateBacklogOutcome =
   | { ok: true; proposal: ArchitectBacklogProposalView }
-  | { ok: false; code: ArchitectErrorCode }
+  /**
+   * Un appel a eu lieu et n'a rien produit.
+   *
+   * `diagnostic` accompagne le code quand NOX sait dire **quoi** il a refuse.
+   * Il est absent d'une panne du fournisseur : il n'y a alors pas de champ
+   * fautif, et en inventer un ferait chercher au mauvais endroit.
+   */
+  | { ok: false; code: ArchitectErrorCode; diagnostic?: ArchitectBacklogDiagnostic }
   | { ok: false; message: string }
   /** Une precondition manque. Aucun appel, aucune generation reservee. */
   | { ok: false; refusal: BacklogGenerationRefusal };
@@ -253,19 +262,32 @@ export async function generateProjectBacklog(
     // Un seul element invalide condamne toute la proposition. Conserver les
     // autres livrerait un decoupage dont personne ne pourrait dire ce qui
     // manque, et le decoupage ne vaut que pris ensemble.
-    console.error(
-      "[nox] Backlog refuse :",
-      validated.refusal.field,
-      validated.refusal.message,
-    );
-    await finishBacklogGeneration(db, {
+    //
+    // Ce que le validateur sait est enregistre **et** rendu : le champ refuse et
+    // sa phrase. Sans cela, relancer une generation etait le seul moyen
+    // d'apprendre ce que NOX savait deja — c'est-a-dire de payer un second appel
+    // pour lire un diagnostic qui existait avant le premier.
+    console.error("[nox] Backlog refuse :", validated.refusal.field, validated.refusal.message);
+    const finished = await finishBacklogGeneration(db, {
       generationId,
       status: ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED,
       providerResponseId: result.value.responseId,
       usage: result.value.usage,
       errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+      errorField: validated.refusal.field,
+      errorDetail: validated.refusal.message,
     });
-    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
+    return {
+      ok: false,
+      code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+      // Ce qui est affiche est ce qui a ete enregistre — nettoye par la meme
+      // ecriture — plutot qu'une seconde version construite ici.
+      diagnostic: finished?.diagnostic ?? {
+        category: ARCHITECT_BACKLOG_FAILURE.OUTPUT_INVALID,
+        field: null,
+        message: null,
+      },
+    };
   }
 
   await finishBacklogGeneration(db, {

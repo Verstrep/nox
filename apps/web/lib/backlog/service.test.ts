@@ -26,6 +26,8 @@ import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  ARCHITECT_BACKLOG_FAILURE,
+  ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_LIMITS,
   ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS,
   ARCHITECT_BACKLOG_SCHEMA_NAME_2,
@@ -1194,5 +1196,138 @@ describe("conversion en valeurs de formulaire", () => {
       ],
     });
     assert.equal(values[0]?.context, "");
+  });
+});
+
+
+describe("regression TripKit — un critere d'acceptation refuse", () => {
+  /**
+   * La reponse du pilote, dans sa forme exacte.
+   *
+   * Un backlog par ailleurs impeccable, dont `tasks[0].acceptanceCriteria`
+   * porte un critere vide. Le mode strict du fournisseur l'accepte : c'est bien
+   * un tableau de chaines. NOX le refuse, et c'est ce refus qui restait muet.
+   */
+  function tripkitPayload(criterion: string): Record<string, unknown> {
+    const payload = backlogPayload(["Importer un itineraire", "Partager un carnet"]);
+    const tasks = payload["tasks"] as Record<string, unknown>[];
+    tasks[0]!["acceptanceCriteria"] = [
+      {
+        text: criterion,
+        verificationMode: VERIFICATION_MODE.HUMAN,
+        humanInstructions: "Verifier a la main.",
+        validationCommandIndexes: [],
+      },
+    ];
+    return payload;
+  }
+
+  /** Genere avec la charge utile donnee, et rend l'issue et le fournisseur. */
+  async function generateWith(raw: unknown) {
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([respond(raw)]);
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    return { project, provider, generated };
+  }
+
+  it("refuse un critere vide, et dit lequel", async () => {
+    const { project, provider, generated } = await generateWith(tripkitPayload("   "));
+
+    assert.equal(generated.ok, false);
+    assert.ok("code" in generated && generated.code === ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
+    assert.ok("diagnostic" in generated && generated.diagnostic !== undefined);
+    assert.equal(generated.diagnostic.category, ARCHITECT_BACKLOG_FAILURE.OUTPUT_INVALID);
+    assert.equal(generated.diagnostic.field, "tasks.0.acceptanceCriteria");
+    assert.ok(generated.diagnostic.message !== null);
+    assert.match(generated.diagnostic.message, /Tache 1/u);
+
+    // Un seul appel, et aucune tache creee.
+    assert.equal(provider.backlogCalls.length, 1);
+    assert.equal((await listTasksByProject(db, project.id)).length, 0);
+  });
+
+  it("refuse un critere trop long, et dit lequel", async () => {
+    const { generated } = await generateWith(
+      tripkitPayload("a".repeat(ARCHITECT_BACKLOG_LIMITS.criteria.length + 1)),
+    );
+
+    assert.ok("diagnostic" in generated && generated.diagnostic !== undefined);
+    assert.equal(generated.diagnostic.field, "tasks.0.acceptanceCriteria");
+  });
+
+  it("enregistre la generation, son modele et sa cause", async () => {
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([respond(tripkitPayload(""))]);
+    await generateProjectBacklog(db, {
+      ...(await inputFor(project, { model: "gpt-5.6-sol" })),
+      provider,
+    });
+
+    const view = await loadProjectBacklog(db, project.id);
+    const generation = view.history[0];
+    assert.ok(generation !== undefined);
+    assert.equal(generation.status, ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED);
+    assert.equal(generation.model, "gpt-5.6-sol");
+    assert.equal(generation.diagnostic?.field, "tasks.0.acceptanceCriteria");
+    assert.ok(generation.diagnostic?.message !== null);
+
+    // Aucune proposition applicable, et le verrou est rendu.
+    assert.equal(view.pending, null);
+    assert.equal(view.running, null);
+  });
+
+  it("ne relance aucun second appel", async () => {
+    // HOTFIX-001 n'implemente ni reparation de sortie, ni reessai, ni modele de
+    // repli. Un clic vaut exactement un appel, echec compris.
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([respond(tripkitPayload(""))]);
+
+    await generateProjectBacklog(db, { ...(await inputFor(project)), provider });
+
+    assert.equal(provider.calls.length, 1);
+    assert.equal(provider.backlogCalls.length, 1);
+  });
+
+  it("laisse une reponse valide inchangee", async () => {
+    const { generated, provider } = await generateWith(backlogPayload(["A", "B"]));
+
+    assert.ok(generated.ok);
+    assert.equal(generated.proposal.taskCount, 2);
+    assert.equal(provider.backlogCalls.length, 1);
+  });
+
+  it("n'attache aucun diagnostic de champ a une panne du fournisseur", async () => {
+    // « Je n'ai pas pu regarder » n'est pas « j'ai regarde et c'est faux ».
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([
+      { ok: false, code: ARCHITECT_ERROR.ARCHITECT_TIMEOUT },
+    ]);
+
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+
+    assert.ok("code" in generated && generated.code === ARCHITECT_ERROR.ARCHITECT_TIMEOUT);
+    assert.equal("diagnostic" in generated ? generated.diagnostic : undefined, undefined);
+
+    const view = await loadProjectBacklog(db, project.id);
+    assert.equal(view.history[0]?.diagnostic?.category, ARCHITECT_BACKLOG_FAILURE.PROVIDER_ERROR);
+    assert.equal(view.history[0]?.diagnostic?.field, null);
+  });
+
+  it("transmet le modele que le serveur lui donne, et rien d'autre", async () => {
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([respond(backlogPayload(["A"]))]);
+
+    await generateProjectBacklog(db, {
+      ...(await inputFor(project, { model: "gpt-5.6-sol" })),
+      provider,
+    });
+
+    assert.equal(provider.backlogCalls[0]?.model, "gpt-5.6-sol");
   });
 });

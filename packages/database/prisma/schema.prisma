@@ -245,6 +245,21 @@ model ArchitectBacklogGeneration {
   /// Valeur de `ArchitectErrorCode`, lorsque la generation a echoue.
   errorCode String?
 
+  /// Chemin du champ refuse par la validation, tel que NOX l'a nomme.
+  ///
+  /// Produit par le validateur de `backlog/2`, jamais par le fournisseur :
+  /// `tasks.0.acceptanceCriteria`. `null` pour une panne du fournisseur — il n'y
+  /// a alors aucun champ fautif — et pour toute generation anterieure a
+  /// HOTFIX-001, dont la cause n'a jamais ete enregistree.
+  errorField String?
+
+  /// Phrase de refus, deja destinee a l'utilisateur et deja nettoyee.
+  ///
+  /// Ni JSON brut, ni prompt, ni trace : uniquement le diagnostic normalise que
+  /// le validateur produit. Sans lui, relancer une generation etait le seul
+  /// moyen d'apprendre ce que NOX savait deja.
+  errorDetail String?
+
   createdAt  DateTime  @default(now())
   finishedAt DateTime?
 

@@ -423,7 +423,9 @@ qu'elle est vide est du texte d'interface.
 n'a **aucun outil** : ni `tools`, ni `tool_choice`, ni `previous_response_id`, ni
 `conversation`, ni mode background, et `store` reste `false`. La clé s'appelle
 `NOX_OPENAI_API_KEY` — le préfixe la place hors de portée de Claude Code par construction — et
-ne quitte jamais le serveur. Aucun modèle par défaut, aucune URL de base configurable, aucun
+ne quitte jamais le serveur. Le modèle a un défaut assumé, `gpt-5.6-sol` avec un effort de
+raisonnement `high`, nommé une seule fois dans `apps/web/lib/architect/config.ts` ;
+`NOX_ARCHITECT_MODEL` reste lue et reste prioritaire. Aucune URL de base configurable, aucun
 réessai du SDK. Aucun appel n'est automatique : chaque clic est un appel, et chaque appel est
 facturé. Le navigateur ne transmet jamais de contexte — seulement le texte d'un message et un
 compteur qui ne décide de rien. Un onglet resté sur un état dépassé est refusé sans appel.
@@ -1054,6 +1056,35 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `TASK-032` : `e0a716c`
-  (`feat: allow independent repositories to run concurrently`), contenant `TASK-031`.
-- `TASK-032` reste **locale**, non indexée et non commitée.
+- Commit de départ de `HOTFIX-001` : `3705b7e`
+  (`feat: add conversation-driven project replanning`), contenant `TASK-032`.
+- `HOTFIX-001` reste **local**, non indexé et non commité.
+
+---
+
+## 8. HOTFIX-001 — corrections issues du premier pilote
+
+Le premier pilote réel (TripKit) a produit deux constats, et ce hotfix y répond sans
+élargir le périmètre.
+
+**Le modèle de l'Architecte.** `NOX_ARCHITECT_MODEL` était obligatoire, et sa valeur venait d'un
+exemple recopié : TripKit a discuté son architecture puis tenté de planifier sa V1 sur
+`gpt-5-mini`. Le défaut existait déjà ; il n'était pas assumé. `DEFAULT_ARCHITECT_MODEL` vaut
+désormais `gpt-5.6-sol`, avec un effort de raisonnement `high`, et il est nommé à un seul
+endroit. La variable reste lue et reste prioritaire ; elle devient facultative. Un modèle
+configuré à la main ne reçoit aucun effort de raisonnement — NOX n'en connaît pas les capacités.
+
+**Le refus d'un backlog.** `BACKLOG-001` a échoué sur `tasks.0.acceptanceCriteria`, information
+que NOX possédait et n'affichait pas : l'écran disait « format attendu », et relancer était le
+seul moyen d'en apprendre plus. Le diagnostic du validateur — chemin du champ et phrase — est
+désormais persisté (`errorField`, `errorDetail`, nullables) et affiché sur la ligne `FAILED`.
+La nature de l'échec, `OUTPUT_INVALID` ou `PROVIDER_ERROR`, se dérive de `errorCode`.
+
+Ce que ce hotfix n'a pas fait : aucune réparation de sortie, aucun réessai, aucun second appel,
+aucun modèle de repli, aucun assouplissement du contrat de `backlog/2`. Un clic vaut toujours au
+plus un appel. Les générations historiques gardent le modèle qu'elles ont réellement utilisé.
+
+**Limites connues.** Un effort de raisonnement `high` consomme des jetons de sortie comptés dans
+`ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS` (32 000) et du temps compté dans
+`ARCHITECT_REQUEST_TIMEOUT_MS` (90 s). Ces deux bornes sont inchangées : les toucher sans mesure
+aurait été deviner. Le premier `Generate` réel du pilote dira si elles suffisent.

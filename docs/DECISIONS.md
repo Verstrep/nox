@@ -2629,6 +2629,10 @@ sur la valeur — un test qui échoue ne doit pas imprimer un secret.
 
 ### D-191 — Aucun modèle par défaut
 
+> **Révisée par [D-378](#d-378--un-modèle-darchitecture-par-défaut-et-une-seule-autorité)**
+> (HOTFIX-001). Le raisonnement ci-dessous reste exact ; c'est sa prémisse que le premier pilote
+> réel a démentie.
+
 **Décision.** `NOX_ARCHITECT_MODEL` est obligatoire. Sans elle, la page Architecte reste
 consultable, le contexte reste inspectable, et seule la génération est bloquée.
 
@@ -5740,3 +5744,74 @@ décrirait les manques qu'on imagine. Le pilote décrira ceux qu'on rencontre.
 
 **Ce qu'elle écarte.** Une `TASK-033` écrite d'avance, une roadmap de fonctionnalités
 spéculatives, une V1 déclarée finie sans avoir été utilisée.
+
+
+## HOTFIX-001 — Premier pilote réel
+
+### D-378 — Un modèle d'architecture par défaut, et une seule autorité
+
+**Décision.** `DEFAULT_ARCHITECT_MODEL` vaut `gpt-5.6-sol`, avec un effort de raisonnement `high`,
+et il est nommé à un seul endroit : `apps/web/lib/architect/config.ts`. `NOX_ARCHITECT_MODEL`
+reste lue et reste prioritaire ; elle devient facultative. Une valeur absente ne bloque plus rien.
+
+L'effort de raisonnement se **dérive** du modèle retenu : NOX n'en demande un que pour le modèle
+qu'il a choisi lui-même. Rien d'autre de `reasoning` n'est jamais déclaré.
+
+**Justification.** [D-191](#d-191--aucun-modèle-par-défaut) refusait de choisir un coût à la place
+de l'utilisateur. Le premier pilote a montré que ce refus ne produisait pas « aucun choix » : il
+produisait *le modèle recopié depuis un exemple*. TripKit a discuté toute son architecture, puis
+tenté de planifier sa V1, sur `gpt-5-mini` — sans que rien, nulle part, ne présente cela comme une
+décision. Le défaut existait déjà ; il n'était simplement pas assumé.
+
+Un défaut assumé se change ; un défaut de fait ne se voit pas. Et une variable obligatoire à
+remplir avant la première utilisation est exactement le moment où l'on recopie un exemple sans
+l'évaluer.
+
+L'autorité unique répond à l'autre moitié du problème : quatre surfaces appellent le fournisseur —
+conversation projet, replanification, backlog, analyse de review. Disperser l'identifiant garantit
+qu'un jour l'une d'elles restera en arrière. Un test lit la **source** de tous les modules de
+production et refuse tout identifiant de modèle écrit ailleurs que dans l'autorité.
+
+L'effort se dérive du modèle plutôt que de se configurer, parce que `reasoning.effort` n'est
+accepté que par les modèles de raisonnement. NOX ne connaît les capacités que du modèle qu'il
+choisit ; en imposer un à un modèle configuré à la main transformerait une préférence en `400`.
+
+**Ce qu'elle écarte.** Un écran de réglages du modèle, une seconde variable d'environnement pour
+l'effort, un registre de capacités par modèle, un modèle de repli après échec, un identifiant de
+modèle recopié dans les Server Actions.
+
+**Ce qu'elle ne change pas.** Les générations déjà enregistrées gardent le modèle qu'elles ont
+réellement utilisé : `BACKLOG-001` reste `FAILED` sur `gpt-5-mini`. Claude Code et le runner ne
+sont pas concernés — le runner ne choisit aucun modèle, et ce hotfix ne lui en donne pas.
+
+### D-379 — Un refus de planification dit ce qu'il refuse
+
+**Décision.** Quand `backlog/2` refuse la réponse du fournisseur, NOX **persiste** et affiche le
+diagnostic du validateur : le chemin du champ (`tasks.0.acceptanceCriteria`) et sa phrase. Deux
+colonnes nullables, `errorField` et `errorDetail`, nettoyées et bornées à l'écriture. La nature de
+l'échec — `OUTPUT_INVALID` ou `PROVIDER_ERROR` — se **dérive** de `errorCode` : aucune colonne ne
+la duplique.
+
+**Justification.** Le validateur savait exactement ce qu'il refusait, et l'écrivait dans
+`console.error`. L'utilisateur, lui, lisait « la réponse ne respecte pas le format attendu ». Il ne
+lui restait qu'à recliquer `Generate` — c'est-à-dire à payer un second appel pour réapprendre ce
+que NOX savait avant le premier.
+
+Le diagnostic est sûr par construction, et non par filtrage : ce module ne reçoit ni la réponse
+brute, ni le prompt, ni l'exception. Il ne reçoit qu'un chemin produit par NOX et une phrase écrite
+pour l'utilisateur. Quelques phrases citent une valeur proposée — une commande refusée, un document
+inexistant — parce que c'est précisément ce qui les rend actionnables ; elles sont déjà bornées par
+le contrat, et passent quand même par la sanitation.
+
+Une panne du fournisseur garde son propre vocabulaire. « Je n'ai pas pu regarder » n'est pas « j'ai
+regardé et c'est faux » : la distinction de [D-342](#d-342--une-panne-dinfrastructure-nest-jamais-un-échec-de-code)
+vaut aussi pour un backlog.
+
+**Ce qu'elle écarte.** Une réparation automatique de la sortie, un réessai, un second appel, un
+modèle de repli, un assouplissement du contrat, une reconstruction rétroactive des causes depuis
+les logs, une taxonomie d'erreurs élargie.
+
+**Ce qu'elle ne change pas.** Le contrat de `backlog/2` : les bornes, les critères obligatoires et
+le refus « tout ou rien » sont intacts. Un clic vaut toujours au plus un appel, échec compris. Une
+génération antérieure à ce hotfix reste lisible, avec un repli explicite — « cause non
+enregistrée » est un état, pas une occasion d'en inventer une.

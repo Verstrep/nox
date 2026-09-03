@@ -17,7 +17,12 @@ import {
 } from "@nox/shared";
 import { APIError, APIConnectionTimeoutError } from "openai";
 
-import { loadArchitectConfig } from "./config.ts";
+import {
+  ARCHITECT_ENVIRONMENT_VARIABLES,
+  ARCHITECT_OPTIONAL_ENVIRONMENT_VARIABLES,
+  DEFAULT_ARCHITECT_MODEL,
+  loadArchitectConfig,
+} from "./config.ts";
 import { OpenAIArchitectProvider } from "./openai.ts";
 import { FakeArchitectProvider, type ArchitectProviderInput } from "./provider.ts";
 
@@ -360,19 +365,47 @@ describe("loadArchitectConfig", () => {
     assert.deepEqual(result.ok ? [] : result.missing, ["NOX_OPENAI_API_KEY"]);
   });
 
-  it("refuse un modele absent, sans en choisir un", () => {
-    // Aucun defaut : choisir en silence reviendrait a choisir un cout a la place
-    // de l'utilisateur.
+  it("choisit le modele d'architecture quand aucun n'est configure", () => {
+    // HOTFIX-001 : le defaut de fait n'etait pas « aucun modele », c'etait
+    // « celui que l'utilisateur avait recopie ». Le pilote a decide une V1
+    // entiere sur gpt-5-mini.
     const result = loadArchitectConfig({ NOX_OPENAI_API_KEY: "cle" });
-    assert.deepEqual(result.ok ? [] : result.missing, ["NOX_ARCHITECT_MODEL"]);
+    assert.ok(result.ok);
+    assert.equal(result.config.model, DEFAULT_ARCHITECT_MODEL);
+    assert.equal(result.config.model, "gpt-5.6-sol");
   });
 
-  it("refuse une valeur vide comme une valeur absente", () => {
-    const result = loadArchitectConfig({ NOX_OPENAI_API_KEY: "   ", NOX_ARCHITECT_MODEL: "" });
-    assert.deepEqual(result.ok ? [] : result.missing, [
-      "NOX_OPENAI_API_KEY",
-      "NOX_ARCHITECT_MODEL",
-    ]);
+  it("traite une valeur vide comme une valeur absente", () => {
+    const result = loadArchitectConfig({ NOX_OPENAI_API_KEY: "cle", NOX_ARCHITECT_MODEL: "   " });
+    assert.ok(result.ok);
+    assert.equal(result.config.model, DEFAULT_ARCHITECT_MODEL);
+  });
+
+  it("ne retombe jamais sur gpt-5-mini", () => {
+    for (const environment of [
+      { NOX_OPENAI_API_KEY: "cle" },
+      { NOX_OPENAI_API_KEY: "cle", NOX_ARCHITECT_MODEL: "" },
+      { NOX_OPENAI_API_KEY: "cle", NOX_ARCHITECT_MODEL: "  " },
+    ]) {
+      const result = loadArchitectConfig(environment);
+      assert.ok(result.ok);
+      assert.notEqual(result.config.model, "gpt-5-mini");
+    }
+  });
+
+  it("laisse la main a un modele explicitement configure", () => {
+    // Configurer un modele est une decision, et NOX ne la reprend pas.
+    const result = loadArchitectConfig({
+      NOX_OPENAI_API_KEY: "cle",
+      NOX_ARCHITECT_MODEL: "gpt-5-mini",
+    });
+    assert.ok(result.ok);
+    assert.equal(result.config.model, "gpt-5-mini");
+  });
+
+  it("refuse une cle vide", () => {
+    const result = loadArchitectConfig({ NOX_OPENAI_API_KEY: "   " });
+    assert.deepEqual(result.ok ? [] : result.missing, ["NOX_OPENAI_API_KEY"]);
   });
 
   it("ignore une variable sans le prefixe NOX", () => {
@@ -380,4 +413,81 @@ describe("loadArchitectConfig", () => {
     const result = loadArchitectConfig({ OPENAI_API_KEY: "cle", NOX_ARCHITECT_MODEL: "modele" });
     assert.equal(result.ok, false);
   });
+
+  it("ne demande un effort de raisonnement que pour le modele qu'il choisit", () => {
+    const chosen = loadArchitectConfig({ NOX_OPENAI_API_KEY: "cle" });
+    assert.ok(chosen.ok);
+    assert.equal(chosen.config.reasoningEffort, "high");
+
+    // NOX ne connait pas les capacites d'un modele configure a la main : un
+    // `400` sur un parametre inconnu serait un echec que personne n'a demande.
+    const configured = loadArchitectConfig({
+      NOX_OPENAI_API_KEY: "cle",
+      NOX_ARCHITECT_MODEL: "gpt-4.1",
+    });
+    assert.ok(configured.ok);
+    assert.equal(configured.config.reasoningEffort, null);
+
+    // Le meme modele configure explicitement en recoit un : l'effort suit le
+    // modele, pas la provenance de la valeur.
+    const explicit = loadArchitectConfig({
+      NOX_OPENAI_API_KEY: "cle",
+      NOX_ARCHITECT_MODEL: DEFAULT_ARCHITECT_MODEL,
+    });
+    assert.ok(explicit.ok);
+    assert.equal(explicit.config.reasoningEffort, "high");
+  });
+
+  it("ne reclame que la cle", () => {
+    // `NOX_ARCHITECT_MODEL` est devenue facultative : un ecran qui l'annoncerait
+    // « manquante » enverrait renseigner ce qui n'est pas impose.
+    assert.deepEqual([...ARCHITECT_ENVIRONMENT_VARIABLES], ["NOX_OPENAI_API_KEY"]);
+    assert.deepEqual([...ARCHITECT_OPTIONAL_ENVIRONMENT_VARIABLES], ["NOX_ARCHITECT_MODEL"]);
+  });
+});
+
+describe("effort de raisonnement — les trois surfaces a forte consequence", () => {
+  /**
+   * Le corps reellement envoye, pour une surface donnee.
+   *
+   * L'assertion porte sur ce qui part au fournisseur, pas sur ce qu'une couche
+   * intermediaire a promis de transmettre.
+   */
+  async function bodyFor(
+    surface: "generateTaskTurn" | "generateBacklog" | "analyzeRunReview",
+    model: string,
+  ): Promise<Record<string, unknown>> {
+    const captures: Capture[] = [];
+    const client = provider({ id: "r", output_text: VALID_PROPOSAL }, captures);
+    await client[surface]({ ...INPUT, model });
+    return captures[0]!.body;
+  }
+
+  const surfaces = ["generateTaskTurn", "generateBacklog", "analyzeRunReview"] as const;
+
+  for (const surface of surfaces) {
+    it(`transmet le modele et l'effort par defaut — ${surface}`, async () => {
+      const body = await bodyFor(surface, DEFAULT_ARCHITECT_MODEL);
+
+      assert.equal(body["model"], "gpt-5.6-sol");
+      assert.deepEqual(body["reasoning"], { effort: "high" });
+    });
+
+    it(`ne demande aucun resume de raisonnement — ${surface}`, async () => {
+      const body = await bodyFor(surface, DEFAULT_ARCHITECT_MODEL);
+      const reasoning = body["reasoning"] as Record<string, unknown>;
+
+      // NOX ne demande jamais le raisonnement interne d'un modele : il n'en
+      // recevrait rien de bon, et n'aurait nulle part ou le mettre.
+      assert.deepEqual(Object.keys(reasoning), ["effort"]);
+      assert.equal("include" in body, false);
+    });
+
+    it(`n'impose aucun effort a un modele configure a la main — ${surface}`, async () => {
+      const body = await bodyFor(surface, "gpt-4.1");
+
+      assert.equal(body["model"], "gpt-4.1");
+      assert.equal("reasoning" in body, false);
+    });
+  }
 });

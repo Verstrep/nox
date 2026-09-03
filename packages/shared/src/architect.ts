@@ -1108,7 +1108,7 @@ export function isArchitectContextManifest(value: unknown): value is ArchitectCo
  * stable et sans texte — la phrase francaise vit dans l'interface.
  */
 export const ARCHITECT_ERROR = {
-  /** `NOX_OPENAI_API_KEY` ou `NOX_ARCHITECT_MODEL` absent. */
+  /** `NOX_OPENAI_API_KEY` absente. Le modele, lui, a un defaut. */
   ARCHITECT_NOT_CONFIGURED: "ARCHITECT_NOT_CONFIGURED",
   /** Le fournisseur n'a pas repondu dans le delai imparti. */
   ARCHITECT_TIMEOUT: "ARCHITECT_TIMEOUT",

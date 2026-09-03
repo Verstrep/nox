@@ -14,6 +14,14 @@
  *   aucun `background`. Le modele recoit du texte et rend une structure ; il ne
  *   peut declencher aucune action, parce qu'aucune ne lui est offerte.
  *
+ * ## `reasoning.effort`, et rien d'autre de `reasoning`
+ *
+ * Seul l'effort est declare, et seulement pour le modele que NOX choisit
+ * lui-meme. Ni `summary`, ni `generate_summary`, ni `include` : NOX ne demande
+ * jamais le raisonnement interne d'un modele, ne le recoit pas, et n'aurait nulle
+ * part ou le mettre. La regle est celle du runner depuis TASK-011, appliquee ici
+ * a l'autre fournisseur.
+ *
  * ## Aucun retry
  *
  * Le SDK OpenAI reessaie par defaut. C'est desactive : chaque generation est
@@ -38,6 +46,7 @@ import OpenAI, {
 
 import { ARCHITECT_ERROR, EMPTY_ARCHITECT_USAGE, type ArchitectUsage } from "@nox/shared";
 
+import { architectReasoningEffort } from "./config.ts";
 import type {
   ArchitectProvider,
   ArchitectProviderInput,
@@ -176,12 +185,20 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
   async #call(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
     let response: ResponseLike;
 
+    // Derive du modele, jamais recu d'un appelant : les quatre surfaces
+    // obtiennent ainsi la meme reponse sans se transmettre un parametre de plus.
+    const effort = architectReasoningEffort(input.model);
+
     try {
       response = (await this.#client.responses.create(
         {
           model: input.model,
           instructions: input.instructions,
           input: input.input,
+          // Declare uniquement pour le modele dont NOX connait les capacites. Un
+          // modele configure a la main n'en recoit aucun : un `400` sur un
+          // parametre inconnu serait un echec que personne n'a demande.
+          ...(effort === null ? {} : { reasoning: { effort } }),
           // NOX conserve son propre historique : rien a stocker chez le
           // fournisseur, et rien a reprendre d'un appel precedent.
           store: false,

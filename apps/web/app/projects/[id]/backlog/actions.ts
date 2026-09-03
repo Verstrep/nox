@@ -6,7 +6,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { loadArchitectConfig } from "@/lib/architect/config";
-import { describeArchitectError } from "@/lib/architect/errors";
 import { OpenAIArchitectProvider } from "@/lib/architect/openai";
 import { loadBacklogInput } from "@/lib/backlog";
 import {
@@ -14,6 +13,7 @@ import {
   backlogReviewUrl,
   backlogUrl,
 } from "@/lib/backlog/display";
+import { backlogFailureMessage } from "@/lib/backlog/failure";
 import {
   applyProjectBacklog,
   dismissProjectBacklog,
@@ -96,8 +96,14 @@ export async function generateBacklogAction(
       if ("refusal" in generated) {
         return { error: backlogRefusalMessage(generated.refusal) };
       }
+      if (!("code" in generated)) {
+        return { error: generated.message };
+      }
+      // Le diagnostic, quand NOX en a un, dit **quoi** a ete refuse. Sans lui,
+      // il ne restait a l'utilisateur qu'a recliquer `Generate` : payer un
+      // second appel pour reapprendre ce que NOX savait deja.
       return {
-        error: "code" in generated ? describeArchitectError(generated.code) : generated.message,
+        error: backlogFailureMessage(generated.code, generated.diagnostic ?? null),
       };
     }
 

@@ -40,6 +40,7 @@ import {
   ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_LIMITS,
   ARCHITECT_BACKLOG_PROPOSAL_STATUS,
+  ARCHITECT_BACKLOG_DIAGNOSTIC_LIMITS,
   ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
   COMMAND_EXECUTION_MODE,
   DEFAULT_HUMAN_INSTRUCTIONS,
@@ -54,7 +55,10 @@ import {
   isTaskPriority,
   isTaskStatus,
   isVerificationMode,
+  architectBacklogFailureCategory,
+  sanitizeBacklogDiagnosticText,
   TASK_PRIORITY,
+  type ArchitectBacklogDiagnostic,
   type ArchitectBacklogGenerationStatus,
   type ArchitectBacklogCommandProposal,
   type ArchitectBacklogCriterionProposal,
@@ -112,6 +116,14 @@ export type ArchitectBacklogGenerationView = {
   providerResponseId: string | null;
   usage: ArchitectUsage;
   errorCode: string | null;
+  /**
+   * Ce que NOX a retenu de l'echec, quand il en a retenu quelque chose.
+   *
+   * `null` tant que la generation n'a pas echoue. Une generation echouee dont le
+   * diagnostic n'a jamais ete enregistre — toutes celles d'avant HOTFIX-001 —
+   * porte une categorie derivee de son code, et `field` comme `message` a `null`.
+   */
+  diagnostic: ArchitectBacklogDiagnostic | null;
   /** Date ISO 8601. */
   createdAt: string;
   finishedAt: string | null;
@@ -160,6 +172,8 @@ type GenerationRow = {
   totalTokens: number | null;
   cachedInputTokens: number | null;
   errorCode: string | null;
+  errorField: string | null;
+  errorDetail: string | null;
   createdAt: Date;
   finishedAt: Date | null;
 };
@@ -344,6 +358,28 @@ function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBa
   }
 }
 
+/**
+ * Ce que NOX sait de l'echec d'une generation.
+ *
+ * La categorie se derive du code : `errorCode` la porte deja, et une colonne de
+ * plus finirait par la contredire. Le champ et la phrase, eux, ne se derivent de
+ * rien — ils sont enregistres ou ils ne le sont pas, et `null` veut dire « cause
+ * non enregistree », jamais « aucune cause ».
+ */
+function toDiagnostic(row: GenerationRow): ArchitectBacklogDiagnostic | null {
+  const failed =
+    row.status === ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED ||
+    row.status === ARCHITECT_BACKLOG_GENERATION_STATUS.REFUSED;
+  if (!failed) {
+    return null;
+  }
+  return {
+    category: architectBacklogFailureCategory(row.errorCode),
+    field: row.errorField,
+    message: row.errorDetail,
+  };
+}
+
 function toGeneration(row: GenerationRow): ArchitectBacklogGenerationView {
   return {
     id: row.id,
@@ -372,6 +408,7 @@ function toGeneration(row: GenerationRow): ArchitectBacklogGenerationView {
       cachedInputTokens: row.cachedInputTokens,
     },
     errorCode: row.errorCode,
+    diagnostic: toDiagnostic(row),
     createdAt: row.createdAt.toISOString(),
     finishedAt: row.finishedAt?.toISOString() ?? null,
   };
@@ -517,6 +554,14 @@ export type FinishBacklogGenerationInput = {
   providerResponseId?: string | null;
   usage?: ArchitectUsage;
   errorCode?: string | null;
+  /**
+   * Champ refuse par la validation, tel que NOX l'a nomme.
+   *
+   * Jamais un fragment de la reponse du fournisseur : un chemin du contrat.
+   */
+  errorField?: string | null;
+  /** Phrase de refus destinee a l'utilisateur. Nettoyee et bornee ici. */
+  errorDetail?: string | null;
   /** Backlog valide, lorsque l'appel a abouti. */
   proposal?: ArchitectBacklogProposalV2 | null;
 };
@@ -565,6 +610,22 @@ export async function finishBacklogGeneration(
         totalTokens: usage.totalTokens,
         cachedInputTokens: usage.cachedInputTokens,
         errorCode: input.errorCode ?? null,
+        // Nettoyes et bornes **a l'ecriture** : ce qui est stocke est deja ce
+        // qui peut etre affiche, et aucune lecture n'a a s'en souvenir.
+        errorField:
+          input.errorField === undefined || input.errorField === null
+            ? null
+            : sanitizeBacklogDiagnosticText(
+                input.errorField,
+                ARCHITECT_BACKLOG_DIAGNOSTIC_LIMITS.field,
+              ),
+        errorDetail:
+          input.errorDetail === undefined || input.errorDetail === null
+            ? null
+            : sanitizeBacklogDiagnosticText(
+                input.errorDetail,
+                ARCHITECT_BACKLOG_DIAGNOSTIC_LIMITS.message,
+              ),
         finishedAt: new Date(),
       },
     });

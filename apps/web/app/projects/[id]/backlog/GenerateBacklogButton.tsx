@@ -47,7 +47,7 @@ export function GenerateBacklogButton({
       {state.error === null ? null : (
         <p
           role="alert"
-          className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-200"
+          className="whitespace-pre-line rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-200"
         >
           {state.error}
         </p>

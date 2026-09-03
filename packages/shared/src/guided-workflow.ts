@@ -308,7 +308,7 @@ export type GuidedAnalysisFact = {
 };
 
 export type GuidedArchitectFact = {
-  /** `NOX_OPENAI_API_KEY` et `NOX_ARCHITECT_MODEL` sont renseignes. */
+  /** `NOX_OPENAI_API_KEY` est renseignee. Le modele, lui, a un defaut. */
   configured: boolean;
   latestCompleted: GuidedAnalysisFact | null;
   /** La derniere tentative n'a pas abouti, et n'est pas `latestCompleted`. */

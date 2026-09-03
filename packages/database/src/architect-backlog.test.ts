@@ -24,9 +24,11 @@ import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  ARCHITECT_BACKLOG_FAILURE,
   ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_PROPOSAL_STATUS,
   ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  ARCHITECT_ERROR,
   COMMAND_EXECUTION_MODE,
   DEFAULT_HUMAN_INSTRUCTIONS,
   VERIFICATION_MODE,
@@ -1030,5 +1032,137 @@ describe("relecture d'une proposition historique", () => {
     assert.equal(first?.acceptanceCriteria[0]?.verificationMode, VERIFICATION_MODE.HUMAN);
     assert.equal(first?.validationCommands[0]?.executionMode, COMMAND_EXECUTION_MODE.AGENT_ONLY);
     assert.deepEqual(first?.acceptanceCriteria[0]?.validationCommandIndexes, []);
+  });
+});
+
+
+describe("diagnostic d'un echec de planification", () => {
+  /** Reserve une generation, sans la conclure. */
+  async function reserve(projectId: string, model = "modele-de-test"): Promise<string> {
+    const reserved = await startBacklogGeneration(db, {
+      projectId,
+      model,
+      promptVersion: "backlog/2",
+      inputHash: "hash-1",
+      manifest: MANIFEST,
+      base: planningBase(),
+    });
+    assert.ok(reserved.ok, "la reservation aboutit");
+    return reserved.generation.id;
+  }
+
+  it("conserve le champ refuse et sa phrase", async () => {
+    const projectId = await newProject();
+    const generationId = await reserve(projectId);
+
+    await finishBacklogGeneration(db, {
+      generationId,
+      status: ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED,
+      errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+      errorField: "tasks.0.acceptanceCriteria",
+      errorDetail: "Un critere de Tache 1 est vide ou trop long.",
+    });
+
+    const generation = await getBacklogGeneration(db, generationId);
+    assert.ok(generation !== null);
+    assert.deepEqual(generation.diagnostic, {
+      category: ARCHITECT_BACKLOG_FAILURE.OUTPUT_INVALID,
+      field: "tasks.0.acceptanceCriteria",
+      message: "Un critere de Tache 1 est vide ou trop long.",
+    });
+  });
+
+  it("nettoie et borne le diagnostic a l'ecriture", async () => {
+    const projectId = await newProject();
+    const generationId = await reserve(projectId);
+
+    await finishBacklogGeneration(db, {
+      generationId,
+      status: ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED,
+      errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+      errorField: "tasks.0.acceptanceCriteria",
+      errorDetail: `  Un critere ${String.fromCharCode(0)} trop long. ${"a".repeat(2_000)}  `,
+    });
+
+    const generation = await getBacklogGeneration(db, generationId);
+    assert.ok(generation?.diagnostic?.message != null);
+    // Ce qui est stocke est deja ce qui peut etre affiche : aucune lecture n'a a
+    // s'en souvenir.
+    assert.ok(generation.diagnostic.message.length <= 600);
+    assert.equal(generation.diagnostic.message.includes(String.fromCharCode(0)), false);
+    assert.ok(generation.diagnostic.message.endsWith("[…]"));
+  });
+
+  it("distingue une panne du fournisseur d'une sortie refusee", async () => {
+    const projectId = await newProject();
+    const generationId = await reserve(projectId);
+
+    // Aucune reponse recue : il n'y a pas de champ fautif, et en inventer un
+    // enverrait relire un backlog qui n'a jamais existe.
+    await finishBacklogGeneration(db, {
+      generationId,
+      status: ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED,
+      errorCode: ARCHITECT_ERROR.ARCHITECT_TIMEOUT,
+    });
+
+    const generation = await getBacklogGeneration(db, generationId);
+    assert.deepEqual(generation?.diagnostic, {
+      category: ARCHITECT_BACKLOG_FAILURE.PROVIDER_ERROR,
+      field: null,
+      message: null,
+    });
+  });
+
+  it("n'attache aucun diagnostic a une generation reussie", async () => {
+    const projectId = await newProject();
+    const { generationId } = await newProposal(projectId, ["A"]);
+
+    const generation = await getBacklogGeneration(db, generationId);
+    assert.equal(generation?.diagnostic, null);
+  });
+
+  it("laisse lisible une generation echouee sans diagnostic enregistre", async () => {
+    const projectId = await newProject();
+    const generationId = await reserve(projectId, "gpt-5-mini");
+
+    // Exactement la forme de `BACKLOG-001` : echouee avant HOTFIX-001, donc sans
+    // champ ni phrase. NOX ne reconstruit rien depuis les logs.
+    await finishBacklogGeneration(db, {
+      generationId,
+      status: ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED,
+      errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+    });
+
+    const generation = await getBacklogGeneration(db, generationId);
+    assert.ok(generation !== null);
+    assert.equal(generation.status, ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED);
+    assert.deepEqual(generation.diagnostic, {
+      category: ARCHITECT_BACKLOG_FAILURE.OUTPUT_INVALID,
+      field: null,
+      message: null,
+    });
+  });
+
+  it("rend a chaque generation le modele reellement utilise", async () => {
+    const projectId = await newProject();
+
+    // Une generation historique garde son modele : la ligne raconte l'appel qui
+    // a eu lieu, pas la configuration d'aujourd'hui.
+    const ancienne = await reserve(projectId, "gpt-5-mini");
+    await finishBacklogGeneration(db, {
+      generationId: ancienne,
+      status: ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED,
+      errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+    });
+
+    const recente = await reserve(projectId, "gpt-5.6-sol");
+    await finishBacklogGeneration(db, {
+      generationId: recente,
+      status: ARCHITECT_BACKLOG_GENERATION_STATUS.READY,
+      proposal: backlog(["A"]),
+    });
+
+    assert.equal((await getBacklogGeneration(db, ancienne))?.model, "gpt-5-mini");
+    assert.equal((await getBacklogGeneration(db, recente))?.model, "gpt-5.6-sol");
   });
 });

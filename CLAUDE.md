@@ -108,7 +108,9 @@ Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run runner:
 
 Le web et le runner sont **deux processus séparés** : ils se lancent dans deux terminaux et
 partagent le `.env` de la racine, dont `NOX_RUNNER_TOKEN`. L'Architecte ne concerne que le web :
-`NOX_OPENAI_API_KEY` et `NOX_ARCHITECT_MODEL` ne sont lus que par lui.
+`NOX_OPENAI_API_KEY` et `NOX_ARCHITECT_MODEL` ne sont lus que par lui. Seule la clé est
+obligatoire ; le modèle a un défaut, nommé une seule fois dans
+[apps/web/lib/architect/config.ts](apps/web/lib/architect/config.ts).
 
 Le client Prisma et les dossiers `dist/` sont générés : ne jamais les modifier à la main, et ne
 jamais les versionner. Les sources de `apps/runner` importent leurs voisins avec l'extension
@@ -380,7 +382,16 @@ doit le dire explicitement et la justifier.
 - **La clé s'appelle `NOX_OPENAI_API_KEY`** — le préfixe la place hors de portée de Claude Code
   par construction. Elle ne quitte jamais le serveur : ni navigateur, ni base, ni log, ni message
   d'erreur, ni prompt, même partiellement. Une variable manquante est signalée par son **nom**.
-- **Aucun modèle par défaut. Aucune URL de base configurable.**
+- **Le modèle par défaut est une autorité unique, jamais une valeur recopiée.**
+  `DEFAULT_ARCHITECT_MODEL` vit dans `apps/web/lib/architect/config.ts`, et aucun autre module de
+  production n'écrit d'identifiant de modèle. `NOX_ARCHITECT_MODEL` reste lue et reste
+  prioritaire ; son absence n'est plus un refus. L'effort de raisonnement se **dérive** du modèle
+  retenu : NOX n'en demande un que pour celui qu'il a choisi lui-même, parce qu'il ne connaît pas
+  les capacités des autres. Rien d'autre de `reasoning` n'est jamais déclaré — ni `summary`, ni
+  `include` : le raisonnement interne n'est ni demandé, ni reçu.
+- **Chaque génération enregistre le modèle réellement utilisé.** Une ligne historique n'est jamais
+  réécrite pour afficher le modèle du jour.
+- **Aucune URL de base configurable.**
 - **Le contexte est une liste fermée**, fixe et automatique : `CLAUDE.md`, `AGENTS.md`, six
   documents `docs/` nommés, les dix dernières tâches, la mémoire active. Le navigateur ne choisit
   aucun fichier. Aucun `.env`, aucun code source, aucun diff, aucun prompt, aucune timeline,

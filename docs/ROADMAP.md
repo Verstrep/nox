@@ -311,6 +311,15 @@ bout en bout. Ce qu'il doit mesurer :
 Aucune fonctionnalité nouvelle ne sera écrite avant que ce pilote ait tourné. Une liste écrite
 d'avance décrirait les manques qu'on imagine, pas ceux qu'on rencontre.
 
+### Correctifs issus du pilote
+
+Un correctif de pilote n'est pas une étape de roadmap : il répare ce que l'usage réel a montré,
+sans rien ajouter. Il est consigné ici pour que la chronologie reste lisible.
+
+| Correctif | Ce que le pilote a montré | Ce qui a changé |
+| --- | --- | --- |
+| `HOTFIX-001` | TripKit décidait son architecture sur `gpt-5-mini`, parce que `NOX_ARCHITECT_MODEL` était obligatoire et sa valeur recopiée d'un exemple. Et `BACKLOG-001` a échoué en n'affichant que « format attendu », alors que NOX connaissait le champ fautif. | Un modèle d'architecture par défaut, assumé et nommé à un seul endroit ; le diagnostic de refus d'un backlog persisté et affiché. Voir [D-378](DECISIONS.md) et [D-379](DECISIONS.md). |
+
 ---
 
 ## Vérification sur un projet réel

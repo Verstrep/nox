@@ -25,7 +25,11 @@ import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { loadTimelineProjectChanges } from "@/lib/replan/change";
 import { loadReplanState } from "@/lib/replan/load";
-import { ARCHITECT_ENVIRONMENT_VARIABLES, loadArchitectConfig } from "@/lib/architect/config";
+import {
+  ARCHITECT_ENVIRONMENT_VARIABLES,
+  ARCHITECT_OPTIONAL_ENVIRONMENT_VARIABLES,
+  loadArchitectConfig,
+} from "@/lib/architect/config";
 import {
   architectComposerTitle,
   architectOpeningMessage,
@@ -481,6 +485,11 @@ function LegacyConversation({
                 <li key={name}>
                   {name}
                   {missingConfig.includes(name) ? " — manquante" : " — definie"}
+                </li>
+              ))}
+              {ARCHITECT_OPTIONAL_ENVIRONMENT_VARIABLES.map((name) => (
+                <li key={name} className="text-zinc-600">
+                  {name} — facultative
                 </li>
               ))}
             </ul>

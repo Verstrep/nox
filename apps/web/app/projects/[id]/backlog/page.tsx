@@ -1,4 +1,7 @@
-import { ARCHITECT_BACKLOG_GENERATION_STATUS } from "@nox/shared";
+import {
+  ARCHITECT_BACKLOG_GENERATION_STATUS,
+  type ArchitectBacklogDiagnostic,
+} from "@nox/shared";
 import { getDatabaseClient } from "@nox/database";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -18,6 +21,7 @@ import {
   backlogTaskCountLabel,
   type BacklogSurfaceState,
 } from "@/lib/backlog/display";
+import { BACKLOG_FAILURE_FOOTER, describeBacklogFailure } from "@/lib/backlog/failure";
 import { isBacklogProposalStale } from "@/lib/backlog/service";
 import { formatIsoDateTime } from "@/lib/format";
 import { planUrl } from "@/lib/plan-display";
@@ -27,6 +31,43 @@ import { taskUrl } from "@/lib/task-display";
 
 import { DismissBacklogButton } from "./DismissBacklogButton";
 import { GenerateBacklogButton } from "./GenerateBacklogButton";
+
+/**
+ * La cause d'un echec, sur la ligne de la generation qui l'a produit.
+ *
+ * Trois informations distinctes, et l'ordre compte : ce qui s'est passe, ou, et
+ * pourquoi. Le chemin technique est conserve a cote de la designation lisible —
+ * `Tache 1 · Criteres d'acceptation` se lit, `tasks.0.acceptanceCriteria` se
+ * cherche dans une reponse.
+ *
+ * Une generation anterieure a l'enregistrement des causes affiche un repli
+ * explicite : NOX ne reconstruit rien depuis les logs.
+ */
+function failureDetail(generation: {
+  errorCode: string | null;
+  diagnostic: ArchitectBacklogDiagnostic | null;
+}): ReactNode {
+  if (generation.diagnostic === null) {
+    return null;
+  }
+  const failure = describeBacklogFailure(generation.errorCode, generation.diagnostic);
+
+  return (
+    <div className="mt-2 w-full rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs leading-relaxed text-zinc-400">
+      <p className="text-zinc-300">{failure.headline}</p>
+      {failure.field === null && failure.path === null ? null : (
+        <p className="mt-1 text-zinc-400">
+          {failure.field ?? failure.path}
+          {failure.path === null ? null : (
+            <span className="ml-2 font-mono text-[11px] text-zinc-600">{failure.path}</span>
+          )}
+        </p>
+      )}
+      {failure.detail === null ? null : <p className="mt-1 text-zinc-500">{failure.detail}</p>}
+      <p className="mt-1 text-zinc-600">{BACKLOG_FAILURE_FOOTER}</p>
+    </div>
+  );
+}
 
 function stateBadge(state: BacklogSurfaceState): ReactNode {
   if (state === "proposal_ready" || state === "applied") {
@@ -313,6 +354,7 @@ export default async function ProjectBacklogPage({
                   <span className="text-xs text-zinc-600">
                     {formatIsoDateTime(generation.createdAt) ?? "-"}
                   </span>
+                  {failureDetail(generation)}
                 </li>
               ))}
             </ul>

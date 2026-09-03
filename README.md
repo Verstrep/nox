@@ -145,11 +145,11 @@ L'Architecte est **facultatif**. Sans lui, NOX fonctionne : vous écrivez vos t�
 Avec lui, vous décrivez une intention et il propose une tâche structurée que vous relisez avant
 de la créer.
 
-Deux variables, toutes deux obligatoires pour générer :
+Une variable obligatoire, et une facultative :
 
 ```env
 NOX_OPENAI_API_KEY=<votre-cle-openai>
-NOX_ARCHITECT_MODEL=<identifiant-de-modele>
+NOX_ARCHITECT_MODEL=                     # facultatif
 ```
 
 Points importants :
@@ -158,9 +158,14 @@ Points importants :
   le runner retire de l'environnement de Claude Code **toutes** les variables commençant par
   `NOX_`. Nommée ainsi, la clé est hors de portée de l'agent par construction, sans qu'aucune
   règle supplémentaire ait à être écrite — ni oubliée.
-- **Aucun modèle par défaut.** NOX n'en choisit jamais un en silence : ce serait choisir un coût
-  et une disponibilité à votre place. Sans `NOX_ARCHITECT_MODEL`, la page Architecte reste
-  consultable et le contexte inspectable ; seule la génération est bloquée.
+- **Le modèle par défaut est `gpt-5.6-sol`, avec un effort de raisonnement `high`.** C'est le
+  modèle des décisions d'architecture de NOX : conversation projet, replanification, backlog de
+  V1 et analyse de review. Il est nommé à un seul endroit,
+  [apps/web/lib/architect/config.ts](apps/web/lib/architect/config.ts).
+- **`NOX_ARCHITECT_MODEL` reste lue, et reste prioritaire.** Configurer un modèle est une
+  décision, et NOX ne la reprend pas. Il ne demande alors aucun effort de raisonnement : il ne
+  connaît pas les capacités d'un modèle qu'il n'a pas choisi, et un paramètre inconnu ferait
+  échouer l'appel.
 - **Aucune URL de base configurable.** NOX envoie du contexte projet ; pouvoir rediriger cet
   envoi vers une adresse arbitraire ouvrirait un canal d'exfiltration pour un gain nul.
 - **Redémarrez l'application web** après modification : ces variables sont lues au démarrage.
@@ -396,7 +401,7 @@ d'exception. Une route inconnue renvoie `404` avec `ROUTE_NOT_FOUND`.
 | `NOX_RUNNER_HOST ... n'est pas une adresse de boucle locale` | Hôte non autorisé | Remettre `127.0.0.1` |
 | `Le port 4310 est deja utilise` | Un autre runner tourne déjà | L'arrêter, ou définir `NOX_RUNNER_PORT` **et** `NOX_RUNNER_URL` |
 | `GIT_NOT_AVAILABLE` / « Git est introuvable » | Git absent du `PATH` du runner | Installer Git, puis redémarrer le runner |
-| L'Architecte refuse de générer | `NOX_ARCHITECT_MODEL` ou `NOX_OPENAI_API_KEY` absente | Les définir, puis redémarrer l'application web |
+| L'Architecte refuse de générer | `NOX_OPENAI_API_KEY` absente | La définir, puis redémarrer l'application web |
 
 Après toute modification du `.env`, **redémarrez les deux processus** : les variables sont lues
 au démarrage.
