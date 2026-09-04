@@ -57,6 +57,7 @@ import {
   type ValidationBatchStatus,
 } from "@nox/shared";
 
+import { describeInfrastructureFailure } from "./runner/errors.ts";
 import { readRepositoryTrackedState, runValidationCommand } from "./runner/client.ts";
 import type { AdvanceQueueResult } from "./queue.ts";
 
@@ -206,11 +207,14 @@ export async function runAutonomousValidation(
 
     if (!executed.ok) {
       const status = AUTONOMOUS_VALIDATION_STATUS.ERROR;
-      const message =
-        executed.failure.kind === "runner_error"
-          ? executed.failure.code
-          : "Le runner n'a pas repondu.";
-      infrastructureError ??= { code: "VALIDATION_UNAVAILABLE", message };
+      // Le code reel plutot qu'un `VALIDATION_UNAVAILABLE` generique, et la
+      // phrase du runner plutot que le seul code : « je n'ai pas pu regarder »
+      // ne devient utile que lorsqu'il dit **pourquoi**. Rien de ce qui est
+      // conserve ici ne vient d'un message du systeme : le runner ecrit ses
+      // details lui-meme, sans chemin absolu ni environnement.
+      const described = describeInfrastructureFailure(executed.failure);
+      const message = described.message;
+      infrastructureError ??= described;
 
       await recordValidationResult(db, reserved.batchId, {
         position,

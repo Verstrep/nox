@@ -136,8 +136,19 @@ describe("ClaudeEventNormalizer — raisonnement interne", () => {
 });
 
 describe("describeToolUse", () => {
-  const displayable = (command: string): string | null =>
-    ALLOWED.includes(command.trim()) ? command.trim() : null;
+  /**
+   * Lecture simulee : la commande est affichable, ou elle ne l'est pas.
+   *
+   * `reason` reprend la distinction du vrai lecteur — une ligne illisible n'est
+   * pas une ligne dont les segments sont simplement inconnus.
+   */
+  const displayable = (command: string): { display: string | null; reason: null | "unreadable" | "unrecognized" } => {
+    const trimmed = command.trim();
+    if (ALLOWED.includes(trimmed)) {
+      return { display: trimmed, reason: null };
+    }
+    return { display: null, reason: /[;|<>`]/u.test(trimmed) ? "unreadable" : "unrecognized" };
+  };
 
   it("decrit une lecture", () => {
     assert.equal(describeToolUse("Read", { file_path: "README.md" }, displayable), "Reading README.md");
@@ -651,7 +662,12 @@ describe("ClaudeEventNormalizer — forme reelle de Claude Code 2.1.223", () => 
     const drafts = instance.next(
       realToolUse("t1", `${REPOSITORY} && git diff --check; echo "exit=$?"`),
     );
-    assert.equal(drafts[0]?.label, "Running an allowed command");
+    // La ligne est annoncee comme illisible plutot que comme « une commande
+    // autorisee » : c'est ce qui explique, dans la review, qu'une validation
+    // attendue soit restee `NOT_RUN`. Le contenu de la ligne, lui, ne sort pas.
+    assert.equal(drafts[0]?.label, "Running a command line NOX does not read");
+    assert.equal(drafts[0]?.label.includes("git diff"), false);
+    assert.equal(drafts[0]?.label.includes("echo"), false);
 
     instance.next(realToolResult("t1", "requires approval", true));
     assert.deepEqual(seen, []);
@@ -660,8 +676,12 @@ describe("ClaudeEventNormalizer — forme reelle de Claude Code 2.1.223", () => 
   it("refuse une redirection", () => {
     const { instance, seen } = observing();
 
+    // La forme exacte rencontree pendant le premier pilote reel :
+    // `npm test 2>&1 | tail -60`. Le code de sortie observable serait celui du
+    // dernier maillon, pas celui de la commande enregistree — NOX ne valide
+    // donc rien, et c'est le comportement correct.
     const drafts = instance.next(realToolUse("t1", "git diff --check 2>&1"));
-    assert.equal(drafts[0]?.label, "Running an allowed command");
+    assert.equal(drafts[0]?.label, "Running a command line NOX does not read");
     assert.deepEqual(seen, []);
   });
 

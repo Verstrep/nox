@@ -18,8 +18,15 @@ export type RunnerFailure =
   | { kind: "unauthorized" }
   /** Reponse illisible ou ne respectant pas le contrat partage. */
   | { kind: "invalid_response" }
-  /** Echec metier remonte par le runner, avec son code stable. */
-  | { kind: "runner_error"; code: RunnerErrorCode };
+  /**
+   * Echec metier remonte par le runner, avec son code stable.
+   *
+   * `detail` est facultatif et purement descriptif : il nomme ce que le code
+   * laisse ambigu — un programme introuvable et un lancement refuse par le
+   * systeme partagent `VALIDATION_SPAWN_FAILED`. Il n'entre dans aucune
+   * decision, et aucune traduction ne depend de sa presence.
+   */
+  | { kind: "runner_error"; code: RunnerErrorCode; detail?: string };
 
 export type RunnerResult<TValue> =
   | { ok: true; value: TValue }
@@ -288,6 +295,29 @@ export function describeRunnerFailure(failure: RunnerFailure): string {
     case "runner_error":
       return CODE_MESSAGES[failure.code];
   }
+}
+
+/**
+ * Ce que NOX conserve d'un echec d'infrastructure.
+ *
+ * `code` est stable et sert a l'historique ; `message` est la phrase affichee.
+ * Le detail du runner, quand il existe, s'y ajoute : il nomme ce que le code
+ * laisse ambigu — « le programme est introuvable » et « le systeme a refuse de
+ * le demarrer » partagent `VALIDATION_SPAWN_FAILED`, et le premier se corrige en
+ * installant un outil, le second pas.
+ *
+ * Aucun detail n'est invente : un echec sans detail rend la phrase du code, qui
+ * reste exacte.
+ */
+export function describeInfrastructureFailure(failure: RunnerFailure): {
+  code: string;
+  message: string;
+} {
+  const code = failure.kind === "runner_error" ? failure.code : failure.kind.toUpperCase();
+  const base = describeRunnerFailure(failure);
+  const detail = failure.kind === "runner_error" ? (failure.detail ?? null) : null;
+
+  return { code, message: detail === null ? base : `${base} ${detail}` };
 }
 
 /**

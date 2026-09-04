@@ -24,7 +24,9 @@ export type { ProjectStatus, RunStatus, TaskStatus } from "./statuses.js";
 export {
   RUNNER_ERROR,
   RUNNER_ERROR_CODES,
+  RUNNER_ERROR_DETAIL_LIMIT,
   RUNNER_SERVICE_NAME,
+  boundErrorDetail,
   isResolveRepositorySuccess,
   isRunnerErrorCode,
   isRunnerErrorResponse,

@@ -738,9 +738,22 @@ tâche, et dans le prompt transmis à Claude Code.
   conservé et affiché, mais il n'entre dans aucune dérivation de résultat.
 - **La politique des commandes autonomes est distincte de celle de l'amorçage**, et rejouée par le
   runner : il ne fait pas confiance au web.
-- **Aucun interprète de commandes.** `shell: false`, jamais `cmd /c`, `bash -c` ni `sh -c`. Le
-  découpage est trivial parce que `checkValidationCommand` a déjà refusé tout ce qui le rendrait
-  difficile.
+- **Aucun interprète de commandes ne compose la ligne.** `shell: false`, jamais `bash -c` ni
+  `sh -c`. Le découpage est trivial parce que `checkValidationCommand` a déjà refusé tout ce qui le
+  rendrait difficile.
+- **La stratégie de lancement dépend de la plateforme, et elle est écrite à un seul endroit.** Hors
+  Windows, le programme résolu est lancé directement, chaque argument restant un élément distinct.
+  Sous Windows, un `.cmd` ou un `.bat` — ce que sont `npm`, `npx` et `gradlew` — passe par
+  `cmd.exe /d /s /c` avec une ligne que NOX cite lui-même, jeton par jeton, et qui part en
+  `windowsVerbatimArguments`. Laisser Node échapper cette ligne argument par argument produit une
+  commande que `cmd.exe` relit autrement : avec `/s`, il retire la première et la dernière
+  guillemet, et `C:\Program Files\…` devient `C:\Program`.
+  La différence avec `shell: true` est celle qui compte : `shell: true` demande à Node de
+  **fabriquer** une ligne à partir de chaînes, sans que NOX la voie ; ici NOX l'écrit, la vérifie
+  jeton par jeton, et **refuse de la construire** plutôt que de l'approximer.
+- **Un fichier sans extension n'est pas exécutable sous Windows.** La résolution ne retient que les
+  extensions de `PATHEXT`, et un chemin relatif — `./gradlew` — se résout depuis le repository,
+  jamais depuis le dossier de lancement du runner.
 - **Le répertoire de travail est la racine canonique**, relue à partir de l'identifiant du projet.
   Aucune variable `NOX_*` n'atteint le processus.
 - **Le lot est réservé par un index unique `(runId, attempt)`.** Dix rafraîchissements de page

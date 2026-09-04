@@ -319,6 +319,7 @@ sans rien ajouter. Il est consigné ici pour que la chronologie reste lisible.
 | Correctif | Ce que le pilote a montré | Ce qui a changé |
 | --- | --- | --- |
 | `HOTFIX-001` | TripKit décidait son architecture sur `gpt-5-mini`, parce que `NOX_ARCHITECT_MODEL` était obligatoire et sa valeur recopiée d'un exemple. Et `BACKLOG-001` a échoué en n'affichant que « format attendu », alors que NOX connaissait le champ fautif. | Un modèle d'architecture par défaut, assumé et nommé à un seul endroit ; le diagnostic de refus d'un backlog persisté et affiché. Voir [D-378](DECISIONS.md) et [D-379](DECISIONS.md). |
+| `HOTFIX-002` | La validation autonome de `TASK-001` ne démarrait pas sous Windows — `npm` y est un `.cmd`, et trois défauts distincts s'additionnaient. Et la review affirmait que Claude Code n'avait jamais lancé des commandes qu'il avait bel et bien lancées, dans un enchaînement que NOX refuse de lire. | Une stratégie de lancement dépendante de la plateforme, écrite à un seul endroit ; un diagnostic d'infrastructure qui nomme sa cause ; une review qui dit ce que NOX a observé plutôt que ce que l'agent aurait fait. Voir [D-380](DECISIONS.md) à [D-383](DECISIONS.md). |
 
 ---
 

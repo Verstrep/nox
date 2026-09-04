@@ -5815,3 +5815,120 @@ les logs, une taxonomie d'erreurs élargie.
 le refus « tout ou rien » sont intacts. Un clic vaut toujours au plus un appel, échec compris. Une
 génération antérieure à ce hotfix reste lisible, avec un repli explicite — « cause non
 enregistrée » est un état, pas une occasion d'en inventer une.
+
+
+## HOTFIX-002 — Premier pilote réel, suite
+
+### D-380 — La stratégie de lancement dépend de la plateforme, et vit à un seul endroit
+
+**Décision.** Hors Windows, le programme résolu est lancé directement. Sous Windows, un `.cmd` ou
+un `.bat` passe par `cmd.exe /d /s /c`, avec une ligne que NOX écrit lui-même : chaque jeton cité,
+plus la paire extérieure que `/s` consomme, envoyée en `windowsVerbatimArguments`. La construction
+vit dans `apps/runner/src/claude/command-line.ts`, et elle **refuse** de produire une ligne dès
+qu'un jeton porte un guillemet, un `%`, un caractère de contrôle ou un antislash final.
+
+La résolution, elle, ne retient sous Windows que les extensions de `PATHEXT` : un fichier sans
+extension n'y est pas exécutable.
+
+**Justification.** Le premier pilote a produit `VALIDATION_SPAWN_FAILED` sur un `npm test` qui
+fonctionnait parfaitement depuis un terminal. Trois causes s'additionnaient, et aucune n'était
+celle qu'on aurait devinée :
+
+1. `C:\Program Files\nodejs\` contient un fichier `npm` **sans extension** — le script destiné à
+   Unix — à côté de `npm.cmd`. La résolution retenait le premier parce qu'il existait, et Windows
+   ne sait pas le lancer : `ENOENT`.
+2. Retenir `npm.cmd` n'aurait pas suffi. Depuis la correction de CVE-2024-27980, Node **refuse** de
+   lancer un `.cmd` sans shell et lève `EINVAL`. C'est pourquoi « remplacer `npm` par `npm.cmd` »
+   n'était pas la correction.
+3. L'enveloppe `cmd.exe` existait déjà — elle servait à `claude.cmd` — mais sa ligne était citée
+   par Node argument par argument. Avec `/s`, `cmd.exe` retire la première et la dernière guillemet
+   de ce qui suit `/c` : `"C:\Program Files\nodejs\npm.cmd" test` perdait sa protection et
+   devenait une tentative de lancer `C:\Program`. Elle ne fonctionnait jusque-là que parce que
+   `claude.cmd` s'installe dans un chemin sans espace.
+
+`shell: true` réglerait les trois d'un coup, et c'est précisément pour cela qu'il est écarté : il
+demande à Node de **fabriquer** une ligne à partir de chaînes, sans que NOX voie le résultat. Ici,
+NOX écrit la ligne et vérifie chaque jeton. La sécurité ne vient pas de ce qu'on évite d'invoquer,
+elle vient de ce qu'on contrôle.
+
+`%` est le seul caractère qu'une paire de guillemets ne neutralise pas — `cmd.exe` développe
+`%VAR%` même cité. Il est donc refusé, comme le guillemet et l'antislash final. L'alphabet de
+`checkValidationCommand` ne contient déjà aucun de ces caractères : cette seconde barrière ne fait
+pas confiance à la première.
+
+**Ce qu'elle écarte.** `shell: true`, un `npm.cmd` codé en dur, une liste de programmes traités à
+part, un échappement laissé à Node pour `cmd.exe`, une ligne construite à deux endroits.
+
+**Ce qu'elle ne change pas.** Le répertoire de travail reste la racine canonique. L'environnement
+reste privé de toute variable `NOX_*`. Le délai, l'annulation, `stdout`, `stderr`, le code de
+sortie et la durée sont inchangés. Un code de sortie non nul reste un échec de validation, jamais
+une panne.
+
+### D-381 — Une panne de lancement nomme sa cause, sans décrire la machine
+
+**Décision.** Un échec d'infrastructure conserve un diagnostic court, écrit par NOX à partir du
+seul code système : « Le systeme a refuse de demarrer la commande de validation. Code systeme :
+ENOENT. » Il traverse le runner par un champ `detail` **facultatif** de la réponse d'erreur, borné
+et nettoyé des deux côtés, et rejoint `AutonomousValidationBatch.errorMessage`, qui existait déjà.
+
+**Justification.** Le pilote a lu `VALIDATION_SPAWN_FAILED`, et rien d'autre. Rien ne distinguait
+« le programme est introuvable » de « le système a refusé de le démarrer », alors que le premier se
+corrige en installant un outil et le second pas.
+
+Le message d'origine de Node — `spawn C:\Program Files\nodejs\npm ENOENT` — porte le chemin
+absolu de l'exécutable, et aucun chemin de la machine ne sort du runner. Seul le code errno est
+conservé : il suffit à nommer la cause, et il ne décrit ni l'arborescence, ni l'environnement, ni
+un secret.
+
+Aucune migration : la colonne existait, elle recevait le code au lieu de la cause.
+
+**Ce qu'elle écarte.** Une taxonomie d'erreurs d'infrastructure, une table dédiée, une trace
+d'exception transmise, un message du système recopié tel quel.
+
+### D-382 — Une commande enchaînée par l'agent n'est pas la commande enregistrée
+
+**Décision.** La correspondance reste exacte, segment par segment. `npm test 2>&1 | tail -60` ne
+compte pas comme une exécution de `npm test`, et rien du compte rendu final du modèle n'est lu. Ce
+qui change est ce que NOX **dit** : la timeline distingue une ligne qu'il n'a pas su lire d'une
+ligne dont aucun segment n'est reconnu, et la review ne prétend plus savoir ce que Claude Code a
+lancé.
+
+**Justification.** Le pilote a marqué `npm run build` et `npm test` « Not run » alors que le
+transcript de la session prouve que l'agent les avait lancées. Il les avait lancées ainsi :
+
+```text
+cd "D:\Projets\Dev\TripKit" && npm test 2>&1 | tail -60
+cd "D:\Projets\Dev\TripKit" && npm run build 2>&1 | tail -25
+```
+
+Le refus était **correct**, et le corriger aurait été une faute : dans un tuyau, le code de sortie
+observable est celui de `tail`. `npm test` peut échouer et la ligne rendre zéro. Reconnaître ces
+lignes aurait fabriqué une preuve — exactement ce que la validation autonome existe pour éviter.
+
+Ce qui était faux, c'était la phrase. « Claude Code n'a jamais lancé cette commande » affirme
+quelque chose que NOX n'est pas en position de savoir : il sait ce qu'il a **observé**. La review
+dit désormais cela, et la timeline explique pourquoi elle s'est tue — sans jamais recopier un
+fragment de la ligne.
+
+**Ce qu'elle écarte.** Une normalisation d'arguments, une correspondance approchée, une lecture des
+redirections ou des tuyaux, et surtout toute lecture du texte final du modèle : « npm test passe »
+n'est pas une preuve, et ne le deviendra pas.
+
+**Ce qu'elle ne change pas.** Le résultat observé chez Claude Code reste informatif. Seule une
+commande que NOX a exécutée lui-même valide un critère `AUTOMATED` — TASK-027 et TASK-028 sont
+intactes.
+
+### D-383 — Une réussite se demande, elle ne se déduit pas d'une absence d'échec
+
+**Décision.** `deriveCriterionResult` ne conclut `PASSED` que si **tous** les statuts valent
+`PASSED`. Tout autre statut laisse `NOT_VERIFIED`.
+
+**Justification.** La formulation précédente — « ni échec ni panne, donc réussi » — faisait de
+n'importe quel statut inattendu une preuve. Aucun n'était atteignable : le type est une union
+fermée, et le seul producteur est le lot de NOX. Mais HOTFIX-002 rend l'affichage des commandes de
+Claude Code plus fidèle, et le risque que ce hotfix introduit est précisément qu'un statut venu de
+l'agent finisse un jour par emprunter ce chemin. Le défaut sûr de NOX veut qu'un statut qu'on ne
+reconnaît pas n'accorde rien.
+
+**Ce qu'elle ne change pas.** Aucun comportement observable : les quatre statuts existants
+produisent exactement les mêmes résultats qu'avant.

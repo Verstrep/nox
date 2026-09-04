@@ -461,3 +461,176 @@ describe("validations — ce qui ne doit pas devenir une validation", () => {
     assert.ok(outcome.labels.includes("Validation failed"));
   });
 });
+
+
+/**
+ * Ce que le premier pilote reel a produit, et ce que NOX doit en conclure.
+ *
+ * ## Les lignes exactes
+ *
+ * TripKit a enregistre `npm run build` et `npm test`. Claude Code les a lancees
+ * — le transcript de sa session le prouve — mais jamais nues :
+ *
+ * ```text
+ * cd "D:\Projets\Dev\TripKit" && npm test 2>&1 | tail -60
+ * cd "D:\Projets\Dev\TripKit" && npm run build 2>&1 | tail -25
+ * ```
+ *
+ * ## Pourquoi `NOT_RUN` etait le bon verdict
+ *
+ * Parce que dans un tuyau, le code de sortie observable est celui de `tail`, pas
+ * celui de `npm`. Reconnaitre ces lignes comme la validation enregistree
+ * fabriquerait une preuve : un `npm test` en echec suivi de `| tail` rend zero.
+ *
+ * Ce bloc fige donc l'exigence dans les deux sens : la forme exacte du pilote ne
+ * doit **jamais** compter comme une execution, et la forme nue doit **toujours**
+ * compter. Un assouplissement futur du matching casserait la premiere moitie.
+ */
+describe("validations — preuve d'execution observee par NOX", () => {
+  const BUILD = "npm run build";
+  const TEST = "npm test";
+
+  /** Une ligne Bash telle que Claude Code l'emet, prefixe de navigation compris. */
+  function line(command: string): string {
+    return `cd "${repository.replaceAll("\\", "/")}" && ${command}`;
+  }
+
+  function lines(...commands: readonly string[]): string[] {
+    const stream = [JSON.stringify({ type: "system", subtype: "init", session_id: SESSION })];
+    for (const [index, command] of commands.entries()) {
+      stream.push(toolUse(`b-${String(index)}`, line(command)));
+      stream.push(toolResult(`b-${String(index)}`, false));
+    }
+    return stream;
+  }
+
+  function statusOf(outcome: RunOutcome, command: string): string | undefined {
+    return outcome.validations.find((entry) => entry.command === command)?.status;
+  }
+
+  it("reconnait une commande enregistree lancee nue", async () => {
+    const outcome = await launch("INITIAL", lines(TEST, BUILD), [BUILD, TEST]);
+
+    assert.equal(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.PASSED);
+    assert.equal(statusOf(outcome, BUILD), RUN_VALIDATION_STATUS.PASSED);
+  });
+
+  it("ne reconnait pas la forme exacte du pilote, et c'est voulu", async () => {
+    // Le code de sortie de `npm test 2>&1 | tail -60` est celui de `tail` : il
+    // vaut zero meme quand les tests echouent. Le compter serait fabriquer une
+    // preuve.
+    const outcome = await launch(
+      "INITIAL",
+      lines("npm test 2>&1 | tail -60", "npm run build 2>&1 | tail -25"),
+      [BUILD, TEST],
+    );
+
+    assert.equal(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.NOT_RUN);
+    assert.equal(statusOf(outcome, BUILD), RUN_VALIDATION_STATUS.NOT_RUN);
+  });
+
+  it("annonce dans la timeline qu'une ligne n'a pas pu etre lue", async () => {
+    // C'est la seule chose qui manquait : la review disait « jamais lancee »
+    // sans que rien n'explique pourquoi NOX ne l'avait pas vue.
+    const outcome = await launch("INITIAL", lines("npm test 2>&1 | tail -60"), [TEST]);
+
+    assert.ok(outcome.labels.includes("Running a command line NOX does not read"));
+    // Et la ligne elle-meme ne sort pas.
+    assert.equal(
+      outcome.labels.some((label) => label.includes("tail")),
+      false,
+    );
+  });
+
+  it("ne confond pas une commande citee avec une commande lancee", async () => {
+    const outcome = await launch("INITIAL", lines(`echo "${TEST}"`), [TEST]);
+
+    assert.equal(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.NOT_RUN);
+  });
+
+  it("ne confond pas une commande voisine avec la commande enregistree", async () => {
+    const outcome = await launch("INITIAL", lines("npm test -- --update"), [TEST]);
+
+    // Le contrat actuel ne prevoit aucune normalisation d'arguments : une
+    // commande differente est une commande differente.
+    assert.equal(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.NOT_RUN);
+  });
+
+  it("laisse NOT_RUN quand rien n'a ete lance", async () => {
+    const outcome = await launch(
+      "INITIAL",
+      [JSON.stringify({ type: "system", subtype: "init", session_id: SESSION })],
+      [BUILD, TEST],
+    );
+
+    assert.equal(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.NOT_RUN);
+    assert.equal(statusOf(outcome, BUILD), RUN_VALIDATION_STATUS.NOT_RUN);
+  });
+
+  it("ne lit jamais le compte rendu final du modele", async () => {
+    // Le texte de Claude n'est pas une preuve. Celui du pilote disait
+    // « `npm run build` et `npm test` passent (61 tests) » — et NOX doit
+    // continuer a repondre `NOT_RUN`.
+    const outcome = await launch(
+      "INITIAL",
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: SESSION }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [
+              {
+                type: "text",
+                text: "npm run build et npm test passent : 61 tests verts, build reussi.",
+              },
+            ],
+          },
+        }),
+      ],
+      [BUILD, TEST],
+    );
+
+    assert.equal(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.NOT_RUN);
+    assert.equal(statusOf(outcome, BUILD), RUN_VALIDATION_STATUS.NOT_RUN);
+  });
+
+  it("ne compte pas une commande refusee comme une reussite", async () => {
+    const outcome = await launch(
+      "INITIAL",
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: SESSION }),
+        toolUse("b-0", line(TEST)),
+        toolResult("b-0", true),
+      ],
+      [TEST],
+    );
+
+    assert.notEqual(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.PASSED);
+  });
+
+  it("garde l'historique coherent quand la meme commande est relancee", async () => {
+    // Un echec, une correction, une relance : c'est le dernier resultat terminal
+    // qui est represente, et la commande ne redevient jamais `NOT_RUN`.
+    const outcome = await launch(
+      "INITIAL",
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: SESSION }),
+        toolUse("b-0", line(TEST)),
+        toolResult("b-0", true),
+        toolUse("b-1", line(TEST)),
+        toolResult("b-1", false),
+      ],
+      [TEST],
+    );
+
+    assert.equal(statusOf(outcome, TEST), RUN_VALIDATION_STATUS.PASSED);
+  });
+
+  it("applique exactement la meme regle a une correction", async () => {
+    const observed = await launch("CORRECTION", lines("npm test 2>&1 | tail -60"), [TEST]);
+    assert.equal(statusOf(observed, TEST), RUN_VALIDATION_STATUS.NOT_RUN);
+
+    const bare = await launch("CORRECTION", lines(TEST), [TEST]);
+    assert.equal(statusOf(bare, TEST), RUN_VALIDATION_STATUS.PASSED);
+  });
+});

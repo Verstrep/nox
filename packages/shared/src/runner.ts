@@ -403,10 +403,28 @@ export type ResolveRepositorySuccess = {
   };
 };
 
-/** Reponse d'echec commune a toutes les routes du runner. */
+/** Longueur maximale d'un detail d'erreur du runner. */
+export const RUNNER_ERROR_DETAIL_LIMIT = 300;
+
+/**
+ * Reponse d'echec commune a toutes les routes du runner.
+ *
+ * ## Le detail, et ce qu'il ne peut pas etre
+ *
+ * `code` reste l'autorite : stable, ferme, et seul a decider de quoi que ce
+ * soit. `detail` ne fait que **nommer** ce que le code laisse ambigu — un
+ * programme introuvable et un lancement refuse par le systeme partagent le meme
+ * code, et l'un se corrige en installant un outil, l'autre pas.
+ *
+ * Il est facultatif, et il l'est pour de bon : une reponse sans detail est une
+ * reponse normale, et l'interface doit rester lisible sans lui. Il ne porte
+ * jamais de chemin absolu, de variable d'environnement, de trace d'exception ni
+ * de fragment de jeton — les routes qui en produisent un l'ecrivent elles-memes,
+ * elles ne recopient pas un message du systeme.
+ */
 export type RunnerErrorResponse = {
   ok: false;
-  error: { code: RunnerErrorCode };
+  error: { code: RunnerErrorCode; detail?: string };
 };
 
 export type ResolveRepositoryResponse = ResolveRepositorySuccess | RunnerErrorResponse;
@@ -442,7 +460,33 @@ export function isRunnerErrorResponse(value: unknown): value is RunnerErrorRespo
     return false;
   }
   const error: unknown = value["error"];
-  return isRecord(error) && isRunnerErrorCode(error["code"]);
+  if (!isRecord(error) || !isRunnerErrorCode(error["code"])) {
+    return false;
+  }
+  // Un detail present doit etre une chaine ; un detail d'une autre forme rend la
+  // reponse invalide plutot que d'etre ignore en silence.
+  const detail: unknown = error["detail"];
+  return detail === undefined || typeof detail === "string";
+}
+
+/**
+ * Detail d'erreur, borne et debarrasse de ses caracteres de controle.
+ *
+ * Applique a l'ecriture comme a la lecture : ce qui traverse le reseau est deja
+ * ce qui peut etre affiche, et aucune couche n'a a s'en souvenir.
+ */
+export function boundErrorDetail(detail: string): string | null {
+  const cleaned = detail
+    // eslint-disable-next-line no-control-regex -- c'est precisement ce qu'on retire.
+    .replace(/[\u0000-\u001F\u007F]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (cleaned === "") {
+    return null;
+  }
+  return cleaned.length <= RUNNER_ERROR_DETAIL_LIMIT
+    ? cleaned
+    : `${cleaned.slice(0, RUNNER_ERROR_DETAIL_LIMIT - 2).trim()} …`;
 }
 
 /** Verifie qu'une reponse JSON est une resolution de repository reussie. */

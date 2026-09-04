@@ -808,14 +808,14 @@ export function deriveCriterionResult(
   if (statuses.some((status) => status !== undefined && isValidationFailure(status))) {
     return CRITERION_VERIFICATION_RESULT.FAILED;
   }
-  if (
-    statuses.some(
-      (status) => status === undefined || status === AUTONOMOUS_VALIDATION_STATUS.ERROR,
-    )
-  ) {
-    return CRITERION_VERIFICATION_RESULT.NOT_VERIFIED;
+  // Une reussite se **demande**, elle ne se deduit pas d'une absence d'echec.
+  // Ecrit dans l'autre sens — « ni echec ni panne, donc reussi » — n'importe
+  // quel statut inattendu vaudrait une preuve, et le defaut sur de NOX veut
+  // qu'un statut qu'on ne reconnait pas n'accorde rien.
+  if (statuses.every((status) => status === AUTONOMOUS_VALIDATION_STATUS.PASSED)) {
+    return CRITERION_VERIFICATION_RESULT.PASSED;
   }
-  return CRITERION_VERIFICATION_RESULT.PASSED;
+  return CRITERION_VERIFICATION_RESULT.NOT_VERIFIED;
 }
 
 /** Un critere, accompagne de ce que le lot en a dit. */

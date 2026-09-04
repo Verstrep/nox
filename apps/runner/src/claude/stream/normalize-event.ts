@@ -45,7 +45,7 @@ import {
   type ClaudeRunEventDraft,
 } from "@nox/shared";
 
-import { readBashCommand } from "./bash-command.ts";
+import { readBashCommand, type BashCommandRefusal } from "./bash-command.ts";
 import {
   readArray,
   readBoolean,
@@ -293,7 +293,12 @@ export class ClaudeEventNormalizer {
     const reading =
       name === "Bash"
         ? readBashCommand(readString(input, "command") ?? "", this.#allowedCommands)
-        : { display: null, validations: [] as readonly string[], commandCount: 0 };
+        : {
+            display: null,
+            validations: [] as readonly string[],
+            commandCount: 0,
+            reason: null as BashCommandRefusal | null,
+          };
 
     if (id !== null) {
       this.#remember(id, {
@@ -309,7 +314,10 @@ export class ClaudeEventNormalizer {
 
     return {
       kind: CLAUDE_RUN_EVENT_KIND.TOOL_STARTED,
-      label: describeToolUse(name, input, () => reading.display),
+      label: describeToolUse(name, input, () => ({
+        display: reading.display,
+        reason: reading.reason,
+      })),
       detail: null,
       toolName: name,
       isError: false,
@@ -479,10 +487,26 @@ function bound(value: string): string {
  * contenu de fichier, aucune commande non autorisee et aucun motif demesure n'y
  * apparait.
  */
+/**
+ * Libelle d'une ligne Bash dont rien n'est affichable.
+ *
+ * Deux libelles, parce que deux situations differentes : « l'agent a lance une
+ * commande autorisee que NOX ne detaille pas » et « l'agent a lance une ligne que
+ * NOX ne sait pas lire — donc dont il ne validera rien ». La seconde explique une
+ * validation restee `NOT_RUN` ; la premiere ne l'explique pas.
+ *
+ * Aucun des deux ne revele le contenu de la ligne.
+ */
+export const UNSHOWN_COMMAND_LABEL = "Running an allowed command";
+export const UNREADABLE_COMMAND_LABEL = "Running a command line NOX does not read";
+
 export function describeToolUse(
   name: string,
   input: Record<string, unknown>,
-  describeCommand: (command: string) => string | null,
+  describeCommand: (command: string) => {
+    display: string | null;
+    reason: BashCommandRefusal | null;
+  },
 ): string {
   switch (name) {
     case "Read":
@@ -517,7 +541,13 @@ export function describeToolUse(
       // il porte un chemin absolu de la machine — et les segments non reconnus
       // sont reduits a `...`.
       const shown = describeCommand(readString(input, "command") ?? "");
-      return shown === null ? "Running an allowed command" : `Running ${shown}`;
+      if (shown.display !== null) {
+        return `Running ${shown.display}`;
+      }
+      // Une ligne illisible est dite comme telle : c'est ce qui distingue « autre
+      // chose a tourne » de « la commande enregistree a peut-etre tourne, dans
+      // une construction dont NOX ne peut rien conclure ».
+      return shown.reason === "unreadable" ? UNREADABLE_COMMAND_LABEL : UNSHOWN_COMMAND_LABEL;
     }
 
     default:

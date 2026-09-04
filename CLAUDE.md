@@ -771,9 +771,20 @@ doit le dire explicitement et la justifier.
   refus, eux, sont **réutilisés**, jamais recopiés. Installations, processus qui ne se terminent
   pas et commandes Git s'y ajoutent, contrôlés sur le **jeton entier** — jamais sur une
   sous-chaîne.
-- **Aucun interprète de commandes, sous aucune forme.** Ni `shell: true`, ni `cmd /c`, ni
-  `powershell -Command`, ni `bash -c`, ni `sh -c`. Une commande validée est une suite de jetons,
-  et c'est ce découpage qui part au système.
+- **Aucun interprète de commandes ne fabrique jamais une ligne à partir de nos chaînes.** Ni
+  `shell: true`, ni `powershell -Command`, ni `bash -c`, ni `sh -c`. Une commande validée est une
+  suite de jetons, et c'est ce découpage qui part au système.
+- **Sous Windows, un script `.cmd` est lancé par `cmd.exe /d /s /c`, avec une ligne que NOX écrit
+  lui-même.** Ce n'est pas une exception à la règle précédente, c'est son application : `npm` y est
+  un `.cmd`, Node refuse de le lancer autrement, et `shell: true` demanderait à Node de composer
+  une ligne que NOX ne verrait pas. Ici NOX cite chaque jeton, ajoute la paire extérieure que `/s`
+  consomme, et **refuse de construire** la ligne dès qu'un jeton porte un guillemet, un `%`, un
+  caractère de contrôle ou un antislash final. La construction vit à un seul endroit,
+  `apps/runner/src/claude/command-line.ts`, et elle est la même pour Claude Code et pour les
+  validations.
+- **Un fichier sans extension n'est jamais exécutable sous Windows.** La résolution ne retient que
+  les extensions de `PATHEXT` — retenir le `npm` destiné à Unix, présent à côté de `npm.cmd`,
+  produisait un `ENOENT` au lancement.
 - **Le répertoire de travail est la racine canonique du repository**, relue à partir de
   l'identifiant du projet. Aucune variable `NOX_*` n'atteint le processus, et aucun secret n'est
   transmis.
@@ -783,7 +794,14 @@ doit le dire explicitement et la justifier.
   lui-même ce qu'il n'a pas le droit de lancer.
 - **Un dépassement de délai est un échec de validation, pas une panne.** `ERROR` est réservé aux
   cas où NOX n'a **pas pu** obtenir de preuve. « Je n'ai pas pu regarder » n'est jamais « j'ai
-  regardé et c'est faux ».
+  regardé et c'est faux ». Un code de sortie non nul est une **réponse** : il produit `FAILED`,
+  jamais `VALIDATION_SPAWN_FAILED`, qui reste réservé à l'impossibilité de créer le processus.
+- **Une panne nomme sa cause, et rien de plus.** Le diagnostic conservé est écrit par NOX à partir
+  du seul code système (`ENOENT`, `EINVAL`) : jamais le message d'origine de Node, qui porte le
+  chemin absolu de l'exécutable. Ni environnement, ni trace, ni jeton, ni chemin de la machine.
+- **Un arrêt vise l'arbre du processus, jamais le seul processus lancé.** Sous Windows, la commande
+  tourne sous une enveloppe : signaler l'enveloppe laisserait le vrai programme travailler dans le
+  repository. Une seule implémentation, partagée avec Claude Code.
 - **Une reprise n'existe que sur une panne**, et la garantie vit dans la réservation, pas dans un
   bouton. Chaque reprise crée une tentative nouvelle et conserve la précédente.
 - **Un lot est réservé par un index unique `(runId, attempt)`.** Jamais un verrou en mémoire :

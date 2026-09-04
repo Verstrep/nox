@@ -30,6 +30,7 @@ import {
   isStartClaudeRunSuccess,
   isReadProjectDocumentSuccess,
   isResolveRepositorySuccess,
+  boundErrorDetail,
   isRunnerErrorResponse,
   isDeliveryCommitSuccess,
   isDeliveryInspectSuccess,
@@ -153,7 +154,14 @@ function toFailure(operation: string, response: RawResponse): RunnerFailure {
   }
 
   if (isRunnerErrorResponse(response.body)) {
-    return { kind: "runner_error", code: response.body.error.code };
+    const { code, detail } = response.body.error;
+    // Le detail est reborne a la lecture : le runner l'a deja fait, et cette
+    // frontiere ne s'y fie pas — c'est la meme regle que pour la politique des
+    // commandes, rejouee des deux cotes.
+    const bounded = detail === undefined ? null : boundErrorDetail(detail);
+    return bounded === null
+      ? { kind: "runner_error", code }
+      : { kind: "runner_error", code, detail: bounded };
   }
 
   logRunnerIssue(operation, `contrat inattendu (statut ${String(response.status)})`);

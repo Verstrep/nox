@@ -13,13 +13,25 @@
  *
  * ## 2. Le cas Windows des scripts `.cmd`
  *
- * Sous Windows, `claude` est generalement un `claude.cmd` genere par npm. Un
- * `.cmd` n'est pas un executable : il doit etre lance par `cmd.exe`. La solution
- * n'est pas de repasser par un shell mais de construire une **liste
- * d'arguments fixe** — `cmd.exe /d /s /c <chemin resolu> <args>` — ou le chemin
- * vient de notre resolution et les arguments de notre code. Le prompt, lui,
- * n'entre jamais dans cette liste : il passe exclusivement par l'entree
+ * Sous Windows, `claude`, `npm` et `npx` sont des `.cmd` generes par npm. Un
+ * `.cmd` n'est pas un executable : il doit etre lance par `cmd.exe`, et Node
+ * **refuse** desormais de le lancer autrement — `spawn` leve `EINVAL` depuis la
+ * correction de CVE-2024-27980.
+ *
+ * La solution n'est pas de repasser par un shell : c'est de construire nous-meme
+ * la ligne que `cmd.exe` recevra, jeton par jeton et guillemet par guillemet.
+ * Cette construction vit dans `command-line.ts`, avec ses raisons. Le prompt,
+ * lui, n'entre jamais dans cette ligne : il passe exclusivement par l'entree
  * standard.
+ *
+ * ## 2 bis. Ce qui est executable sous Windows
+ *
+ * Un fichier sans extension ne l'est pas. `C:\Program Files\nodejs\` contient un
+ * `npm` — le script shell destine a Unix — a cote du `npm.cmd` reellement
+ * utilisable. Retenir le premier parce qu'il existe produit un `ENOENT` au
+ * lancement : c'est exactement ce que le premier pilote reel a rencontre. La
+ * resolution ne retient donc, sous Windows, que les extensions declarees par
+ * `PATHEXT`.
  *
  * ## 3. Ne pas transmettre les secrets de NOX
  *
@@ -40,6 +52,8 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import { buildWindowsCommandLine } from "./command-line.ts";
+
 /** Delai maximal accorde a `claude --version`. */
 export const CLAUDE_VERSION_TIMEOUT_MS = 15_000;
 
@@ -48,12 +62,48 @@ const SECRET_ENVIRONMENT_PREFIX = "NOX_";
 
 export type ExecutableEnvironment = Record<string, string | undefined>;
 
+/**
+ * Existence d'un fichier, injectable.
+ *
+ * Le seul point de substitution du systeme de fichiers dans ce module. Il existe
+ * pour que la branche Windows soit testable depuis n'importe quelle plateforme :
+ * simuler `win32` sans pouvoir simuler l'arborescence ne prouverait rien.
+ */
+export type FileProbe = (candidate: string) => boolean;
+
 function isExecutableFile(candidate: string): boolean {
   try {
     return statSync(candidate).isFile();
   } catch {
     return false;
   }
+}
+
+export type ResolveExecutableOptions = {
+  /**
+   * Dossier de reference d'un chemin relatif.
+   *
+   * `./gradlew` designe le programme du **repository**, pas un fichier du
+   * dossier depuis lequel le runner a ete lance. Par defaut le dossier courant,
+   * pour ne rien changer aux appels qui visent un nom simple.
+   */
+  cwd?: string;
+  /** Sonde de presence, remplacee dans les tests. */
+  fileExists?: FileProbe;
+};
+
+/**
+ * Extensions executables declarees par `PATHEXT`, dans leur ordre.
+ *
+ * La casse d'origine est conservee : c'est elle qui construit les chemins
+ * essayes, et rendre un chemin dont la casse ne correspond a rien serait une
+ * approximation gratuite. La comparaison, elle, ignore la casse.
+ */
+function windowsExtensions(environment: ExecutableEnvironment): string[] {
+  return (environment["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
 }
 
 /**
@@ -68,28 +118,39 @@ export function resolveExecutablePath(
   command: string,
   environment: ExecutableEnvironment = process.env,
   platform: NodeJS.Platform = process.platform,
+  options: ResolveExecutableOptions = {},
 ): string | null {
   const trimmed = command.trim();
   if (trimmed === "") {
     return null;
   }
 
+  const exists = options.fileExists ?? isExecutableFile;
+  const base = options.cwd ?? process.cwd();
   const isWindows = platform === "win32";
-  const extensions = isWindows
-    ? (environment["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((entry) => entry !== "")
-    : [""];
+  const extensions = isWindows ? windowsExtensions(environment) : [];
 
   const hasSeparator = trimmed.includes("/") || (isWindows && trimmed.includes("\\"));
 
-  const candidatesFor = (base: string): string[] => {
-    // Un chemin deja pourvu d'une extension connue est essaye tel quel d'abord.
-    const direct = isExecutableFile(base) ? [base] : [];
-    const suffixed = isWindows ? extensions.map((extension) => `${base}${extension}`) : [];
-    return [...direct, ...suffixed];
+  /**
+   * Candidats pour un emplacement donne, dans l'ordre d'essai.
+   *
+   * Sous Windows, un fichier n'est executable que si son extension figure dans
+   * `PATHEXT` : le fichier nu n'est donc retenu que lorsqu'il en porte deja une.
+   * Ailleurs, le fichier nu est le seul candidat.
+   */
+  const candidatesFor = (candidate: string): string[] => {
+    if (!isWindows) {
+      return [candidate];
+    }
+    const extension = path.extname(candidate).toLowerCase();
+    const known = extensions.some((entry) => entry.toLowerCase() === extension);
+    const direct = extension !== "" && known ? [candidate] : [];
+    return [...direct, ...extensions.map((entry) => `${candidate}${entry}`)];
   };
 
   if (hasSeparator || path.isAbsolute(trimmed)) {
-    return candidatesFor(path.resolve(trimmed)).find(isExecutableFile) ?? null;
+    return candidatesFor(path.resolve(base, trimmed)).find(exists) ?? null;
   }
 
   const searchPath = (environment["PATH"] ?? environment["Path"] ?? "").split(path.delimiter);
@@ -97,7 +158,7 @@ export function resolveExecutablePath(
     if (directory === "") {
       continue;
     }
-    const found = candidatesFor(path.join(directory, trimmed)).find(isExecutableFile);
+    const found = candidatesFor(path.join(directory, trimmed)).find(exists);
     if (found !== undefined) {
       return found;
     }
@@ -109,29 +170,54 @@ export function resolveExecutablePath(
 export type SpawnPlan = {
   command: string;
   args: string[];
+  /**
+   * La ligne est-elle deja ecrite, et doit-elle partir telle quelle ?
+   *
+   * Vrai uniquement pour l'enveloppe `cmd.exe`, dont la ligne est construite par
+   * `command-line.ts`. Ailleurs, chaque argument reste un element distinct et
+   * c'est Node qui l'echappe.
+   */
+  windowsVerbatimArguments: boolean;
 };
 
 /**
- * Construit la commande et la liste d'arguments a passer a `spawn`.
+ * Construit la commande et les arguments a passer a `spawn`.
  *
- * Aucune concatenation : chaque argument est un element distinct du tableau, et
- * Node se charge de l'echappement. Un `.cmd` ou un `.bat` sous Windows est
- * enveloppe dans `cmd.exe /d /s /c`, avec la meme regle.
+ * Hors Windows, et pour un vrai executable Windows, rien n'est concatene :
+ * chaque argument est un element distinct du tableau, et Node se charge de
+ * l'echappement.
+ *
+ * Un `.cmd` ou un `.bat` sous Windows passe par `cmd.exe /d /s /c`, avec une
+ * ligne unique ecrite par `buildWindowsCommandLine` et envoyee sans retouche.
+ * Laisser Node echapper cette ligne argument par argument produirait une
+ * commande que `cmd.exe` relit differemment — c'est la panne du premier pilote.
+ *
+ * Retourne `null` quand la ligne ne peut pas etre rendue inerte. Un refus
+ * explicite vaut mieux qu'une ligne approximative : l'appelant le traduit en
+ * erreur d'infrastructure nommee.
  */
 export function buildSpawnPlan(
   resolvedPath: string,
   args: readonly string[],
   environment: ExecutableEnvironment = process.env,
   platform: NodeJS.Platform = process.platform,
-): SpawnPlan {
+): SpawnPlan | null {
   const extension = path.extname(resolvedPath).toLowerCase();
 
   if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
     const comspec = environment["ComSpec"] ?? environment["COMSPEC"] ?? "cmd.exe";
-    return { command: comspec, args: ["/d", "/s", "/c", resolvedPath, ...args] };
+    const line = buildWindowsCommandLine(resolvedPath, args);
+    if (line === null) {
+      return null;
+    }
+    return {
+      command: comspec,
+      args: ["/d", "/s", "/c", line],
+      windowsVerbatimArguments: true,
+    };
   }
 
-  return { command: resolvedPath, args: [...args] };
+  return { command: resolvedPath, args: [...args], windowsVerbatimArguments: false };
 }
 
 /**
@@ -191,6 +277,10 @@ export const probeClaudeVersion: ClaudeVersionProbe = (executable, timeoutMs) =>
     }
 
     const plan = buildSpawnPlan(resolvedPath, ["--version"]);
+    if (plan === null) {
+      resolve({ available: false });
+      return;
+    }
 
     // Options typees explicitement : ce fichier est aussi compile par la
     // configuration de `apps/web` (via son test d'integration), dont les `lib`
@@ -200,6 +290,7 @@ export const probeClaudeVersion: ClaudeVersionProbe = (executable, timeoutMs) =>
       windowsHide: true,
       encoding: "utf8",
       env: sanitizeEnvironment(),
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
     };
 
     execFile(

@@ -51,6 +51,20 @@
  * respecte les guillemets : `echo "a && git diff --check"` est **un** segment, et
  * ne produit aucune validation. Sans cette precaution, une chaine de caracteres
  * bien choisie suffirait a faire croire qu'une validation a tourne.
+ *
+ * ## Pourquoi la lecture dit desormais **pourquoi** elle renonce
+ *
+ * Le premier pilote reel a produit une review ou `npm test` etait `NOT_RUN`,
+ * alors que l'agent l'avait bel et bien lancee — sous la forme
+ * `npm test 2>&1 | tail -60`. NOX a eu raison de renoncer : dans un tuyau, le
+ * code de sortie observe est celui de `tail`, pas celui de `npm`, et reconnaitre
+ * cette ligne aurait produit une preuve fausse.
+ *
+ * Mais la timeline disait seulement « Running an allowed command », et rien ne
+ * permettait de distinguer « l'agent a lance autre chose » de « l'agent a lance
+ * cette commande dans une construction que NOX ne lit pas ». `reason` porte
+ * cette distinction. Elle ne nomme jamais le contenu de la ligne : seulement la
+ * raison du renoncement.
  */
 
 import { CLAUDE_GIT_READ_ONLY_COMMANDS } from "@nox/shared";
@@ -81,6 +95,19 @@ const UNQUOTED = /^[^'"\\]*$/;
  */
 const HIDDEN = "...";
 
+/**
+ * Pourquoi une ligne n'a rien d'affichable.
+ *
+ * - `unreadable` : la ligne porte une construction que NOX ne lit pas — tuyau,
+ *   redirection, point-virgule, substitution, esperluette isolee, guillemet non
+ *   ferme. Rien n'en est affiche **et** rien n'en est valide.
+ * - `unrecognized` : la ligne se lit, mais aucun de ses segments ne correspond a
+ *   une commande enregistree ni a une commande Git en lecture seule.
+ *
+ * `null` quand la ligne a produit un affichage.
+ */
+export type BashCommandRefusal = "unreadable" | "unrecognized";
+
 export type BashCommandReading = {
   /**
    * Texte affichable, prefixe de navigation retire, ou `null`.
@@ -105,11 +132,18 @@ export type BashCommandReading = {
    * le resultat unique ne dit pas quel maillon de la chaine a cede.
    */
   commandCount: number;
+  /**
+   * Raison de l'absence d'affichage, ou `null` quand il y en a un.
+   *
+   * Une **raison**, jamais un fragment de la ligne : elle dit pourquoi NOX se
+   * tait, pas ce qu'il tait.
+   */
+  reason: BashCommandRefusal | null;
 };
 
 /** Lecture qui a renonce : rien a afficher, rien a valider. */
 function refused(): BashCommandReading {
-  return { display: null, validations: [], commandCount: 0 };
+  return { display: null, validations: [], commandCount: 0, reason: "unreadable" };
 }
 
 /**
@@ -177,7 +211,10 @@ export function readBashCommand(
   }
 
   if (commandCount === 0) {
-    return refused();
+    // Une ligne qui ne contient qu'un changement de repertoire n'est pas
+    // illisible : elle ne lance simplement rien. La distinguer evite d'annoncer
+    // une construction refusee la ou il n'y en a aucune.
+    return { display: null, validations: [], commandCount: 0, reason: "unrecognized" };
   }
 
   // Une ligne entierement composee de segments inconnus n'a rien a montrer : un
@@ -188,6 +225,7 @@ export function readBashCommand(
     display: readable ? shown.join(" && ") : null,
     validations,
     commandCount,
+    reason: readable ? null : "unrecognized",
   };
 }
 

@@ -1056,9 +1056,9 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `HOTFIX-001` : `3705b7e`
-  (`feat: add conversation-driven project replanning`), contenant `TASK-032`.
-- `HOTFIX-001` reste **local**, non indexé et non commité.
+- Commit de départ de `HOTFIX-002` : `9aae915`
+  (`fix: improve architect model and backlog diagnostics`), contenant `HOTFIX-001`.
+- `HOTFIX-002` reste **local**, non indexé et non commité.
 
 ---
 
@@ -1088,3 +1088,38 @@ plus un appel. Les générations historiques gardent le modèle qu'elles ont ré
 `ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS` (32 000) et du temps compté dans
 `ARCHITECT_REQUEST_TIMEOUT_MS` (90 s). Ces deux bornes sont inchangées : les toucher sans mesure
 aurait été deviner. Le premier `Generate` réel du pilote dira si elles suffisent.
+
+---
+
+## 9. HOTFIX-002 — exécution des validations sous Windows
+
+Le pilote a exécuté `TASK-001` de TripKit, puis s'est arrêté sur deux constats.
+
+**La validation autonome ne démarrait pas.** `npm test` produisait
+`VALIDATION_SPAWN_FAILED` alors que la commande fonctionnait depuis un terminal. Trois causes
+s'additionnaient : la résolution retenait le fichier `npm` **sans extension** que npm installe à
+côté de `npm.cmd` — Windows ne sait pas le lancer (`ENOENT`) ; Node refuse depuis
+CVE-2024-27980 de lancer un `.cmd` sans shell (`EINVAL`), ce qui condamnait la correction naïve ;
+et l'enveloppe `cmd.exe` existante perdait sa citation dès que le chemin contenait une espace,
+parce que `/s` retire la première et la dernière guillemet de ce que Node avait cité.
+
+La ligne est désormais écrite par NOX, jeton par jeton, dans
+`apps/runner/src/claude/command-line.ts`, et envoyée en `windowsVerbatimArguments`. La résolution
+ne retient que les extensions de `PATHEXT`. `shell: true` reste exclu — voir
+[D-380](DECISIONS.md).
+
+**La review disait « Claude Code n'a jamais lancé cette commande ».** Le transcript de la session
+prouve le contraire : l'agent avait lancé `npm test 2>&1 | tail -60`. NOX a eu **raison** de ne
+rien valider — dans un tuyau, le code de sortie observable est celui de `tail` — mais il affirmait
+quelque chose qu'il ne savait pas. La correspondance reste exacte ; c'est la phrase qui a changé,
+et la timeline distingue désormais une ligne illisible d'une ligne simplement non reconnue. Voir
+[D-382](DECISIONS.md).
+
+Ce que ce hotfix n'a pas fait : aucune normalisation d'arguments, aucune lecture du compte rendu
+final du modèle, aucune migration, aucun changement de la sémantique de `Retry automated
+validation`. Un résultat rapporté par Claude Code ne valide toujours aucun critère `AUTOMATED`.
+
+**Limites connues.** L'exécution réelle de `npm` n'est vérifiée automatiquement que sous Windows
+(`windows-validation.test.ts`, ignoré ailleurs) ; partout, la stratégie choisie est vérifiée avec
+un système de fichiers et un lanceur simulés. Le champ `detail` d'une erreur du runner n'est
+renseigné que par la route de validation : les autres routes continuent de ne rendre qu'un code.

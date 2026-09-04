@@ -419,8 +419,30 @@ const ARCHITECT_REVIEW_BLOCKER_LABELS: Record<ArchitectReviewBlocker, string> = 
   [ARCHITECT_REVIEW_BLOCKER.VALIDATION_UNKNOWN]:
     "Une commande de validation a demarre sans qu'un resultat exploitable arrive.",
   [ARCHITECT_REVIEW_BLOCKER.VALIDATION_NOT_RUN]:
-    "Une commande de validation attendue n'a jamais ete lancee.",
+    "NOX n'a observe aucune execution d'une commande de validation attendue.",
 };
+
+/**
+ * Ce que `NOT_RUN` dit vraiment.
+ *
+ * ## Pourquoi cette phrase a change
+ *
+ * Elle disait « Claude Code n'a jamais lance cette commande ». C'etait une
+ * affirmation que NOX n'est pas en position de faire : il ne sait pas ce que
+ * l'agent a lance, il sait ce qu'il a **observe**. Le premier pilote reel l'a
+ * montre — Claude avait bien lance `npm test`, mais sous la forme
+ * `npm test 2>&1 | tail -60`. NOX renonce a lire une ligne qui porte un tuyau ou
+ * une redirection, et il a raison de renoncer : dans un tel enchainement, le code
+ * de sortie observe est celui du dernier maillon, pas celui de la commande
+ * enregistree.
+ *
+ * La bonne phrase dit donc ce que NOX sait, et invite a regarder la seule preuve
+ * qui compte pour un critere automatise : celle que NOX produit lui-meme.
+ */
+export const RUN_VALIDATION_NOT_RUN_NOTICE =
+  "NOX n'a observe aucune execution de cette commande telle qu'elle est enregistree. " +
+  "Une commande lancee dans un enchainement — tuyau, redirection — n'est pas reconnue : " +
+  "seule la validation autonome de NOX fait preuve.";
 
 /**
  * Etapes du workflow guide.

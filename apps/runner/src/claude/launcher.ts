@@ -42,8 +42,7 @@
  * testable.
  */
 
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import process from "node:process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { RUN_LIMITS, boundTail, boundText } from "@nox/shared";
 
@@ -53,6 +52,7 @@ import {
   resolveExecutablePath,
   sanitizeEnvironment,
 } from "./executable.ts";
+import { terminateProcessTree } from "./terminate.ts";
 
 export type LaunchOutcome = {
   /** Code de sortie, ou `null` si le processus a ete termine par un signal. */
@@ -188,11 +188,17 @@ export const launchClaude: ClaudeLauncher = (request) => {
     resumeSessionId: request.resumeSessionId,
   });
   const plan = buildSpawnPlan(resolvedPath, args);
+  if (plan === null) {
+    // La ligne Windows n'a pas pu etre rendue inerte. Un refus explicite vaut
+    // mieux qu'une commande approximative : rien n'est lance.
+    return failedHandle("Ligne de commande Claude Code impossible a construire.");
+  }
 
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawn(plan.command, plan.args, {
       cwd: request.repositoryRoot,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
       // L'environnement est nettoye de toutes les variables NOX : Claude Code
       // n'a pas a connaitre le jeton du runner ni l'URL de la base.
       env: sanitizeEnvironment(),
@@ -246,27 +252,12 @@ export const launchClaude: ClaudeLauncher = (request) => {
   /**
    * Termine le processus **et ses descendants**.
    *
-   * Sous Windows, `claude` est generalement un `claude.cmd` lance par `cmd.exe`,
-   * qui lance a son tour le vrai programme. Envoyer un signal au `cmd.exe`
-   * termine l'enveloppe et laisse le programme tourner : le delai maximal
-   * n'aurait alors aucun effet. `taskkill /T` descend l'arbre — et il ne vise
-   * jamais qu'un PID que **nous** avons cree, jamais un identifiant venu de
-   * l'exterieur.
+   * L'implementation vit dans `terminate.ts`, partagee avec l'execution des
+   * validations : deux copies auraient fini par diverger, et celle qui aurait
+   * tort serait celle qui laisse un processus en vie.
    */
   const terminate = (force: boolean): void => {
-    if (process.platform === "win32") {
-      const pid = child.pid;
-      if (pid === undefined) {
-        return;
-      }
-      const args = ["/pid", String(pid), "/T", ...(force ? ["/F"] : [])];
-      // L'echec est sans consequence : soit le processus est deja mort, soit
-      // l'arret force qui suit s'en chargera.
-      execFile("taskkill", args, { windowsHide: true }, () => undefined);
-      return;
-    }
-
-    child.kill(force ? "SIGKILL" : "SIGTERM");
+    terminateProcessTree(child, force);
   };
 
   /** Arret en deux temps : une demande polie, puis un arret force. */

@@ -736,7 +736,10 @@ export function createRunnerServer(
         const outcome = await runRepositoryValidation(parsed.repositoryPath, parsed.command);
         if (!outcome.ok) {
           logRefusal(requestId, VALIDATIONS_RUN_ROUTE, outcome.code);
-          sendRunnerError(response, outcome.code, requestId);
+          // Le detail est ecrit par le module d'execution, jamais recopie d'un
+          // message du systeme : il nomme la cause — programme introuvable,
+          // lancement refuse, code systeme — sans porter de chemin absolu.
+          sendRunnerError(response, outcome.code, requestId, outcome.detail);
           return;
         }
 

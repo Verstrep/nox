@@ -3,11 +3,23 @@
  *
  * ## Ce que ce module n'utilise jamais
  *
- * Aucun interpreteur de commandes. Pas de `shell: true`, pas de `cmd /c` sur la
- * ligne recue, pas de `bash -c`. La commande arrive deja validee — donc sans
- * guillemet, sans chainage, sans redirection, sans substitution — et se decoupe
- * par une simple separation sur l'espace. Il n'y a aucune syntaxe a interpreter,
- * donc aucune raison d'invoquer quelque chose qui saurait l'interpreter.
+ * Aucun interpreteur de commandes. Pas de `shell: true`, pas de `bash -c`, et
+ * jamais la ligne recue passee a un interprete. La commande arrive deja validee
+ * — donc sans guillemet, sans chainage, sans redirection, sans substitution — et
+ * se decoupe par une simple separation sur l'espace. Il n'y a aucune syntaxe a
+ * interpreter, donc aucune raison d'invoquer quelque chose qui saurait
+ * l'interpreter.
+ *
+ * ## Le cas Windows
+ *
+ * `npm` et `npx` y sont des scripts que seul l'interprete de Windows sait
+ * lancer, et Node refuse depuis CVE-2024-27980 de les lancer autrement. Le plan
+ * de lancement est donc construit par `executable.ts`, qui ecrit lui-meme la
+ * ligne, jeton par jeton, apres les avoir tous verifies. Ce module ne compose
+ * aucune chaine : il recoit un plan et le lance. `shell: false` reste vrai
+ * partout — la difference entre « demander un shell » et « lancer un programme
+ * avec une ligne qu'on a ecrite » est exactement celle qui separe une injection
+ * d'une commande.
  *
  * ## La double validation est voulue
  *
@@ -30,7 +42,7 @@
  * il ne le repare pas. C'est la meme regle que pour une execution de Claude Code.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import {
@@ -48,7 +60,9 @@ import {
   buildSpawnPlan,
   resolveExecutablePath,
   sanitizeEnvironment,
+  type SpawnPlan,
 } from "../claude/executable.ts";
+import { terminateProcessTree } from "../claude/terminate.ts";
 import { GIT_STATE_TIMEOUT_MS, runGitCommand } from "./git-state.ts";
 import { resolveRepository, type GitRunner } from "./resolve-repository.ts";
 
@@ -68,13 +82,46 @@ export type RunValidationOutcome =
   | { ok: true; result: RunValidationSuccess }
   | { ok: false; code: RunnerErrorCode; detail: string };
 
+/**
+ * Lanceur de processus, injectable.
+ *
+ * Le seul point de substitution du systeme dans ce module. Il existe pour que
+ * l'echec de creation d'un processus, le depassement de delai et l'annulation
+ * soient testables sans dependre de la plateforme qui execute les tests.
+ */
+export type ProcessSpawner = (plan: SpawnPlan, cwd: string, env: NodeJS.ProcessEnv) => ChildProcess;
+
 export type RunValidationOptions = {
   runGit?: GitRunner;
   timeoutMs?: number;
   /** Environnement de reference, remplace dans les tests. */
   environment?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  /** Lanceur de processus, remplace dans les tests. */
+  spawnProcess?: ProcessSpawner;
+  /** Signal d'annulation, quand l'appelant en fournit un. */
+  signal?: AbortSignal;
 };
+
+/**
+ * Traduit une panne de lancement en phrase sure.
+ *
+ * Le message d'origine de Node porte le **chemin absolu** de l'executable —
+ * `spawn C:\Program Files\nodejs\npm ENOENT` — et aucun chemin de la machine ne
+ * doit sortir du runner. Seul le code systeme est conserve : il suffit a
+ * distinguer un programme introuvable d'un lancement refuse, et il ne decrit ni
+ * l'arborescence, ni l'environnement, ni un secret.
+ */
+function describeSpawnError(error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code: unknown }).code)
+      : "";
+  const known = /^[A-Z][A-Z0-9_]{1,31}$/u.test(code);
+  return known
+    ? `Le systeme a refuse de demarrer la commande de validation. Code systeme : ${code}.`
+    : "Le systeme a refuse de demarrer la commande de validation.";
+}
 
 /**
  * Execute une commande de validation dans un repository.
@@ -116,7 +163,11 @@ export async function runRepositoryValidation(
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
 
-  const executable = resolveExecutablePath(parsed.program, environment, platform);
+  // Le dossier de reference d'un chemin relatif — `./gradlew` — est le
+  // repository, jamais le dossier depuis lequel le runner a ete lance.
+  const executable = resolveExecutablePath(parsed.program, environment, platform, {
+    cwd: resolved.canonicalPath,
+  });
   if (executable === null) {
     return {
       ok: false,
@@ -126,39 +177,70 @@ export async function runRepositoryValidation(
   }
 
   const plan = buildSpawnPlan(executable, parsed.args, environment, platform);
+  if (plan === null) {
+    return {
+      ok: false,
+      code: RUNNER_ERROR.VALIDATION_SPAWN_FAILED,
+      detail:
+        "La ligne de commande n'a pas pu etre construite sans risque pour cette plateforme.",
+    };
+  }
 
-  return execute(plan, resolved.canonicalPath, environment, options.timeoutMs ?? VALIDATION_TIMEOUT_MS);
+  return execute(plan, resolved.canonicalPath, environment, {
+    timeoutMs: options.timeoutMs ?? VALIDATION_TIMEOUT_MS,
+    platform,
+    spawnProcess: options.spawnProcess,
+    signal: options.signal,
+  });
 }
 
+/** Lanceur par defaut : le seul endroit du module qui touche le systeme. */
+const defaultSpawner: ProcessSpawner = (plan, cwd, env) =>
+  spawn(plan.command, plan.args, {
+    cwd,
+    // Le dossier de travail est la racine canonique, jamais un chemin recu.
+    // L'environnement est celui du runner **prive de toute variable `NOX_*`** :
+    // le filtre porte sur le prefixe entier, donc une variable ajoutee plus tard
+    // est couverte d'office.
+    env,
+    // Jamais de shell. Node ne fabrique aucune ligne de commande : celle de
+    // l'enveloppe Windows a ete ecrite et verifiee par `command-line.ts`.
+    shell: false,
+    windowsHide: true,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+type ExecuteOptions = {
+  timeoutMs: number;
+  platform: NodeJS.Platform;
+  spawnProcess?: ProcessSpawner;
+  signal?: AbortSignal;
+};
+
 function execute(
-  plan: { command: string; args: string[] },
+  plan: SpawnPlan,
   cwd: string,
   environment: Record<string, string | undefined>,
-  timeoutMs: number,
+  options: ExecuteOptions,
 ): Promise<RunValidationOutcome> {
+  const { timeoutMs, platform } = options;
+
   return new Promise((resolve) => {
     const startedAt = Date.now();
 
     let child;
     try {
-      child = spawn(plan.command, plan.args, {
+      child = (options.spawnProcess ?? defaultSpawner)(
+        plan,
         cwd,
-        // Le dossier de travail est la racine canonique, jamais un chemin recu.
-        // L'environnement est celui du runner **prive de toute variable
-        // `NOX_*`** : le filtre porte sur le prefixe entier, donc une variable
-        // ajoutee plus tard est couverte d'office.
-        env: sanitizeEnvironment(environment),
-        // Jamais de shell. La commande est deja decoupee ; lui en donner un
-        // rouvrirait exactement ce que la validation de commande a ferme.
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+        sanitizeEnvironment(environment),
+      );
     } catch (error) {
       resolve({
         ok: false,
         code: RUNNER_ERROR.VALIDATION_SPAWN_FAILED,
-        detail: error instanceof Error ? error.message : "Demarrage impossible.",
+        detail: describeSpawnError(error),
       });
       return;
     }
@@ -209,22 +291,45 @@ function execute(
     let killTimer: NodeJS.Timeout = setTimeout(() => undefined, 0);
     clearTimeout(killTimer);
 
-    // Le delai depasse tue l'arbre du processus. Un processus laisse vivant
-    // apres un timeout continuerait de travailler dans le repository que
-    // l'utilisateur est en train de relire.
+    /**
+     * Arret en deux temps de l'arbre du processus.
+     *
+     * L'arbre, et pas seulement le processus : sous Windows la commande est
+     * lancee par une enveloppe, et signaler l'enveloppe laisserait le vrai
+     * programme continuer de travailler dans le repository que l'utilisateur
+     * est en train de relire.
+     */
+    const stop = (): void => {
+      terminateProcessTree(child, false, platform);
+      killTimer = setTimeout(() => {
+        terminateProcessTree(child, true, platform);
+      }, VALIDATION_KILL_GRACE_MS);
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
-      }, VALIDATION_KILL_GRACE_MS);
+      stop();
     }, timeoutMs);
+
+    // L'annulation ne produit pas un resultat : elle arrete le processus, et
+    // c'est la fermeture qui conclut. Un lot annule n'invente aucun code de
+    // sortie.
+    //
+    // Un signal deja declenche est traite comme un signal qui arrive : entre la
+    // resolution du repository et cette ligne, il s'ecoule un appel a Git, et un
+    // abandon survenu pendant ce temps ne doit pas etre perdu — le processus
+    // tournerait alors jusqu'au delai maximal.
+    if (options.signal?.aborted === true) {
+      stop();
+    } else {
+      options.signal?.addEventListener("abort", stop, { once: true });
+    }
 
     child.on("error", (error: Error) => {
       finish({
         ok: false,
         code: RUNNER_ERROR.VALIDATION_SPAWN_FAILED,
-        detail: error.message,
+        detail: describeSpawnError(error),
       });
     });
 

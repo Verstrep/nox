@@ -27,6 +27,7 @@ import { formatIsoDateTime } from "@/lib/format";
 import {
   architectReviewStatusLabel,
   architectReviewVerdictLabel,
+  RUN_VALIDATION_NOT_RUN_NOTICE,
   runChangeTypeLabel,
   runChangeTypeMark,
   runStatusLabel,
@@ -118,7 +119,7 @@ function ValidationRow({ result }: { result: RunValidationResultView }) {
         {result.exitCode === null ? null : <span>exit {result.exitCode}</span>}
         {duration === null || duration < 0 ? null : <span>{formatDuration(duration)}</span>}
         {result.status === RUN_VALIDATION_STATUS.NOT_RUN ? (
-          <span>Claude Code n&apos;a jamais lance cette commande.</span>
+          <span>{RUN_VALIDATION_NOT_RUN_NOTICE}</span>
         ) : null}
         {result.status === RUN_VALIDATION_STATUS.UNKNOWN ? (
           <span>Lancee, mais aucun resultat exploitable n&apos;est arrive.</span>

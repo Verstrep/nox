@@ -8,7 +8,12 @@
 
 import type { ServerResponse } from "node:http";
 
-import { RUNNER_ERROR, type RunnerErrorCode, type RunnerErrorResponse } from "@nox/shared";
+import {
+  RUNNER_ERROR,
+  boundErrorDetail,
+  type RunnerErrorCode,
+  type RunnerErrorResponse,
+} from "@nox/shared";
 
 /**
  * Statut HTTP associe a chaque code d'erreur.
@@ -200,8 +205,17 @@ export function sendRunnerError(
   response: ServerResponse,
   code: RunnerErrorCode,
   requestId?: string,
+  detail?: string,
 ): void {
-  const payload: RunnerErrorResponse = { ok: false, error: { code } };
+  // Le detail est borne et nettoye **ici**, quel que soit l'appelant : une route
+  // qui oublierait de le faire ne pourrait pas faire sortir autre chose que du
+  // texte court et sans caractere de controle. Il reste facultatif — une reponse
+  // sans detail est une reponse normale.
+  const bounded = detail === undefined ? null : boundErrorDetail(detail);
+  const payload: RunnerErrorResponse = {
+    ok: false,
+    error: bounded === null ? { code } : { code, detail: bounded },
+  };
   sendJson(response, statusForErrorCode(code), payload, requestId);
 }
 
