@@ -273,3 +273,54 @@ export function validationSummaryTone(
       return "neutral";
   }
 }
+
+/**
+ * L'agent a-t-il modifie le document de sa propre tache ?
+ *
+ * ## D'ou vient cette question
+ *
+ * Du premier pilote reel. `tasks/TASK-002.md` avait ete modifie pendant
+ * l'execution — uniquement pour cocher des cases `[ ]` en `[x]`. Le contrat
+ * n'avait pas change, et rien de dangereux n'est arrive.
+ *
+ * Ce n'etait pourtant pas anodin. Ce document est une **projection a sens
+ * unique** du contrat que NOX detient : il est ecrit par NOX, relu par NOX sous
+ * controle de revision, et il ne porte aucun resultat — pas une case cochee, pas
+ * un « passe », pas un « echoue ». Un agent qui l'edite reecrit l'enonce de ce
+ * qu'on lui demande, pendant qu'il y repond.
+ *
+ * ## Ce que cette fonction fait, et ce qu'elle ne fait pas
+ *
+ * Elle constate, a partir des lignes **deja enregistrees** de la review. Elle
+ * n'ouvre aucun fichier, ne compare aucun texte, et ne bloque rien : le contrat
+ * qui fait autorite vit en base, et il n'a pas bouge. Ce qu'elle apporte est que
+ * la divergence soit **dite**, plutot que noyee dans une liste de fichiers.
+ *
+ * La prevention, elle, est dans le prompt : les regles d'execution disent
+ * desormais de ne pas modifier ce document. Faire de cette constatation un
+ * verrou du systeme de fichiers serait construire un moteur de protection pour
+ * un invariant que la base tient deja.
+ */
+export function taskDocumentWasModified(
+  files: readonly RunFileChange[],
+  documentPath: string | null,
+): boolean {
+  if (documentPath === null || documentPath === "") {
+    return false;
+  }
+  // Les deux cotes sont deja des chemins relatifs a separateurs `/` : celui de
+  // la tache est construit par NOX, celui de la review vient de Git. Normaliser
+  // ici laisserait croire qu'ils pourraient differer de forme.
+  return files.some((file) => file.path === documentPath);
+}
+
+/**
+ * Ce que la review dit quand le document de la tache a bouge.
+ *
+ * Une phrase, sans dramatisation : le contrat n'a pas change, et NOX le sait
+ * parce qu'il ne l'a jamais relu depuis ce fichier.
+ */
+export const TASK_DOCUMENT_MODIFIED_NOTICE =
+  "L'exécution a modifié le document de cette tâche. Le contrat qui fait autorité vit dans " +
+  "NOX, pas dans ce fichier : il n'a donc pas changé. Le document sera réécrit tel que NOX le " +
+  "connaît à la prochaine synchronisation, et il n'y a rien à réparer à la main.";

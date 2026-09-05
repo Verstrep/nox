@@ -78,6 +78,15 @@ export interface ArchitectProvider {
   analyzeRunReview(input: ArchitectProviderInput): Promise<ArchitectProviderResult>;
   /** Une planification, dont sort un backlog ordonne. */
   generateBacklog(input: ArchitectProviderInput): Promise<ArchitectProviderResult>;
+  /**
+   * Un rafraichissement des plans de verification, apres un amorcage.
+   *
+   * Nommee separement pour la meme raison que les trois autres : son contrat
+   * n'a rien de commun avec celui d'une planification — quatre champs, aucun
+   * texte de tache — et un test qui veut prouver « exactement un appel de
+   * rafraichissement » ne doit pas avoir a filtrer une liste generique.
+   */
+  refreshVerification(input: ArchitectProviderInput): Promise<ArchitectProviderResult>;
 }
 
 /**
@@ -96,6 +105,7 @@ export class FakeArchitectProvider implements ArchitectProvider {
   readonly turnCalls: ArchitectProviderInput[] = [];
   readonly reviewCalls: ArchitectProviderInput[] = [];
   readonly backlogCalls: ArchitectProviderInput[] = [];
+  readonly refreshCalls: ArchitectProviderInput[] = [];
   #responses: ArchitectProviderResult[];
 
   constructor(responses: readonly ArchitectProviderResult[]) {
@@ -123,6 +133,11 @@ export class FakeArchitectProvider implements ArchitectProvider {
 
   generateBacklog(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
     this.backlogCalls.push(input);
+    return this.#next(input);
+  }
+
+  refreshVerification(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    this.refreshCalls.push(input);
     return this.#next(input);
   }
 }

@@ -83,8 +83,17 @@ import type { ArchitectPromptBrief, ArchitectPromptV1Plan } from "./project-plan
  * critere declare comment il se verifie, chaque commande declare ce que NOX a le
  * droit d'en faire. Les generations `backlog/1` deja enregistrees gardent leur
  * version : elles restent lisibles, et restent applicables.
+ *
+ * `backlog/3` depuis TASK-033 : les dependances fonctionnelles entrent dans la
+ * proposition. Le premier pilote reel a produit un backlog dont la deuxieme
+ * tache etendait le modele, la persistance et l'ecran de la premiere, sans
+ * qu'aucun lien ne l'exprime — parce que `backlog/2` interdisait explicitement
+ * d'en ecrire un. L'ordre restait juste ; il n'empechait rien.
  */
-export const BACKLOG_PROMPT_VERSION = "backlog/2";
+export const BACKLOG_PROMPT_VERSION = "backlog/3";
+
+/** Version historique, conservee pour relire une generation anterieure. */
+export const BACKLOG_PROMPT_VERSION_2 = "backlog/2";
 
 /** Version historique, conservee pour relire une generation anterieure. */
 export const BACKLOG_PROMPT_VERSION_1 = "backlog/1";
@@ -433,9 +442,44 @@ function renderInstructions(): string {
     "finition seulement si elle est necessaire a la V1. Ce n'est pas une regle rigide :",
     "si ce projet demande un autre ordre, suis-le et explique-le dans ton message.",
     "",
-    "Il n'existe **aucun** champ de dependance. N'ecris ni « depend de », ni",
-    "« bloque par », ni de renvoi a un numero de tache : l'ordre suffit, et ce que tu",
-    "inventerais ne serait lu par personne.",
+    "## Les dependances",
+    "",
+    "L'ordre est une recommandation ; une dependance est une contrainte. NOX **refuse**",
+    "de lancer une tache dont une dependance n'est pas terminee, et ne fait respecter",
+    "l'ordre par rien. Un backlog dont l'ordre est correct et les dependances vides",
+    "autorise donc l'execution des taches dans n'importe quel ordre.",
+    "",
+    "`dependsOn` porte les **positions**, dans ce meme tableau, des taches que",
+    "l'element attend. Les positions commencent a zero, et une dependance ne peut",
+    "designer qu'une tache **strictement anterieure** : si tu as besoin de l'inverse,",
+    "c'est ton ordre qu'il faut changer.",
+    "",
+    "### Ce qu'une dependance represente",
+    "",
+    "Une tache B attend une tache A des que B suppose l'existence de quelque chose que",
+    "A a la charge de creer : un modele de donnees, une structure persistee, un fichier,",
+    "un ecran, une route, une capacite d'infrastructure, un comportement. Lancee sans A,",
+    "B obligerait son implementeur a creer lui-meme ce que A devait livrer — ou",
+    "echouerait faute de le trouver.",
+    "",
+    "Pose-toi la question pour chaque tache, une par une : **ce que cette tache etend,",
+    "lit, affiche ou complete, qui le cree ?** Si la reponse est une autre tache de ce",
+    "backlog, la dependance existe et doit apparaitre.",
+    "",
+    "Le cas le plus courant est celui d'une seconde capacite greffee sur la premiere :",
+    "une tache cree une entite, sa persistance et sa fiche de detail ; une autre ajoute a",
+    "cette meme entite une notion supplementaire, dans cette meme persistance et cette",
+    "meme fiche. La seconde attend la premiere.",
+    "",
+    "### Ce qu'une dependance ne represente pas",
+    "",
+    "La chronologie. Ne rattache pas mecaniquement chaque tache a celle qui la precede :",
+    "une tache qui pourrait reellement etre implementee sans la precedente n'attend rien.",
+    "Deux taches consecutives qui touchent des zones independantes du produit restent",
+    "independantes, et une chaine ou tout attend tout n'apprend rien a personne.",
+    "",
+    "Ni une preference de relecture, ni un theme commun, ni le fait que deux taches",
+    "citent le meme document.",
     "",
     "## Le contenu d'une tache",
     "",

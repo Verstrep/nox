@@ -420,3 +420,20 @@ export {
   type ReplanRemovedTask,
   type ReplanStaleDetail,
 } from "./replan-apply.js";
+
+export {
+  applyVerificationRefresh,
+  bootstrapRefreshSucceeded,
+  claimVerificationRefresh,
+  failVerificationRefresh,
+  getLatestVerificationRefresh,
+  listVerificationRefreshes,
+  recordVerificationRefreshResponse,
+} from "./verification-refresh.js";
+
+export type {
+  AppliedVerificationTask,
+  ApplyVerificationRefreshResult,
+  ClaimVerificationRefreshResult,
+  VerificationRefreshRow,
+} from "./verification-refresh.js";

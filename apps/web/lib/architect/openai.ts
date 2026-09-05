@@ -174,10 +174,14 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
     return this.#call(input);
   }
 
+  refreshVerification(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+
   /**
    * Le seul endroit ou NOX parle au fournisseur.
    *
-   * Les deux surfaces publiques passent par ici, et c'est voulu : `store`,
+   * Les quatre surfaces publiques passent par ici, et c'est voulu : `store`,
    * l'absence d'outils et l'absence de reessai n'ont qu'une implementation.
    * Deux copies finiraient par diverger, et la divergence serait exactement
    * celle qui compte.

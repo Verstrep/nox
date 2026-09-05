@@ -74,6 +74,9 @@ model Project {
   /// ni reinitialisable.
   mainArchitectSessionId String?
 
+  /// Rafraichissements des plans de verification declenches par un amorcage.
+  verificationRefreshes VerificationRefresh[]
+
   /// Prochain numero de generation de backlog a attribuer dans ce projet.
   ///
   /// Meme regle que `nextTaskSequence` : il ne recule jamais, echecs compris.
@@ -753,6 +756,9 @@ model Task {
   /// Livraisons Git reservees pour cette tache.
   gitDeliveries GitDelivery[]
 
+  /// Rafraichissements de verification declenches par cette tache d'amorcage.
+  verificationRefreshes VerificationRefresh[] @relation("VerificationRefreshBootstrap")
+
   @@unique([projectId, sequence])
   @@index([projectId, status])
   @@index([backlogProposalId, backlogItemPosition])
@@ -901,8 +907,8 @@ model Run {
   /// autoriser une reprise.
   workspaceFingerprintErrorCode String?
 
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   /// `Restrict` et non `Cascade`, contrairement aux trois tables enfant de
   /// `Task` : un critere d'acceptation n'a aucun sens sans sa tache, alors qu'une
@@ -1025,7 +1031,7 @@ model RunFileChange {
   /// meme review identiques, et une navigation par `?file=` reproductible.
   position Int
 
-  path String
+  path         String
   /// Renseigne uniquement pour un renommage ou une copie.
   previousPath String?
 
@@ -1127,10 +1133,10 @@ model RunEvent {
   /// Valeur de `ClaudeRunEventKind`, stockee en chaine comme les autres enums.
   kind String
 
-  label   String
-  detail  String?
+  label    String
+  detail   String?
   toolName String?
-  isError Boolean @default(false)
+  isError  Boolean @default(false)
 
   /// Date produite par le runner, jamais reprise de Claude Code.
   occurredAt DateTime
@@ -1181,7 +1187,7 @@ model TaskAcceptanceCriterion {
   /// aurait invente une consigne que personne n'a ecrite.
   humanInstructions String?
 
-  task  Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task   Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
   proofs TaskCriterionValidation[]
 
   @@unique([taskId, position])
@@ -1601,7 +1607,6 @@ model ArchitectGeneration {
   @@index([sessionId, sequence])
 }
 
-
 /// Une dependance explicite entre deux taches du meme projet.
 ///
 /// ## La convention, une fois pour toutes
@@ -1632,6 +1637,109 @@ model ArchitectGeneration {
 /// Consequence assumee pour la suite : une suppression de projet devra retirer
 /// ces lignes **avant** les taches, en une operation explicite. C'est un
 /// `deleteMany` de plus, pas un obstacle.
+/// Un rafraichissement des plans de verification, apres un amorcage reussi.
+///
+/// ## Pourquoi cette table existe
+///
+/// Avant `TASK-000`, un projet neuf n'a ni pile, ni scripts, ni commandes. Le
+/// planificateur classe donc tous ses criteres `HUMAN`, et il a raison : deviner
+/// `npm test` sur un repository vide serait inventer une preuve. Apres
+/// l'amorcage, ces commandes existent — et le plan de verification de chaque
+/// tache future est reste ecrit pour un projet qui n'existe plus.
+///
+/// Le premier pilote reel a corrige cela a la main : l'utilisateur est retourne
+/// dans la conversation Architecte et a demande une replanification des seuls
+/// plans de verification. Le resultat etait excellent. La friction etait qu'il
+/// fallait savoir que cette transition existait.
+///
+/// ## Une ligne par empreinte, et c'est l'idempotence
+///
+/// `@@unique([projectId, planningFingerprint])` : un meme etat de planification
+/// ne peut produire qu'un seul rafraichissement, donc **au plus un appel au
+/// fournisseur**. Ce n'est pas une precaution applicative, c'est la contrainte
+/// qui la rend inutile — dix finalisations simultanees d'un meme amorcage
+/// n'obtiennent qu'une ligne, et les neuf autres perdent la course a l'ecriture.
+///
+/// Une reprise volontaire plus tard reste possible : le plan aura change, donc
+/// l'empreinte aussi.
+///
+/// ## Ce qu'elle ne porte pas
+///
+/// Aucune proposition en attente. Le contrat est si etroitement borne — modes
+/// de verification, instructions humaines, commandes, liens — qu'une reponse
+/// valide s'applique directement. Il n'y a donc ni statut `PENDING`, ni ecran de
+/// revue, ni bouton `Apply` : ce que cette table raconte est ce qui a **eu
+/// lieu**.
+model VerificationRefresh {
+  id        String @id @default(cuid())
+  projectId String
+
+  /// Tache d'amorcage dont l'acceptation a declenche ce rafraichissement.
+  ///
+  /// `Restrict` : la provenance vaut mieux qu'une suppression silencieuse, comme
+  /// pour les taches issues d'un backlog. `TASK-000` n'est de toute facon pas
+  /// supprimable des qu'elle possede une execution.
+  bootstrapTaskId String
+
+  /// Valeur de `VerificationRefreshStatus`.
+  status String
+
+  /// Modele effectivement utilise, tel que le serveur l'a lu dans sa configuration.
+  model String
+
+  /// Version du prompt, pour qu'un changement de consignes soit detectable.
+  promptVersion String
+
+  /// Empreinte de l'etat de planification **vu par le fournisseur**.
+  ///
+  /// Capturee avant l'appel, jamais relue apres. Elle couvre les taches
+  /// verrouillees, les contrats modifiables, les dependances, l'ordre de
+  /// planification, l'appartenance a la file, et la documentation du repository
+  /// reellement transmise. C'est elle qui porte l'idempotence.
+  planningFingerprint String
+
+  /// Identifiant de reponse rapporte par le fournisseur, lorsqu'il en fournit un.
+  providerResponseId String?
+
+  /// Consommation **rapportee**. Jamais estimee, jamais convertie en cout.
+  inputTokens       Int?
+  outputTokens      Int?
+  totalTokens       Int?
+  cachedInputTokens Int?
+
+  /// Valeur de `ArchitectErrorCode`, lorsque l'appel a echoue.
+  errorCode String?
+
+  /// Chemin du champ refuse par la validation, tel que NOX l'a nomme.
+  errorField String?
+
+  /// Phrase de refus, deja destinee a l'utilisateur et deja nettoyee.
+  errorDetail String?
+
+  /// Reponse du fournisseur, telle qu'elle a ete rendue. **Immuable.**
+  providerJson String?
+
+  /// Ce qui a reellement ete ecrit dans les taches, serialise.
+  ///
+  /// Distinct de `providerJson` pour la meme raison que partout ailleurs : une
+  /// proposition et ce qui en a ete retenu repondent a deux questions.
+  appliedJson String?
+
+  /// Comptes derives, pour afficher le resultat sans deserialiser.
+  changedTaskCount Int @default(0)
+  automatedCount   Int @default(0)
+  humanCount       Int @default(0)
+
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  bootstrapTask Task    @relation("VerificationRefreshBootstrap", fields: [bootstrapTaskId], references: [id], onDelete: Restrict)
+
+  @@unique([projectId, planningFingerprint])
+  @@index([projectId, createdAt])
+}
+
 model TaskDependency {
   id String @id @default(cuid())
 
@@ -1773,7 +1881,7 @@ model AutonomousValidationBatch {
   /// n'est pas la meme chose.
   mutatedFiles String?
 
-  run     Run                         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run     Run                          @relation(fields: [runId], references: [id], onDelete: Cascade)
   results AutonomousValidationResult[]
 
   @@unique([runId, attempt])
@@ -1854,7 +1962,7 @@ model RunReviewDecision {
 
   decidedAt DateTime @default(now())
 
-  run           Run                          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run           Run                             @relation(fields: [runId], references: [id], onDelete: Cascade)
   confirmations RunHumanCriterionConfirmation[]
 
   @@index([runId])
@@ -2061,7 +2169,7 @@ model GitDelivery {
   commitSha String?
 
   /// Dernier refus ou echec constate. Valeur de `DeliveryRefusalCode`.
-  errorCode String?
+  errorCode    String?
   /// Sortie Git bornee et assainie, ou message construit par NOX.
   errorMessage String?
 

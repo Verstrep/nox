@@ -21,6 +21,7 @@ import { describe, it } from "node:test";
 import {
   ARCHITECT_BACKLOG_SCHEMA_VERSION,
   ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
   COMMAND_EXECUTION_MODE,
   DEFAULT_HUMAN_INSTRUCTIONS,
   MAX_AUTONOMOUS_COMMANDS_PER_RUN,
@@ -386,7 +387,14 @@ describe("compatibilite backlog/1", () => {
     assert.ok(read.ok);
 
     const first = read.proposal.tasks[0];
-    assert.equal(read.proposal.schemaVersion, ARCHITECT_BACKLOG_SCHEMA_VERSION_2);
+    // La forme rendue est **toujours** la forme courante : une proposition de
+    // `backlog/1` est relevee jusqu'a la version 3, jamais reecrite en base.
+    assert.equal(read.proposal.schemaVersion, ARCHITECT_BACKLOG_SCHEMA_VERSION_3);
+    assert.deepEqual(
+      first?.dependsOn,
+      [],
+      "une proposition d'avant TASK-033 n'a jamais exprime de dependance",
+    );
     assert.equal(first?.acceptanceCriteria[0]?.verificationMode, VERIFICATION_MODE.HUMAN);
     assert.equal(first?.acceptanceCriteria[0]?.humanInstructions, DEFAULT_HUMAN_INSTRUCTIONS);
     assert.deepEqual(first?.acceptanceCriteria[0]?.validationCommandIndexes, []);

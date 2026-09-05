@@ -60,6 +60,12 @@ function executionRules(taskCode: string, kind: TaskKind): string {
   return [
     `- implémente uniquement ${taskCode} ;`,
     "- ne commence aucune autre tâche ;",
+    // Le contrat de la tache vit dans NOX ; `tasks/<code>.md` en est une projection
+    // a sens unique. Le premier pilote a vu l'agent cocher les cases des criteres
+    // d'acceptation — inoffensif, et pourtant un contrat reecrit pendant son
+    // execution. La regle est donc dite, plutot que supposee.
+    "- ne modifie pas le document de cette tâche : son contrat est figé, et les cases",
+    "  de ses critères d'acceptation ne se cochent pas ;",
     "- ne crée aucun commit ;",
     "- ne lance aucun push ;",
     "- ne modifie pas l'historique Git ;",
@@ -166,6 +172,38 @@ export const BOOTSTRAP_SETUP_STEP = [
   "     compte rendu, et indique ce qui reste non vérifié ;",
 ].join("\n");
 
+/**
+ * Ce que « executer une commande enregistree » veut dire, exactement.
+ *
+ * ## D'ou vient cette consigne
+ *
+ * Du premier pilote reel. L'agent avait bien lance les deux commandes de la
+ * tache, mais ainsi :
+ *
+ * ```text
+ * npm test 2>&1 | tail -60
+ * ```
+ *
+ * NOX a refuse d'y voir une execution de `npm test`, et il avait raison : dans
+ * un tuyau, le code de sortie observable est celui de `tail`. La commande peut
+ * echouer et la ligne rendre zero. Relacher la reconnaissance aurait fabrique
+ * une preuve ; c'est donc la demande qui est precisee, pas la lecture.
+ *
+ * ## Ce que cette consigne ne fait pas
+ *
+ * Elle ne transforme pas le resultat de l'agent en preuve. Une commande lancee
+ * par Claude Code reste **informative**, quelle que soit sa forme : seule la
+ * validation autonome de NOX verifie un critere. Ce qu'elle rend possible, c'est
+ * de dire honnetement dans la review ce que l'agent a reellement lance.
+ */
+const LITERAL_VALIDATION_STEP = [
+  "   Lance chacune de ces commandes au moins une fois **exactement** telle qu'elle est",
+  "   écrite ci-dessus : sans tuyau, sans redirection, sans enveloppe, sans préfixe et",
+  "   sans suffixe. Tu peux la relancer ensuite sous une autre forme pour ton propre",
+  "   diagnostic, mais l'exécution littérale doit avoir eu lieu, sinon NOX ne peut pas",
+  "   dire ce que tu as réellement lancé ;",
+];
+
 function finalValidationStep(kind: TaskKind, commands: readonly string[]): string {
   if (kind === TASK_KIND.BOOTSTRAP) {
     // Une tache d'amorcage peut malgre tout porter des commandes enregistrees, si
@@ -186,6 +224,7 @@ function finalValidationStep(kind: TaskKind, commands: readonly string[]): strin
         "1. exécute uniquement les commandes de validation autorisées ci-dessous, qui sont les",
         "   seules commandes applicatives préautorisées :",
         ...commands.map((entry) => `   - ${entry}`),
+        ...LITERAL_VALIDATION_STEP,
       ].join("\n");
 }
 /**

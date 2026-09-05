@@ -126,6 +126,21 @@ export async function generateBacklogAction(
  * nombre d'elements est declare, et borne a la lecture — un compteur falsifie ne
  * peut donc produire qu'une liste vide ou tronquee, jamais une boucle.
  */
+/** Positions cochees dans un champ multiple, telles que l'ecran les a rendues. */
+function readPositions(formData: FormData, field: string): number[] {
+  const seen = new Set<number>();
+  for (const raw of formData.getAll(field)) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      seen.add(parsed);
+    }
+  }
+  return [...seen].sort((left, right) => left - right);
+}
+
 function readItems(formData: FormData): BacklogItemValues[] {
   const declared = Number.parseInt(readField(formData, "itemCount"), 10);
   if (!Number.isInteger(declared) || declared <= 0) {
@@ -148,9 +163,14 @@ function readItems(formData: FormData): BacklogItemValues[] {
       documents: at("documents"),
       criteria: plan.criteria,
       commands: plan.commands,
-      // Le planificateur ne propose aucune dependance, et cette revue n'en pose
-      // aucune : elles se placent a la main, apres l'application.
+      // Une dependance vers une tache **existante** ne se pose pas ici : cette
+      // revue ne connait que le backlog qu'elle relit. Elle se place a la main,
+      // apres l'application, sur la page de la tache.
       dependsOnTaskIds: [],
+      // Les positions viennent de l'ordre de l'ecran, comme tout le reste du
+      // formulaire. Le serveur les revalide : une reference vers l'avant est
+      // refusee, jamais corrigee.
+      dependsOnPositions: readPositions(formData, `${prefix}dependsOn`),
     });
   }
   return items;

@@ -1056,9 +1056,9 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `HOTFIX-002` : `9aae915`
-  (`fix: improve architect model and backlog diagnostics`), contenant `HOTFIX-001`.
-- `HOTFIX-002` reste **local**, non indexé et non commité.
+- Commit de départ de `TASK-033` : `7b539a4`
+  (`fix: support Windows autonomous validation`), contenant `HOTFIX-002`.
+- `TASK-033` reste **local**, non indexé et non commité.
 
 ---
 
@@ -1123,3 +1123,56 @@ validation`. Un résultat rapporté par Claude Code ne valide toujours aucun cri
 (`windows-validation.test.ts`, ignoré ailleurs) ; partout, la stratégie choisie est vérifiée avec
 un système de fichiers et un lanceur simulés. Le champ `detail` d'une erreur du runner n'est
 renseigné que par la route de validation : les autres routes continuent de ne rendre qu'un code.
+
+---
+
+## 10. TASK-033 — durcissement de l'autonomie, après le premier pilote
+
+Le pilote TripKit a validé la chaîne complète — conversation, brief, plan, backlog, amorçage,
+replanification, Claude Code, validation indépendante, vérification humaine. Il a aussi révélé
+quatre interventions humaines qui n'ont pas lieu d'être dans le workflow cible. Cette tâche les
+traite, et **uniquement** elles : l'ergonomie, la visibilité du modèle, l'observabilité des
+exécutions et les métriques d'autonomie sont reportées.
+
+**Les dépendances s'expriment.** `backlog/3` porte un champ `dependsOn` — des positions,
+strictement antérieures — et `architect/6` dit ce qu'une dépendance **est** : un prérequis
+fonctionnel réel, jamais une chronologie. Le pilote avait produit deux tâches dont la seconde
+étendait le modèle, la persistance et l'écran de la première, sans qu'aucun lien ne l'exprime,
+parce que `backlog/2` n'avait pas de champ pour l'écrire. La sémantique reste au fournisseur ; NOX
+garantit le contrat et le graphe. Voir [D-384](DECISIONS.md).
+
+**Les plans de vérification se rafraîchissent seuls après l'amorçage.** L'acceptation de
+`TASK-000` déclenche au plus un appel, dont le contrat ne porte que quatre champs : mode de
+vérification, consigne humaine, commandes, liens critère-commande. Le texte des critères ne
+quitte jamais NOX. Une réponse valide s'applique directement ; un champ hors contrat fait refuser
+toute la proposition, nommément. Voir [D-385](DECISIONS.md) et [D-386](DECISIONS.md).
+
+**La commande de validation se demande littéralement.** Le prompt d'exécution demande désormais
+au moins une exécution exacte de chaque commande enregistrée. `readBashCommand` n'a pas bougé :
+une ligne à tuyau reste refusée, et pour la bonne raison. Voir [D-387](DECISIONS.md).
+
+**Le contrat d'une tâche est dit figé, et sa divergence est constatée.** Le pilote avait vu
+l'agent cocher les cases de `tasks/TASK-002.md`. Le contrat vit en base et n'avait pas changé ; la
+réponse est une consigne et un constat, pas un verrou de système de fichiers. Voir
+[D-388](DECISIONS.md).
+
+**La livraison Git est enfin visible.** Une tâche terminée montre toujours la politique du projet
+et mène à la surface de livraison, y compris quand aucun candidat n'a pu être réservé — c'est ce
+qui renvoyait l'utilisateur dans un terminal après chaque tâche. Aucun nouveau chemin d'écriture
+Git : le moteur de TASK-029 reste le seul. Voir [D-389](DECISIONS.md).
+
+**Ce que cette tâche n'a pas eu à faire.** L'auto-approbation déterministe et la continuation de
+file existaient déjà — `checkAutoCompletion` depuis TASK-027, `applyTaskTransition` depuis
+TASK-029 — et l'inspection a confirmé qu'elles couvraient les six conditions attendues. Aucun
+statut n'a été ajouté, aucun second moteur de file, de Git ou de replanification n'a été créé.
+
+**Migration.** Une seule table, `VerificationRefresh`, purement additive : aucun modèle existant
+ne pouvait porter un appel de rafraîchissement, son coût, son issue et son empreinte
+d'idempotence. Aucune colonne ajoutée ailleurs, aucune table reconstruite, aucune ligne réécrite.
+
+**Limites connues.** Le rafraîchissement ne lit aucun manifeste : il s'appuie sur la documentation
+du repository — que `TASK-000` a pour contrat de renseigner — et sur les commandes déjà validées
+par un humain sur d'autres tâches du projet. Deviner les scripts d'un `package.json` reviendrait à
+construire un catalogue d'écosystèmes que NOX refuse d'entretenir. Par ailleurs, une dépendance
+proposée par le backlog ne peut désigner qu'une tâche du même backlog : une dépendance vers une
+tâche **existante** se pose à la main après l'application, avec l'éditeur de TASK-024.

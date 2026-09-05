@@ -28,6 +28,7 @@ import { TASK_STATUS, type TaskStatus } from "@nox/shared";
 
 import { advanceQueue, type AdvanceQueueResult } from "./queue.ts";
 import { maybeDeliver, type MaybeDeliverResult } from "./git-delivery.ts";
+import type { MaybeRefreshResult } from "./verification-refresh/service.ts";
 
 export const UNKNOWN_TASK_MESSAGE =
   "Cette tache n'existe pas dans ce projet. Revenez au backlog et rouvrez-la.";
@@ -45,6 +46,15 @@ export type TaskTransitionOutcome =
       dispatch: AdvanceQueueResult | null;
       /** Livraison Git tentee apres l'acceptation, `null` si aucune n'a eu lieu. */
       delivery: MaybeDeliverResult | null;
+      /**
+       * Rafraichissement des plans de verification, apres un amorcage accepte.
+       *
+       * `null` quand la question ne s'est pas posee ; un refus nomme quand elle
+       * s'est posee et que la reponse etait non. Les deux sont des informations
+       * distinctes, et les confondre ferait croire qu'une amorce normale a
+       * declenche un appel.
+       */
+      refresh: MaybeRefreshResult | null;
     }
   | { ok: false; message: string };
 
@@ -100,7 +110,7 @@ export async function applyTaskTransition(
   // la fait avancer. Un run techniquement termine mene a `REVIEW`, ce qui n'est
   // pas une acceptation.
   if (input.status !== TASK_STATUS.COMPLETED) {
-    return { ok: true, dequeued: result.dequeued, dispatch: null, delivery: null };
+    return { ok: true, dequeued: result.dequeued, dispatch: null, delivery: null, refresh: null };
   }
 
   // La livraison **avant** l'avancement, et c'est tout l'ordre de TASK-029 : la
@@ -112,9 +122,52 @@ export async function applyTaskTransition(
   // terminee, avec un etat lisible et un geste propose. C'est la meme regle que
   // pour la capture de review et pour le lot de validations.
   const delivery = await deliverQuietly(db, input.projectId, input.taskId);
+
+  // Un amorcage accepte est le seul moment ou les plans de verification des
+  // taches futures peuvent devenir faux d'un coup : la pile qu'elles supposaient
+  // absente vient d'exister. Le rafraichissement se declenche donc **ici**,
+  // jamais au rendu d'une page, et il est idempotent par empreinte.
+  const refresh = await refreshQuietly(db, input.projectId, input.taskId);
+
   const dispatch = await advanceQueue(db, input.projectId);
 
-  return { ok: true, dequeued: result.dequeued, dispatch, delivery };
+  return { ok: true, dequeued: result.dequeued, dispatch, delivery, refresh };
+}
+
+/**
+ * Rafraichit les plans de verification, et ne laisse jamais un incident faire
+ * tomber la transition.
+ *
+ * Meme regle que la livraison : la tache **est** terminee, et la decision est
+ * deja ecrite. Un fournisseur injoignable, une configuration absente ou une
+ * reponse refusee laissent les plans tels qu'ils sont — un etat parfaitement
+ * valable, celui d'avant TASK-033.
+ *
+ * L'import est dynamique pour la meme raison que celui des transitions ailleurs
+ * dans NOX : il entraine le client OpenAI, qui n'a rien a faire dans le graphe
+ * de modules d'une transition de statut ordinaire.
+ */
+async function refreshQuietly(
+  db: DatabaseClient,
+  projectId: string,
+  taskId: string,
+): Promise<MaybeRefreshResult | null> {
+  try {
+    const { getProjectById } = await import("@nox/database");
+    const project = await getProjectById(db, projectId);
+    if (project === null) {
+      return null;
+    }
+    const { refreshVerificationPlansForProject } = await import("./verification-refresh.ts");
+    return await refreshVerificationPlansForProject(
+      db,
+      { id: project.id, name: project.name, repositoryPath: project.repositoryPath },
+      taskId,
+    );
+  } catch (error) {
+    console.error("[nox] Echec du rafraichissement des plans de verification :", error);
+    return null;
+  }
 }
 
 /**

@@ -15,7 +15,9 @@ import {
 import {
   backlogReviewValues,
   createBacklogReviewItems,
+  remapBacklogDependencies,
   setBacklogItemField,
+  toggleBacklogDependency,
   updateBacklogItem,
   type BacklogItemTextField,
 } from "@/lib/backlog/review-items";
@@ -35,6 +37,84 @@ const FIELD_CLASSES =
 
 const CONTROL_CLASSES =
   "rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-600 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40";
+
+/**
+ * Les taches que cet element attend, choisies parmi celles qui le precedent.
+ *
+ * ## Pourquoi seulement celles qui precedent
+ *
+ * Parce qu'une dependance de backlog designe une **position**, et qu'une
+ * position ne peut aller que vers l'arriere : c'est ce qui rend un cycle
+ * impossible sans parcours de graphe, et ce qui force l'ordre affiche et les
+ * prerequis a raconter la meme histoire. Proposer les cartes suivantes
+ * reviendrait a proposer un plan que le serveur refuserait.
+ *
+ * ## Ce que ces cases n'ouvrent pas
+ *
+ * Une dependance vers une tache **existante** du projet. Elle se pose apres
+ * l'application, sur la page de la tache, avec l'editeur de TASK-024 — le seul
+ * qui connaisse les taches deja creees.
+ */
+function DependencyFields({
+  index,
+  items,
+  selected,
+  disabled,
+  onToggle,
+}: {
+  index: number;
+  items: readonly { uid: string; values: BacklogItemValues }[];
+  selected: readonly number[];
+  disabled: boolean;
+  onToggle: (target: number) => void;
+}) {
+  const previous = items.slice(0, index);
+  const field = `items.${String(index)}.dependsOn`;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs uppercase tracking-wider text-zinc-500">Dependances</span>
+      <span className="text-xs text-zinc-600">
+        Les taches que celle-ci attend reellement. NOX refusera de la lancer tant qu&apos;une
+        d&apos;elles n&apos;est pas terminee.
+      </span>
+      {previous.length === 0 ? (
+        <p className="text-xs text-zinc-600">
+          Aucune tache ne precede celle-ci dans ce backlog : elle ne peut rien attendre.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {previous.map((other, target) => {
+            const checked = selected.includes(target);
+            return (
+              <li key={other.uid}>
+                <label className="flex items-start gap-2 text-sm text-zinc-300">
+                  <input
+                    type="checkbox"
+                    name={field}
+                    value={String(target)}
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={() => {
+                      onToggle(target);
+                    }}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="font-mono text-xs text-zinc-500">
+                      {String(target + 1)}.
+                    </span>{" "}
+                    {other.values.title === "" ? "Sans titre" : other.values.title}
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /** Un champ de texte libre, borne par le serveur et non par cette saisie. */
 function Field({
@@ -169,12 +249,19 @@ export function BacklogReview({
       setItems((current) => setBacklogItemField(current, index, field, next));
     };
 
+  // Deplacer et retirer changent toutes les positions a la fois. Les dependances
+  // sont donc reportees sur le nouvel ordre, par identite : ce qui reste a
+  // l'ecran est exactement ce qui partira au serveur.
   const move = (from: number, to: number): void => {
-    setItems((current) => moveBacklogItem(current, from, to));
+    setItems((current) => remapBacklogDependencies(current, moveBacklogItem(current, from, to)));
   };
 
   const remove = (index: number): void => {
-    setItems((current) => removeBacklogItem(current, index));
+    setItems((current) => remapBacklogDependencies(current, removeBacklogItem(current, index)));
+  };
+
+  const toggleDependency = (index: number, target: number): void => {
+    setItems((current) => toggleBacklogDependency(current, index, target));
   };
 
   /** Les sept gestes du plan, rattaches a un element precis. */
@@ -421,6 +508,15 @@ export function BacklogReview({
                     handlers={planHandlers(index)}
                     disabled={stopped}
                   />
+                  <DependencyFields
+                    index={index}
+                    items={items}
+                    selected={item.dependsOnPositions}
+                    disabled={stopped}
+                    onToggle={(target) => {
+                      toggleDependency(index, target);
+                    }}
+                  />
                 </div>
               ) : (
                 <>
@@ -435,6 +531,14 @@ export function BacklogReview({
                     disabled={stopped}
                     hidden
                   />
+                  {item.dependsOnPositions.map((target) => (
+                    <input
+                      key={target}
+                      type="hidden"
+                      name={at("dependsOn")}
+                      value={String(target)}
+                    />
+                  ))}
                 </>
               )}
             </li>

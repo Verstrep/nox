@@ -30,9 +30,9 @@ import {
   ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_LIMITS,
   ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS,
-  ARCHITECT_BACKLOG_SCHEMA_NAME_2,
+  ARCHITECT_BACKLOG_SCHEMA_NAME_3,
   ARCHITECT_BACKLOG_SCHEMA_VERSION,
-  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
   COMMAND_EXECUTION_MODE,
   VERIFICATION_MODE,
   ARCHITECT_ERROR,
@@ -77,6 +77,7 @@ import {
   isBacklogProposalStale,
   prepareProjectBacklog,
   type BacklogProjectInput,
+  type BacklogReviewItem,
 } from "./service.ts";
 
 const MIGRATIONS_DIR = path.join(
@@ -221,7 +222,7 @@ function backlogPayload(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
     message: "Ce decoupage couvre les deux etapes du plan.",
     tasks: titles.map((title) => ({
       title,
@@ -273,8 +274,8 @@ function respond(raw: unknown): ArchitectProviderResult {
 /** Valeurs de formulaire pour un titre donne, sans rien d'autre. */
 function item(
   title: string,
-  overrides: Partial<TaskEditFormValues> = {},
-): TaskEditFormValues {
+  overrides: Partial<BacklogReviewItem> = {},
+): BacklogReviewItem {
   return {
     title,
     priority: TASK_PRIORITY.MEDIUM,
@@ -293,6 +294,7 @@ function item(
     ],
     commands: [],
     dependsOnTaskIds: [],
+    dependsOnPositions: [],
     ...overrides,
   };
 }
@@ -699,7 +701,7 @@ describe("ce qui est transmis au fournisseur", () => {
 
     const call = provider.backlogCalls[0];
     assert.ok(call !== undefined);
-    assert.equal(call.schemaName, ARCHITECT_BACKLOG_SCHEMA_NAME_2);
+    assert.equal(call.schemaName, ARCHITECT_BACKLOG_SCHEMA_NAME_3);
     assert.equal(call.maxOutputTokens, ARCHITECT_BACKLOG_MAX_OUTPUT_TOKENS);
     assert.equal("tools" in call, false, "aucun outil n'est declare");
   });
@@ -1081,7 +1083,7 @@ describe("planifier le travail restant", () => {
 describe("conversion en valeurs de formulaire", () => {
   it("rend une ligne par entree de liste", () => {
     const values = backlogProposalToFormValues({
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
       message: "m",
       tasks: [
         {
@@ -1108,6 +1110,7 @@ describe("conversion en valeurs de formulaire", () => {
           validationCommands: [
             { command: "npm test", executionMode: COMMAND_EXECUTION_MODE.AUTONOMOUS },
           ],
+          dependsOn: [],
         },
       ],
     });
@@ -1128,7 +1131,7 @@ describe("conversion en valeurs de formulaire", () => {
     // Elles vivent dans un seul formulaire : deux cles identiques y feraient
     // partager leurs champs.
     const values = backlogProposalToFormValues({
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
       message: "m",
       tasks: [
         {
@@ -1147,6 +1150,7 @@ describe("conversion en valeurs de formulaire", () => {
           outOfScope: [],
           documentReferences: [],
           validationCommands: [],
+          dependsOn: [],
         },
         {
           title: "B",
@@ -1164,6 +1168,7 @@ describe("conversion en valeurs de formulaire", () => {
           outOfScope: [],
           documentReferences: [],
           validationCommands: [],
+          dependsOn: [],
         },
       ],
     });
@@ -1173,7 +1178,7 @@ describe("conversion en valeurs de formulaire", () => {
 
   it("ramene un contexte absent a une chaine vide", () => {
     const values = backlogProposalToFormValues({
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
       message: "m",
       tasks: [
         {
@@ -1192,6 +1197,7 @@ describe("conversion en valeurs de formulaire", () => {
           outOfScope: [],
           documentReferences: [],
           validationCommands: [],
+          dependsOn: [],
         },
       ],
     });

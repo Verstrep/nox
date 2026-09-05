@@ -39,17 +39,18 @@
 import {
   ARCHITECT_BACKLOG_FAILURE,
   ARCHITECT_BACKLOG_GENERATION_STATUS,
-  ARCHITECT_BACKLOG_SCHEMA_NAME_2,
+  ARCHITECT_BACKLOG_SCHEMA_NAME_3,
   ARCHITECT_ERROR,
   VERIFICATION_MODE,
-  buildArchitectBacklogSchemaV2,
+  buildArchitectBacklogSchemaV3,
   checkValidationCommand,
   formatTaskCode,
-  readArchitectBacklogProposalV2,
+  readArchitectBacklogProposalV3,
+  readBacklogDependsOn,
   taskDocumentPath,
   type ArchitectBacklogDiagnostic,
-  type ArchitectBacklogProposalV2,
-  type ArchitectBacklogTaskProposalV2,
+  type ArchitectBacklogProposalV3,
+  type ArchitectBacklogTaskProposalV3,
   type ArchitectErrorCode,
   type DevelopmentTaskDetail,
   type DevelopmentTaskSummary,
@@ -238,8 +239,8 @@ export async function generateProjectBacklog(
       model: input.model,
       instructions: prepared.prepared.prompt.instructions,
       input: prepared.prepared.prompt.input,
-      schemaName: ARCHITECT_BACKLOG_SCHEMA_NAME_2,
-      schema: buildArchitectBacklogSchemaV2(),
+      schemaName: ARCHITECT_BACKLOG_SCHEMA_NAME_3,
+      schema: buildArchitectBacklogSchemaV3(),
       timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
       maxOutputTokens: prepared.prepared.maxOutputTokens,
     });
@@ -254,7 +255,7 @@ export async function generateProjectBacklog(
     return fail(result.code);
   }
 
-  const validated = readArchitectBacklogProposalV2(
+  const validated = readArchitectBacklogProposalV3(
     result.value.raw,
     prepared.prepared.availableDocuments,
   );
@@ -320,7 +321,21 @@ export async function generateProjectBacklog(
  * elles se posent a la main apres l'application. Le champ est present parce que
  * le validateur est partage, et il vaut toujours la liste vide.
  */
-export type BacklogReviewItem = TaskEditFormValues;
+export type BacklogReviewItem = TaskEditFormValues & {
+  /**
+   * Positions, dans ce meme backlog, des elements que celui-ci attend.
+   *
+   * Des positions, pas des identifiants : aucune de ces taches n'existe encore.
+   * Elles sont strictement anterieures a la leur — ce que le contrat de
+   * `backlog/3` garantit, ce que la revue maintient quand l'utilisateur
+   * reordonne, et ce que le serveur revalide avant d'ecrire.
+   *
+   * `dependsOnTaskIds`, herite du formulaire d'edition, reste vide ici : une
+   * dependance vers une tache **existante** se pose apres l'application, sur la
+   * page de la tache.
+   */
+  dependsOnPositions: readonly number[];
+};
 
 export type ApplyBacklogOutcome =
   | { ok: true; proposal: ArchitectBacklogProposalView; tasks: DevelopmentTaskDetail[] }
@@ -401,7 +416,21 @@ export async function applyProjectBacklog(
         };
       }
     }
+    // Ce que l'humain a laisse a l'ecran n'a pas plus de credit que ce que le
+    // modele avait propose : les dependances repassent par le meme lecteur, avec
+    // les memes refus — une reference vers l'avant est refusee, jamais corrigee.
+    const dependencies = readBacklogDependsOn(
+      [...item.dependsOnPositions],
+      position,
+      `Tache ${String(position + 1)}`,
+      (field) => `items.${String(position)}.${field}`,
+    );
+    if (!dependencies.ok) {
+      return { ok: false, message: dependencies.refusal.message };
+    }
+
     validated.push({
+      dependsOnPositions: dependencies.dependsOn,
       title: submission.input.title,
       objective: submission.input.objective,
       context: submission.input.context,
@@ -578,7 +607,7 @@ export async function isBacklogProposalStale(
 
 /** Convertit une proposition en valeurs de formulaire, dans son ordre. */
 export function backlogProposalToFormValues(
-  proposal: ArchitectBacklogProposalV2,
+  proposal: ArchitectBacklogProposalV3,
 ): BacklogReviewItem[] {
   return proposal.tasks.map((task, position) => backlogTaskToFormValues(task, position));
 }
@@ -591,7 +620,7 @@ export function backlogProposalToFormValues(
  * deux cles identiques y feraient partager leurs champs.
  */
 export function backlogTaskToFormValues(
-  task: ArchitectBacklogTaskProposalV2,
+  task: ArchitectBacklogTaskProposalV3,
   position = 0,
 ): BacklogReviewItem {
   const commandKey = (index: number): string => `t${String(position)}v${String(index)}`;
@@ -625,6 +654,10 @@ export function backlogTaskToFormValues(
       command: command.command,
       executionMode: command.executionMode,
     })),
+    // Une dependance vers une tache **existante** ne se propose pas ici : le
+    // planificateur ne voit que le backlog qu'il ecrit. Elle se pose a la main
+    // apres l'application, sur la page de la tache.
     dependsOnTaskIds: [],
+    dependsOnPositions: [...task.dependsOn],
   };
 }

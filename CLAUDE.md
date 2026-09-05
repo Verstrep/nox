@@ -1086,3 +1086,48 @@ doit le dire explicitement et la justifier.
   visée : une proposition d'un autre projet est introuvable, pas « refusée ».
 - **TASK-032 achève le périmètre de V1 prévu.** Ce qui vient ensuite est un pilote réel, pas une
   fonctionnalité écrite d'avance.
+
+### 8.22 Autonomie du workflow après le premier pilote
+
+- **Une dépendance est un prérequis réel, jamais une chronologie.** Une tâche B attend une
+  tâche A quand B suppose une capacité, une structure, un fichier ou un comportement que A a la
+  charge de créer. L'ordre d'un backlog est une recommandation que NOX ne fait respecter par
+  rien ; une dépendance, elle, refuse un lancement. Les deux ne se remplacent pas.
+- **La sémantique appartient au fournisseur, le graphe appartient à NOX.** Aucune dépendance
+  n'est déduite d'un numéro de tâche, d'un mot commun dans deux titres ou de l'ordre du backlog.
+  Le code garantit le contrat et le graphe ; il ne prétend pas comprendre le produit.
+- **Dans un backlog, une dépendance ne peut désigner qu'une position strictement antérieure.**
+  C'est cette seule contrainte qui rend un cycle impossible, interdit l'auto-référence, et force
+  l'ordre et les prérequis à raconter la même histoire. Un plan qui la viole est **refusé et
+  nommé**, jamais réordonné en silence.
+- **Un amorçage accepté peut rafraîchir les plans de vérification des tâches futures, et rien
+  d'autre.** Le fournisseur ne reçoit ni titre, ni objectif, ni contexte, ni hors périmètre, ni
+  texte de critère, ni ordre, ni dépendance : le contrat ne lui en donne pas la place, et un
+  champ hors liste blanche condamne **toute** la proposition. Aucun champ n'est ignoré en
+  silence.
+- **Le texte d'un critère ne quitte jamais NOX pendant un rafraîchissement.** Un critère est
+  désigné par sa position, et NOX réécrit le texte qu'il possède déjà. Ce n'est pas une
+  vérification d'égalité : c'est l'absence de chemin de retour.
+- **Un rafraîchissement est déclenché par la transition d'un amorçage vers `COMPLETED`, jamais
+  par un rendu de page**, et il coûte **au plus un appel** — l'index unique
+  `(projectId, planningFingerprint)` le garantit, et un amorçage dont le rafraîchissement a déjà
+  abouti n'en repaie aucun. Aucun réessai automatique, aucun modèle de repli, aucune réparation
+  silencieuse.
+- **Un échec de rafraîchissement laisse les tâches exactement telles qu'elles étaient.** Il ne
+  fait jamais tomber l'acceptation de l'amorçage : `TASK-000` **est** terminée, et des plans de
+  vérification inchangés sont un état parfaitement valable — celui d'avant TASK-033.
+- **Le code produit validé et l'état de livraison Git sont deux concepts distincts.** Un push
+  refusé ne transforme jamais une implémentation validée en échec : la tâche reste `COMPLETED`,
+  la livraison porte l'échec, et `Retry push` ne recrée jamais de commit.
+- **Une tâche terminée montre toujours sa politique de livraison**, y compris quand aucun
+  candidat n'a pu être réservé. Le premier pilote réel renvoyait son utilisateur dans un
+  terminal non par manque de boutons, mais parce qu'aucun écran ne menait jusqu'à eux.
+- **Une commande de validation doit être lancée au moins une fois telle qu'elle est
+  enregistrée.** La demande est dans le prompt d'exécution ; la reconnaissance, elle, ne se
+  relâche pas — une ligne à tuyau reste refusée, parce que le code de sortie observable y est
+  celui du dernier maillon. Et le résultat de Claude Code reste **informatif** dans tous les
+  cas : seule la validation autonome de NOX vérifie un critère.
+- **Le contrat d'une tâche est figé pendant son exécution.** L'autorité est la base ;
+  `tasks/<code>.md` en est une projection à sens unique, sans case cochée et sans résultat.
+  L'agent a pour consigne de ne pas le modifier, et la review **dit** qu'il l'a fait le cas
+  échéant — sans rien bloquer, puisque le contrat, lui, n'a pas bougé.

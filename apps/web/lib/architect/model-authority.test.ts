@@ -189,11 +189,18 @@ describe("les surfaces a forte consequence lisent cette autorite", () => {
       }
     }
 
-    // Trois Server Actions, et elles seules. Une quatrieme apparaitrait ici.
+    // Trois Server Actions et un declencheur applicatif, et eux seuls. Un
+    // cinquieme apparaitrait ici.
+    //
+    // `verification-refresh.ts` n'est pas une Server Action : c'est TASK-033,
+    // declenchee par l'acceptation d'un amorcage. Elle figure dans cette liste
+    // pour la meme raison que les trois autres — c'est bien un endroit d'ou un
+    // appel facture peut partir, et il doit rester compte.
     assert.deepEqual(builders.sort(), [
       "apps/web/app/projects/[id]/architect/[sessionId]/actions.ts",
       "apps/web/app/projects/[id]/backlog/actions.ts",
       "apps/web/app/projects/[id]/tasks/[taskId]/runs/[runId]/architect-review/actions.ts",
+      "apps/web/lib/verification-refresh.ts",
     ]);
   });
 });

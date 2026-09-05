@@ -7,7 +7,7 @@
  * rien entrainer avec eux.
  */
 
-import type { TaskEditFormValues } from "@/lib/verification-fields";
+import type { BacklogReviewItem } from "@/lib/backlog/service";
 
 /** Ce que rend l'action de generation. */
 export type BacklogGenerateState = {
@@ -30,7 +30,7 @@ export const INITIAL_DISMISS_STATE: BacklogDismissState = { error: null };
  * verification compris : c'est la meme chose, et une seconde forme presque
  * identique aurait fini par accepter ce que l'autre refuse.
  */
-export type BacklogItemValues = TaskEditFormValues;
+export type BacklogItemValues = BacklogReviewItem;
 
 /**
  * Ce que rend l'action d'application.

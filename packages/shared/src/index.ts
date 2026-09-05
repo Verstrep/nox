@@ -561,6 +561,7 @@ export {
   USER_MESSAGE_OPEN,
   ARCHITECT_PROMPT_VERSION_V4,
   ARCHITECT_PROMPT_VERSION_V5,
+  ARCHITECT_PROMPT_VERSION_V6,
   BRIEF_CLOSE,
   BRIEF_OPEN,
   PLAN_CLOSE,
@@ -736,6 +737,12 @@ export {
   readAnyArchitectBacklogProposal,
   readArchitectBacklogProposalV2,
   upgradeBacklogProposal,
+  ARCHITECT_BACKLOG_SCHEMA_NAME_3,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
+  buildArchitectBacklogSchemaV3,
+  readArchitectBacklogProposalV3,
+  readBacklogDependsOn,
+  upgradeBacklogProposalV2,
 } from "./backlog.js";
 
 export type {
@@ -751,6 +758,9 @@ export type {
   ArchitectBacklogCommandProposal,
   ArchitectBacklogCriterionProposal,
   ArchitectBacklogProposalV2,
+  ArchitectBacklogProposalV3,
+  ArchitectBacklogResultV3,
+  ArchitectBacklogTaskProposalV3,
   ArchitectBacklogResultV2,
   ArchitectBacklogTaskProposalV2,
 } from "./backlog.js";
@@ -771,6 +781,7 @@ export type {
 export {
   BACKLOG_PROMPT_VERSION,
   BACKLOG_PROMPT_VERSION_1,
+  BACKLOG_PROMPT_VERSION_2,
   EXISTING_TASK_CLOSE,
   EXISTING_TASK_OPEN,
   renderBacklogPrompt,
@@ -783,6 +794,7 @@ export {
   renderPromptDocument,
   renderPromptMemory,
   renderPromptV1Plan,
+  renderPromptEditableTask,
 } from "./architect-prompt.js";
 
 export {
@@ -1024,3 +1036,32 @@ export type {
   ReplanTaskFacts,
   ReplanUnavailableCode,
 } from "./replan-classification.js";
+
+export {
+  VERIFICATION_REFRESH_LIMITS,
+  VERIFICATION_REFRESH_MAX_OUTPUT_TOKENS,
+  VERIFICATION_REFRESH_PROMPT_VERSION,
+  VERIFICATION_REFRESH_REFUSAL,
+  VERIFICATION_REFRESH_SCHEMA_NAME,
+  VERIFICATION_REFRESH_SCHEMA_VERSION,
+  VERIFICATION_REFRESH_STATUS,
+  VERIFICATION_REFRESH_STATUSES,
+  buildVerificationRefreshSchema,
+  isVerificationRefreshStatus,
+  readVerificationRefreshProposal,
+  renderVerificationRefreshPrompt,
+} from "./verification-refresh.js";
+
+export type {
+  VerificationRefreshCommand,
+  VerificationRefreshCriterion,
+  VerificationRefreshPrompt,
+  VerificationRefreshPromptInput,
+  VerificationRefreshProposal,
+  VerificationRefreshRefusal,
+  VerificationRefreshRefusalCode,
+  VerificationRefreshResult,
+  VerificationRefreshStatus,
+  VerificationRefreshTarget,
+  VerificationRefreshTask,
+} from "./verification-refresh.js";

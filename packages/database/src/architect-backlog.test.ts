@@ -27,14 +27,14 @@ import {
   ARCHITECT_BACKLOG_FAILURE,
   ARCHITECT_BACKLOG_GENERATION_STATUS,
   ARCHITECT_BACKLOG_PROPOSAL_STATUS,
-  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
   ARCHITECT_ERROR,
   COMMAND_EXECUTION_MODE,
   DEFAULT_HUMAN_INSTRUCTIONS,
   VERIFICATION_MODE,
   TASK_PRIORITY,
   TASK_STATUS,
-  type ArchitectBacklogProposalV2,
+  type ArchitectBacklogProposalV3,
   type BacklogContextManifest,
 } from "@nox/shared";
 
@@ -91,9 +91,9 @@ function planningBase(overrides: Partial<BacklogPlanningBase> = {}): BacklogPlan
   };
 }
 
-function backlog(titles: readonly string[]): ArchitectBacklogProposalV2 {
+function backlog(titles: readonly string[]): ArchitectBacklogProposalV3 {
   return {
-    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
     message: "Ce decoupage couvre le plan.",
     tasks: titles.map((title) => ({
       title,
@@ -111,6 +111,7 @@ function backlog(titles: readonly string[]): ArchitectBacklogProposalV2 {
       outOfScope: [],
       documentReferences: [],
       validationCommands: [],
+      dependsOn: [],
     })),
   };
 }

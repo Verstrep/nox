@@ -359,6 +359,24 @@ async function populate(projectId: string): Promise<{ taskId: string; bootstrapI
     },
   });
 
+  // Un rafraichissement de verification : son lien vers la tache d'amorcage est
+  // `Restrict`, exactement comme la provenance de backlog. Sans une ligne
+  // reelle, le test qui verifie que toutes les tables sont videes ne prouverait
+  // rien sur celle-ci.
+  await db.verificationRefresh.create({
+    data: {
+      projectId,
+      bootstrapTaskId: bootstrap.id,
+      status: "APPLIED",
+      model: "gpt-5.6-sol",
+      promptVersion: "verification-refresh/1",
+      planningFingerprint: REVISION_A,
+      changedTaskCount: 1,
+      automatedCount: 1,
+      humanCount: 0,
+    },
+  });
+
   // Une file d'execution active, avec une inscription : sans elle, le test qui
   // verifie que **toutes** les tables sont videes passerait sans rien prouver
   // sur celle-ci.
@@ -434,6 +452,7 @@ async function countAll(projectId: string): Promise<Record<string, number>> {
     run: await db.run.count({ where: byTask }),
     taskQueueEntry: await db.taskQueueEntry.count({ where: { projectId } }),
     taskDependency: await db.taskDependency.count({ where: byTask }),
+    verificationRefresh: await db.verificationRefresh.count({ where: { projectId } }),
     architectReplanProposal: await db.architectReplanProposal.count({ where: { projectId } }),
     architectProjectUpdate: await db.architectProjectUpdate.count({ where: { projectId } }),
     architectMessage: await db.architectMessage.count({ where: { session: { projectId } } }),
@@ -508,6 +527,7 @@ describe("deleteProjectState", () => {
         run: 0,
         taskQueueEntry: 0,
         taskDependency: 0,
+        verificationRefresh: 0,
         architectReplanProposal: 0,
         architectProjectUpdate: 0,
         architectMessage: 0,
@@ -637,6 +657,7 @@ describe("deleteProjectState", () => {
       run: 0,
       taskQueueEntry: 0,
       taskDependency: 0,
+      verificationRefresh: 0,
       architectReplanProposal: 0,
       architectProjectUpdate: 0,
       architectMessage: 0,

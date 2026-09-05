@@ -17,6 +17,7 @@ import {
   ARCHITECT_PROMPT_VERSION,
   ARCHITECT_PROMPT_VERSION_V4,
   ARCHITECT_PROMPT_VERSION_V5,
+  ARCHITECT_PROMPT_VERSION_V6,
   ARCHITECT_SESSION_KIND,
   ARCHITECT_TURN_SCHEMA_VERSION,
   ARCHITECT_TURN_SCHEMA_VERSION_V3,
@@ -118,10 +119,14 @@ describe("version du contrat", () => {
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, false),
       ARCHITECT_PROMPT_VERSION_V4,
     );
+    // `architect/6` depuis TASK-033 : les consignes de dependance disent ce
+    // qu'une dependance **est**, la ou `architect/5` n'en decrivait que la
+    // syntaxe. Les generations deja enregistrees gardent leur version.
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, true),
-      ARCHITECT_PROMPT_VERSION_V5,
+      ARCHITECT_PROMPT_VERSION_V6,
     );
+    assert.notEqual(ARCHITECT_PROMPT_VERSION_V6, ARCHITECT_PROMPT_VERSION_V5);
   });
 });
 

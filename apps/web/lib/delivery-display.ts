@@ -408,3 +408,33 @@ export function approvedDeliveryNotice(policy: DeliveryPolicy): string {
       "voir ce que NOX a écrit, ou ce qui l'en a empêché."
   ;
 }
+
+/**
+ * Ce qui reste a faire, quand la carte de livraison s'affiche.
+ *
+ * ## Pourquoi cette phrase existe
+ *
+ * Parce que le premier pilote reel a renvoye son utilisateur dans PowerShell
+ * apres chaque tache. La cause n'etait pas l'absence des boutons de TASK-029 :
+ * ils existaient. C'etait qu'une tache terminee sans **ligne** de livraison
+ * n'affichait aucune carte, donc aucun chemin vers eux — et rien ne disait que
+ * la politique du projet etait `Manual`.
+ *
+ * La carte s'affiche donc desormais des qu'une tache est terminee, et cette
+ * phrase dit ce que la politique implique, avec ou sans livraison enregistree.
+ */
+export function noDeliveryNotice(policy: DeliveryPolicy, hasDelivery: boolean): string {
+  if (policy === DELIVERY_POLICY.MANUAL) {
+    return hasDelivery
+      ? "La politique de ce projet est manuelle : ouvrez « Git delivery » pour commiter — ou " +
+          "commiter et pousser — avec exactement les mêmes garde-fous que la livraison automatique."
+      : "La politique de ce projet est manuelle, et aucun candidat de livraison n'a été " +
+          "enregistré : le dossier de travail était propre, ou le repository n'a pas pu être lu. " +
+          "Ouvrez « Git delivery » pour voir ce que NOX en dit.";
+  }
+  return hasDelivery
+    ? "La politique de ce projet écrit dans Git après une tâche validée. Ouvrez « Git delivery » " +
+        "pour le détail, ou pour reprendre ce qui a échoué."
+    : "La politique de ce projet écrit dans Git après une tâche validée, mais aucun candidat " +
+        "n'a été enregistré pour ce travail. Ouvrez « Git delivery » pour savoir pourquoi.";
+}

@@ -1586,6 +1586,55 @@ conditionnent pas, et seules les tâches réellement changées sont réécrites.
 l'humain a retenu, ordre compris, et décrit nommément les tâches supprimées — leur code, leur
 titre et leur contrat d'alors. Une tâche disparue de la base doit rester racontable.
 
+### 6.15 Rafraîchissement des plans de vérification après un amorçage
+
+**Le problème que ce flux résout.** Avant `TASK-000`, un projet neuf n'a ni pile, ni scripts,
+ni commandes. Le planificateur classe donc tous ses critères `HUMAN`, et il a raison : deviner
+`npm test` sur un repository vide serait inventer une preuve que personne ne pourrait lancer.
+Après l'amorçage, ces commandes existent — et le plan de vérification de chaque tâche future
+est resté écrit pour un projet qui n'existe plus.
+
+Le premier pilote réel a corrigé cela à la main : son utilisateur est retourné dans la
+conversation Architecte et a demandé une replanification des seuls plans de vérification. Le
+résultat était excellent. La friction était qu'il fallait **savoir** que cette transition
+existait.
+
+```text
+acceptation de TASK-000
+  → l'amorçage a-t-il déjà été rafraîchi ?          SQLite
+  → reste-t-il une tâche future modifiable ?         SQLite
+  → y a-t-il un critère humain à améliorer ?         SQLite
+  → le repository est-il libre d'exécution ?         SQLite
+  → le contexte se construit-il ?                    runner, lecture seule
+  → réservation (projectId, planningFingerprint)     SQLite, unique
+  → un appel, sans réessai                           fournisseur
+  → validation, puis application atomique            SQLite
+  → documents Markdown des seules tâches changées    runner
+```
+
+**Un contrat volontairement minuscule.** Ce n'est pas une replanification. La réponse attendue
+ne porte que quatre choses : le mode de vérification de chaque critère, la consigne humaine qui
+l'accompagne, les commandes de la tâche avec leur mode d'exécution, et le lien entre un critère
+automatisé et ses preuves. Il n'y a ni titre, ni objectif, ni contexte, ni hors périmètre, ni
+texte de critère, ni ordre, ni dépendance dans le schéma : le fournisseur n'a pas de champ où
+les écrire, et un champ hors liste blanche fait refuser **toute** la proposition — nommé, jamais
+ignoré.
+
+**Pourquoi les critères sont désignés par position.** Parce que leur texte n'est jamais renvoyé.
+NOX réécrit celui qu'il possède déjà : le texte des critères n'est pas « vérifié identique », il
+n'a aucun chemin de retour. Le nombre de critères doit correspondre exactement, ce qui fait
+qu'une tâche dont le contrat a bougé entre l'appel et l'écriture ne se reconnaît plus.
+
+**Pourquoi une application sans revue humaine.** C'est le contrat qui l'autorise, et lui seul.
+Une proposition qui ne peut porter que des métadonnées de vérification ne peut pas changer le
+produit ; lui demander une revue ajouterait une friction sans rien protéger. Si ce contrat
+s'élargissait un jour, l'application automatique devrait redevenir une proposition.
+
+**Ce que ce flux ne fait jamais.** Aucun Claude Code, aucune écriture Git, aucun démarrage,
+pause ou avancement de file, aucune création ou suppression de tâche, aucun changement de
+statut, aucune dépendance ajoutée ou retirée. Un échec ne fait jamais tomber l'acceptation de
+l'amorçage : `TASK-000` est terminée, et des plans inchangés sont un état valable.
+
 ---
 ## 7. Invariants transverses
 
@@ -1616,3 +1665,6 @@ serait un changement d'architecture.
 | L'identité d'une tâche ne bouge jamais | Identifiant et code sont immuables ; un code n'est attribué qu'à l'application, et jamais recyclé |
 | Une proposition ne modifie rien | Seule une application humaine explicite change le projet, son plan ou ses tâches |
 | Un état devenu obsolète est refusé, jamais fusionné | Ni « appliquer quand même », ni résolution automatique, ni drapeau de forçage |
+| Une dépendance est un prérequis réel, jamais une chronologie | L'ordre recommande ; la dépendance refuse un lancement. Aucune n'est déduite d'un numéro ou d'un mot commun |
+| Ce que le fournisseur ne peut pas écrire ne peut pas arriver | Un contrat qui n'offre pas la place vaut mieux qu'une garde qui filtre après coup |
+| Un travail validé et son état de livraison sont deux faits | Un push refusé ne rend jamais une implémentation « échouée » |

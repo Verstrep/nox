@@ -55,7 +55,9 @@ import {
   reviewUrl,
   reviewValidationSummary,
   selectReviewFile,
+  taskDocumentWasModified,
   validationSummaryTone,
+  TASK_DOCUMENT_MODIFIED_NOTICE,
 } from "@/lib/review-display";
 import { loadRunReview, syncRunReview } from "@/lib/run-review";
 import { requiresOverride, loadVerificationReview } from "@/lib/verification-review";
@@ -225,6 +227,10 @@ export default async function ReviewPage({
   const files = review?.files ?? [];
   const validations = review?.validations ?? [];
   const totals = totalRunReview(files);
+  // Le contrat d'une tache est fige pendant son execution. Ce constat est lu
+  // dans les lignes deja enregistrees de la review : aucun fichier n'est ouvert,
+  // et rien n'est bloque — la base fait autorite, et elle n'a pas bouge.
+  const contractDocumentTouched = taskDocumentWasModified(files, task.documentPath);
   const summary = reviewValidationSummary(validations);
 
   // Le fichier affiche est **choisi parmi les lignes enregistrees**. Une valeur
@@ -378,6 +384,12 @@ export default async function ReviewPage({
                   Validations: {runValidationSummaryLabel(summary)}
                 </span>
               </div>
+
+              {contractDocumentTouched ? (
+                <p className="mt-4 text-xs leading-relaxed text-amber-200/80">
+                  {TASK_DOCUMENT_MODIFIED_NOTICE}
+                </p>
+              ) : null}
 
               {totals.sensitive === 0 &&
               totals.binary === 0 &&

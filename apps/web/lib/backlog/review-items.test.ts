@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { VERIFICATION_MODE } from "@nox/shared";
 
-import type { TaskEditFormValues } from "../verification-fields.ts";
+import type { BacklogReviewItem as BacklogItemValues } from "./service.ts";
 
 import { moveBacklogItem, removeBacklogItem } from "./display.ts";
 import {
@@ -35,7 +35,7 @@ import {
   setBacklogItemField,
 } from "./review-items.ts";
 
-function values(title: string): TaskEditFormValues {
+function values(title: string): BacklogItemValues {
   return {
     title,
     priority: "MEDIUM",
@@ -54,6 +54,7 @@ function values(title: string): TaskEditFormValues {
     ],
     commands: [],
     dependsOnTaskIds: [],
+    dependsOnPositions: [],
   };
 }
 

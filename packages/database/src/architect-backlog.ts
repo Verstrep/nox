@@ -41,7 +41,7 @@ import {
   ARCHITECT_BACKLOG_LIMITS,
   ARCHITECT_BACKLOG_PROPOSAL_STATUS,
   ARCHITECT_BACKLOG_DIAGNOSTIC_LIMITS,
-  ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+  ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
   COMMAND_EXECUTION_MODE,
   DEFAULT_HUMAN_INSTRUCTIONS,
   EMPTY_ARCHITECT_USAGE,
@@ -63,8 +63,8 @@ import {
   type ArchitectBacklogCommandProposal,
   type ArchitectBacklogCriterionProposal,
   type ArchitectBacklogProposalStatus,
-  type ArchitectBacklogProposalV2,
-  type ArchitectBacklogTaskProposalV2,
+  type ArchitectBacklogProposalV3,
+  type ArchitectBacklogTaskProposalV3,
   type ArchitectUsage,
   type BacklogContextManifest,
   type DevelopmentTaskDetail,
@@ -144,9 +144,9 @@ export type ArchitectBacklogProposalView = {
    * ete ecrit : une proposition `backlog/1` est **relevee** a la lecture, avec
    * les defauts surs, sans que le document enregistre ne bouge.
    */
-  provided: ArchitectBacklogProposalV2;
+  provided: ArchitectBacklogProposalV3;
   /** Ce que l'humain a reellement applique. `null` tant que ce n'est pas fait. */
-  applied: ArchitectBacklogProposalV2 | null;
+  applied: ArchitectBacklogProposalV3 | null;
   appliedAt: string | null;
   dismissedAt: string | null;
   createdAt: string;
@@ -316,9 +316,30 @@ function readPayloadCriteria(
   return criteria;
 }
 
-function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBacklogProposalV2 {
-  const empty: ArchitectBacklogProposalV2 = {
-    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+/**
+ * Positions attendues par un element, relues depuis un document enregistre.
+ *
+ * Conservatrice, comme toute relecture de payload ici : ce qui n'est pas une
+ * position entiere strictement anterieure est ignore. Une proposition ecrite
+ * avant TASK-033 n'a aucun `dependsOn`, et rend donc la liste vide — ce qui est
+ * exactement ce qu'elle disait.
+ */
+function readBackwardPositions(value: unknown, position: number): number[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<number>();
+  for (const raw of value) {
+    if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw < position) {
+      seen.add(raw);
+    }
+  }
+  return [...seen].sort((left, right) => left - right);
+}
+
+function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBacklogProposalV3 {
+  const empty: ArchitectBacklogProposalV3 = {
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
     message: fallbackMessage,
     tasks: [],
   };
@@ -330,8 +351,8 @@ function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBa
     }
 
     const rawTasks: unknown = parsed["tasks"];
-    const tasks: ArchitectBacklogTaskProposalV2[] = Array.isArray(rawTasks)
-      ? rawTasks.filter(isRecord).map((task) => {
+    const tasks: ArchitectBacklogTaskProposalV3[] = Array.isArray(rawTasks)
+      ? rawTasks.filter(isRecord).map((task, position) => {
           const commands = readPayloadCommands(task["validationCommands"]);
           return {
             title: typeof task["title"] === "string" ? task["title"] : "",
@@ -342,6 +363,7 @@ function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBa
             outOfScope: readStrings(task["outOfScope"]),
             documentReferences: readStrings(task["documentReferences"]),
             validationCommands: commands,
+            dependsOn: readBackwardPositions(task["dependsOn"], position),
           };
         })
       : [];
@@ -349,7 +371,7 @@ function readBacklogPayload(value: string, fallbackMessage: string): ArchitectBa
     return {
       // La forme rendue est toujours la forme courante : une proposition de
       // `backlog/1` est **relevee** a la lecture, jamais reecrite en base.
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
       message: typeof parsed["message"] === "string" ? parsed["message"] : fallbackMessage,
       tasks,
     };
@@ -563,7 +585,7 @@ export type FinishBacklogGenerationInput = {
   /** Phrase de refus destinee a l'utilisateur. Nettoyee et bornee ici. */
   errorDetail?: string | null;
   /** Backlog valide, lorsque l'appel a abouti. */
-  proposal?: ArchitectBacklogProposalV2 | null;
+  proposal?: ArchitectBacklogProposalV3 | null;
 };
 
 /**
@@ -822,6 +844,15 @@ export async function loadProjectBacklog(
  */
 export type BacklogTaskToCreate = Omit<CreateTaskInput, "projectId"> & {
   verificationPlan?: TaskRowInput["verificationPlan"];
+  /**
+   * Positions, dans ce meme lot, des taches que celle-ci attend.
+   *
+   * Strictement anterieures a la sienne — le contrat de `backlog/3` le garantit,
+   * et cette transaction le revalide. C'est ce qui rend un cycle structurellement
+   * impossible sans parcours de graphe : une arete ne peut aller que vers
+   * l'arriere, dans un lot dont toutes les taches naissent ensemble.
+   */
+  dependsOnPositions?: readonly number[];
 };
 
 export type ApplyBacklogResult =
@@ -935,12 +966,13 @@ export async function applyBacklogProposal(
     // classification comprise. `providerJson`, lui, n'est jamais reecrit — les
     // deux restent distincts, et c'est ce qui permet de comparer plus tard ce
     // qui avait ete propose et ce qui a ete applique.
-    const applied: ArchitectBacklogProposalV2 = {
-      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2,
+    const applied: ArchitectBacklogProposalV3 = {
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
       message: input.message,
-      tasks: input.tasks.map((task) => {
+      tasks: input.tasks.map((task, position) => {
         const plan = task.verificationPlan;
         return {
+          dependsOn: readBackwardPositions(task.dependsOnPositions ?? [], position),
           title: task.title,
           priority: task.priority,
           objective: task.objective,
@@ -1009,6 +1041,29 @@ export async function applyBacklogProposal(
           backlogItemPosition: position,
         }),
       );
+    }
+
+    // Les aretes de dependance, une fois toutes les taches creees : une position
+    // ne devient un identifiant qu'a ce moment-la.
+    //
+    // Aucun controle de cycle n'est necessaire ici, et ce n'est pas une
+    // negligence : une arete ne peut aller que vers une position **anterieure**
+    // du meme lot, et toutes ces taches naissent ensemble. Un cycle demanderait
+    // une arete vers l'avant, que ni le contrat ni cette boucle n'acceptent.
+    for (const [position, task] of input.tasks.entries()) {
+      const waiting = created[position];
+      if (waiting === undefined) {
+        continue;
+      }
+      for (const target of readBackwardPositions(task.dependsOnPositions ?? [], position)) {
+        const dependsOn = created[target];
+        if (dependsOn === undefined) {
+          throw new Error("Dependance de backlog non resolue lors de l'application.");
+        }
+        await tx.taskDependency.create({
+          data: { taskId: waiting.id, dependsOnTaskId: dependsOn.id },
+        });
+      }
     }
 
     // Le pointeur d'attente est retire : une nouvelle planification redevient

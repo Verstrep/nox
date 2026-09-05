@@ -68,6 +68,9 @@ export const PROJECT_DELETION_ORDER = [
   "run",
   "taskQueueEntry",
   "taskDependency",
+  // Le rafraichissement de verification avant les taches : il designe la tache
+  // d'amorcage qui l'a declenche, en `Restrict`.
+  "verificationRefresh",
   // La replanification avant la mise a jour a laquelle elle se lie, et avant les
   // generations : ses deux liens sont `Cascade`, mais l'ordre explicite reste la
   // seule facon de rendre la suppression lisible — et verifiable par un test.
@@ -237,6 +240,12 @@ export async function deleteProjectState(
       // Les aretes avant les taches : `dependsOn` est en `Restrict`, et c'est
       // exactement la contrainte que TASK-024 a posee volontairement.
       taskDependency: (await tx.taskDependency.deleteMany({ where: byTask })).count,
+      // Un rafraichissement de verification designe la tache d'amorcage qui l'a
+      // declenche, en `Restrict` : meme regle que la provenance de backlog, et
+      // meme consequence — il part avant les taches.
+      verificationRefresh: (
+        await tx.verificationRefresh.deleteMany({ where: { projectId } })
+      ).count,
       // L'Architecte avant les taches : une session et une generation peuvent
       // referencer la tache qu'elles ont fait creer, en `Restrict`.
       //

@@ -5932,3 +5932,162 @@ reconnaît pas n'accorde rien.
 
 **Ce qu'elle ne change pas.** Aucun comportement observable : les quatre statuts existants
 produisent exactement les mêmes résultats qu'avant.
+
+
+## TASK-033 — Autonomie du workflow, après le premier pilote
+
+### D-384 — Un backlog exprime ses dépendances, et seulement vers l'arrière
+
+**Décision.** `backlog/3` ajoute un champ `dependsOn` à chaque élément proposé : les
+**positions**, dans le même tableau, des tâches que cet élément attend. Une position ne peut
+être que strictement antérieure. `architect/6` renforce les mêmes consignes côté replanification,
+où le champ existait déjà.
+
+**Justification.** Le premier pilote réel a produit deux tâches :
+
+```text
+TASK-001  Gérer localement les déplacements et leurs hôtels
+TASK-002  Gérer les notes de frais et leur total
+```
+
+`TASK-002` étend le modèle, la persistance et la fiche de détail que `TASK-001` crée. Le backlog
+affichait pourtant « aucune dépendance » des deux côtés — non parce que le modèle avait mal jugé,
+mais parce que `backlog/2` n'avait aucun endroit où l'écrire, et interdisait explicitement d'en
+parler. L'ordre restait juste ; il n'empêchait rien. Dans un workflow réellement autonome, cette
+absence autorise un ordre d'exécution invalide.
+
+Des positions plutôt que des codes, parce qu'une tâche proposée n'a pas encore de code : NOX les
+attribue à l'application, et un code venu du fournisseur serait une donnée qu'il n'a pas le droit
+de produire. C'est la même convention que `validationCommandIndexes`.
+
+Strictement en arrière, parce que cette seule contrainte fait tout le travail : elle rend un
+cycle impossible sans parcours de graphe, interdit l'auto-référence, et force l'ordre et les
+prérequis à raconter la même histoire. Un plan où la tâche 2 attend la tâche 5 est un plan dont
+l'ordre est faux ; NOX le refuse et le nomme, plutôt que de réordonner en silence.
+
+**Ce qu'elle écarte.** Un moteur déterministe qui déduirait les dépendances des numéros, des mots
+communs dans les titres ou de l'ordre du backlog. Le code garantit le contrat et le graphe ; il ne
+prétend pas comprendre le produit avec une expression régulière — et une règle qui le prétendrait
+serait fausse exactement au moment où elle compterait.
+
+**Ce qu'elle ne change pas.** Les validations de graphe de TASK-024 et TASK-032 sont réutilisées
+telles quelles. Les propositions déjà enregistrées restent lisibles : une génération `backlog/1`
+ou `backlog/2` est relevée avec la liste vide, parce qu'elle n'a jamais exprimé de dépendance.
+
+### D-385 — Après un amorçage, NOX rafraîchit lui-même les plans de vérification
+
+**Décision.** L'acceptation de `TASK-000` déclenche un appel borné qui ne peut modifier que le
+mode de vérification des critères, leurs consignes humaines, les commandes de validation et les
+liens critère-commande des tâches futures. Une réponse valide est appliquée directement, sans
+revue.
+
+**Justification.** Avant l'amorçage, le planificateur classe nécessairement tout en `HUMAN`, et
+il a raison : deviner `npm test` sur un repository vide serait inventer une preuve. Après
+l'amorçage, les commandes existent, et chaque plan de vérification décrit un projet qui n'existe
+plus.
+
+Le pilote l'a corrigé à la main, et le résultat était excellent — `TASK-001` passait de huit
+critères humains à six automatisés et deux humains, `TASK-002` de sept humains à sept automatisés.
+La friction n'était donc pas la qualité du mécanisme : c'était qu'il fallait **savoir** que cette
+transition existait, et la déclencher soi-même.
+
+**Pourquoi une application sans revue.** Parce que le contrat ne laisse pas la place d'écrire
+autre chose. Le schéma ne porte ni titre, ni objectif, ni contexte, ni hors périmètre, ni texte de
+critère, ni ordre, ni dépendance ; les critères sont désignés par position, et leur texte n'est
+jamais renvoyé — NOX réécrit celui qu'il possède. Une proposition qui ne peut pas changer le
+produit n'a pas besoin d'être relue pour cela. Si ce contrat s'élargissait, l'application
+automatique devrait redevenir une proposition.
+
+**Pourquoi un refus total.** Un seul champ hors liste blanche condamne toute la réponse, et le
+champ fautif est **nommé**. Appliquer les tâches valides d'une réponse jugée fautive laisserait un
+plan que personne n'a relu ; ignorer un champ en silence est exactement ce qui laisserait passer
+un `title` un jour.
+
+**Ce qu'elle écarte.** Un second moteur de replanification, un écran de revue, un bouton
+`Apply`, un réessai automatique, un modèle de repli, et toute réparation silencieuse d'une
+réponse invalide.
+
+### D-386 — L'idempotence d'un rafraîchissement est une contrainte de base, doublée d'une règle
+
+**Décision.** Un index unique `(projectId, planningFingerprint)` porte la réservation, écrite
+**avant** l'appel. Et un amorçage dont le rafraîchissement a déjà abouti — `APPLIED` ou
+`NO_CHANGE` — n'en déclenche plus aucun.
+
+**Justification.** L'empreinte garantit qu'un même **état** ne se paie qu'une fois : dix
+finalisations concurrentes n'obtiennent qu'une réservation, et les neuf autres perdent la course
+à l'écriture — jamais après avoir payé.
+
+Elle ne garantit pas qu'un **amorçage** ne se paie qu'une fois, et c'est un piège précis : un
+rafraîchissement réussi change le plan qu'il vient de lire, donc l'empreinte suivante diffère. Un
+amorçage rouvert puis ré-accepté paierait alors un second appel, sur un plan que NOX venait
+lui-même de mettre à jour. La seconde règle ferme ce cas.
+
+Un échec ou un refus, eux, ne ferment rien de définitif — mais leur propre empreinte reste prise,
+et c'est elle qui empêche de repayer le même état. Reprendre plus tard reste possible : le plan
+aura changé, donc l'empreinte aussi, et c'est un geste humain.
+
+**Ce qu'elle écarte.** Un verrou en mémoire, qui ne survivrait ni à un redémarrage, ni à deux
+processus.
+
+### D-387 — Une commande de validation se demande littéralement ; elle ne se reconnaît pas plus largement
+
+**Décision.** Le prompt d'exécution demande désormais que chaque commande enregistrée soit lancée
+au moins une fois **exactement** telle qu'elle est écrite — sans tuyau, sans redirection, sans
+enveloppe, sans préfixe ni suffixe. `readBashCommand` n'a pas bougé d'une ligne.
+
+**Justification.** Le pilote a marqué `npm test` et `npm run build` « non lancées » alors que
+l'agent les avait lancées, ainsi :
+
+```text
+npm test 2>&1 | tail -60
+```
+
+Le refus était **correct**, et le corriger aurait été une faute : dans un tuyau, le code de sortie
+observable est celui de `tail`. HOTFIX-002 avait déjà tranché ce point et corrigé la phrase de la
+review. Ce qui restait à faire n'était pas de lire plus largement, c'était de **demander** plus
+précisément.
+
+Cela reste informatif dans tous les cas : le résultat de Claude Code ne prouve aucun critère
+`AUTOMATED`, quelle que soit la forme de sa ligne. Seule la validation autonome de NOX fait foi.
+
+**Ce qu'elle écarte.** Toute normalisation d'arguments, toute correspondance approchée, toute
+lecture des redirections, et toute lecture du compte rendu final du modèle.
+
+### D-388 — Le contrat d'une tâche est figé pendant son exécution, et la divergence se dit
+
+**Décision.** Les règles d'exécution interdisent explicitement à l'agent de modifier le document
+de sa propre tâche, cases des critères d'acceptation comprises. La review **constate** la
+divergence quand elle a lieu, à partir des lignes déjà enregistrées, et ne bloque rien.
+
+**Justification.** Le pilote a vu `tasks/TASK-002.md` modifié pendant l'exécution, uniquement
+pour cocher des cases `[ ]` en `[x]`. Rien de dangereux n'est arrivé, et le contrat n'avait pas
+changé.
+
+Ce n'était pourtant pas anodin. Ce document est une projection **à sens unique** du contrat que
+NOX détient : écrit par NOX, relu par NOX sous contrôle de révision, et porteur d'aucun résultat —
+ni case cochée, ni « passé », ni « échoué ». Un agent qui l'édite réécrit l'énoncé de ce qu'on lui
+demande, pendant qu'il y répond.
+
+L'invariant existe déjà côté base, et c'est pourquoi la réponse est un prompt et un constat,
+plutôt qu'un moteur de protection du système de fichiers. Construire un verrou pour une garantie
+que la base tient déjà coûterait cher et ne protégerait rien de plus.
+
+**Ce qu'elle écarte.** Une surveillance du système de fichiers, un refus de run, une comparaison
+de texte contractuel avec le fichier, ou une resynchronisation forcée pendant l'exécution.
+
+### D-389 — Une tâche terminée montre toujours sa politique de livraison
+
+**Décision.** La carte `Git delivery` d'une tâche s'affiche dès que celle-ci est terminée, y
+compris quand aucun candidat n'a pu être réservé, et dit ce que la politique du projet implique.
+
+**Justification.** Le pilote renvoyait son utilisateur dans PowerShell après chaque tâche. La
+cause n'était pas l'absence des actions de TASK-029 : `Commit validated changes`, `Commit & push`
+et `Retry push` existaient déjà, avec exactement les mêmes garde-fous que la livraison
+automatique. C'était qu'une tâche terminée **sans ligne de livraison** n'affichait aucune carte,
+donc aucun chemin vers elles — et que rien ne disait que la politique du projet était `Manual`.
+
+Une interface qui possède la bonne action et n'y mène pas équivaut à ne pas l'avoir.
+
+**Ce qu'elle ne change pas.** Aucun nouveau chemin d'écriture Git : la surface de livraison reste
+la seule, et elle appelle le moteur unique de TASK-029. Ni `git add`, ni commit, ni push libre
+n'apparaissent dans un chemin d'interface.

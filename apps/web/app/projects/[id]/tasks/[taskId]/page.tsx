@@ -15,6 +15,8 @@ import { TaskDependencies } from "@/components/TaskDependencies";
 import {
   getDatabaseClient,
   getLatestDeliveryForTask,
+  getLatestVerificationRefresh,
+  readProjectDeliveryPolicy,
   readVerificationPlan,
 } from "@nox/database";
 
@@ -26,8 +28,14 @@ import {
   deliveryRefusalLabel,
   deliveryStateLabel,
   deliveryUrl,
+  noDeliveryNotice,
 } from "@/lib/delivery-display";
 import { correctionStageDetail, correctionStageLabel } from "@/lib/correction-display";
+import {
+  verificationRefreshCounts,
+  verificationRefreshDetail,
+  verificationRefreshLabel,
+} from "@/lib/verification-refresh/display";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { documentUrl } from "@/lib/document-edit";
@@ -329,6 +337,23 @@ export default async function TaskDetailPage({
     task.status === TASK_STATUS.COMPLETED
       ? await getLatestDeliveryForTask(getDatabaseClient(), task.id)
       : null;
+  // La politique de livraison du projet, lue en base.
+  //
+  // Elle est affichee des qu'une tache est terminee, **meme sans ligne de
+  // livraison**. C'est ce que le premier pilote reel a manque : sous `MANUAL`,
+  // une livraison dont le candidat n'a pas pu etre reserve — un dossier de
+  // travail deja propre, par exemple — ne laissait aucune ligne, donc aucune
+  // carte, donc aucun chemin vers les boutons de TASK-029. L'utilisateur
+  // retournait dans un terminal faute de savoir que la surface existait.
+  const deliveryPolicy =
+    task.status === TASK_STATUS.COMPLETED
+      ? await readProjectDeliveryPolicy(getDatabaseClient(), project.id)
+      : null;
+  // Rafraichissement des plans de verification declenche par cette tache
+  // d'amorcage, s'il y en a eu un. Lecture seule : ouvrir cette page n'appelle
+  // aucun fournisseur, et ne peut pas en declencher un.
+  const refreshRow = await getLatestVerificationRefresh(getDatabaseClient(), project.id);
+  const refresh = refreshRow !== null && refreshRow.bootstrapTaskId === task.id ? refreshRow : null;
   // Une tache inscrite autorise l'execution de son contrat actuel : l'editeur
   // n'est donc pas propose tant qu'elle y figure. La Server Action refuse de
   // toute facon, et c'est elle qui fait autorite.
@@ -446,7 +471,31 @@ export default async function TaskDetailPage({
           </SectionCard>
         )}
 
-        {delivery === null ? null : (
+        {refresh === null ? null : (
+          <SectionCard
+            title="Verification refresh"
+            description="Ce que NOX a reclasse dans les taches futures une fois l'amorçage accepté."
+          >
+            <p className="text-sm text-zinc-200">{verificationRefreshLabel(refresh.status)}</p>
+            <p className="mt-1 text-sm text-zinc-400">{verificationRefreshCounts(refresh)}</p>
+            {refresh.message === null ? null : (
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-zinc-300">
+                {refresh.message}
+              </p>
+            )}
+            {verificationRefreshDetail(refresh) === null ? null : (
+              <p className="mt-3 text-xs leading-relaxed text-amber-200/80">
+                {verificationRefreshDetail(refresh)}
+              </p>
+            )}
+            <p className="mt-3 text-xs leading-relaxed text-zinc-600">
+              Seul le mode de vérification, les consignes humaines et les commandes ont pu
+              changer. Titres, objectifs, critères, ordre et dépendances sont restés intacts.
+            </p>
+          </SectionCard>
+        )}
+
+        {deliveryPolicy === null ? null : (
           <SectionCard
             title="Git delivery"
             description="Ce que NOX a écrit dans Git pour ce travail validé, ou ce qui l'en empêche."
@@ -460,19 +509,22 @@ export default async function TaskDetailPage({
             }
           >
             <p className="text-sm text-zinc-200">
-              {deliveryStateLabel(delivery.status, delivery.errorCode)}
+              {delivery === null
+                ? "Aucune livraison enregistrée pour ce travail."
+                : deliveryStateLabel(delivery.status, delivery.errorCode)}
             </p>
             <p className="mt-1 text-sm text-zinc-400">
-              {deliveryPolicyLabel(delivery.policy)}
-              {delivery.commitSha === null
-                ? ""
-                : ` · ${delivery.commitSha.slice(0, 12)}`}
+              {deliveryPolicyLabel(delivery?.policy ?? deliveryPolicy)}
+              {delivery?.commitSha == null ? "" : ` · ${delivery.commitSha.slice(0, 12)}`}
             </p>
-            {delivery.errorCode === null ? null : (
+            {delivery?.errorCode == null ? null : (
               <p className="mt-3 text-xs leading-relaxed text-amber-200/80">
                 {deliveryRefusalLabel(delivery.errorCode)}
               </p>
             )}
+            <p className="mt-3 text-xs leading-relaxed text-zinc-600">
+              {noDeliveryNotice(deliveryPolicy, delivery !== null)}
+            </p>
           </SectionCard>
         )}
 

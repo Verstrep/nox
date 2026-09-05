@@ -94,9 +94,9 @@ function prompt(overrides: Partial<BacklogPromptInput> = {}) {
 }
 
 describe("version", () => {
-  it("est backlog/2, distincte du prompt conversationnel", () => {
-    assert.equal(BACKLOG_PROMPT_VERSION, "backlog/2");
-    assert.equal(prompt().version, "backlog/2");
+  it("est backlog/3, distincte du prompt conversationnel", () => {
+    assert.equal(BACKLOG_PROMPT_VERSION, "backlog/3");
+    assert.equal(prompt().version, "backlog/3");
     assert.equal(prompt().version.startsWith("architect/"), false);
   });
 });
@@ -146,10 +146,32 @@ describe("ce que les instructions disent", () => {
     assert.ok(instructions.includes("« construire l'application » n'est pas une tache"));
   });
 
-  it("dit que l'ordre est une sequence, pas un graphe", () => {
-    assert.ok(instructions.includes("Il n'existe **aucun** champ de dependance."));
-    assert.ok(instructions.includes("depend de"));
-    assert.ok(instructions.includes("bloque par"));
+  // Ce test disait l'inverse jusqu'a TASK-033 : « il n'existe aucun champ de
+  // dependance ». Il encodait donc exactement le defaut que le premier pilote
+  // reel a revele — deux taches dont la seconde etendait le modele, la
+  // persistance et l'ecran de la premiere, et aucun lien pour le dire.
+  it("distingue l'ordre, qui n'empeche rien, de la dependance, qui empeche", () => {
+    assert.ok(instructions.includes("L'ordre est une recommandation ; une dependance est une contrainte."));
+    assert.ok(
+      instructions.includes("refuse"),
+      "les instructions disent que NOX refuse de lancer une tache qui attend",
+    );
+    assert.ok(instructions.includes("`dependsOn` porte les **positions**"));
+    assert.ok(
+      instructions.includes("strictement anterieure"),
+      "une dependance ne peut designer qu'une tache qui precede",
+    );
+  });
+
+  it("dit ce qu'une dependance represente, et ce qu'elle ne represente pas", () => {
+    assert.ok(
+      instructions.includes("suppose l'existence de quelque chose que"),
+      "un prerequis reel, pas un ordre de lecture",
+    );
+    assert.ok(
+      instructions.includes("Ne rattache pas mecaniquement chaque tache a celle qui la precede"),
+      "la chronologie ne fait pas une dependance",
+    );
   });
 
   it("annonce l'ordre recommande sans l'imposer", () => {

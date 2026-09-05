@@ -41,6 +41,7 @@
  */
 
 import { checkValidationCommand } from "./claude-commands.js";
+import { TASK_DEPENDENCY_LIMIT } from "./task-dependencies.js";
 import { createStatusGuard } from "./statuses.js";
 import { TASK_PRIORITIES, isTaskPriority, type TaskPriority } from "./tasks.js";
 import {
@@ -122,6 +123,15 @@ export const ARCHITECT_BACKLOG_LIMITS = {
   outOfScope: { max: 6, length: 300 },
   documents: { max: 6, length: 500 },
   commands: { max: 6, length: 200 },
+  /**
+   * Dependances d'un element.
+   *
+   * La meme borne que partout ailleurs dans NOX — `TASK_DEPENDENCY_LIMIT` —
+   * plutot qu'une valeur propre au backlog : ce que le planificateur propose et
+   * ce qu'un humain pose a la main finissent dans la meme table, et deux bornes
+   * pour une seule contrainte se contrediraient le jour ou l'une bougerait.
+   */
+  dependencies: { max: TASK_DEPENDENCY_LIMIT },
 } as const;
 
 /**
@@ -1252,18 +1262,272 @@ export function buildArchitectBacklogSchemaV2(): Record<string, unknown> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Version 3 : les dependances fonctionnelles entrent dans le backlog
+// ---------------------------------------------------------------------------
+
+/**
+ * Version 3 du contrat de proposition de backlog.
+ *
+ * ## Ce qu'elle ajoute, et pourquoi
+ *
+ * Un champ, `dependsOn`. Le premier pilote reel a produit deux taches dont la
+ * seconde etendait le modele, la persistance et l'ecran de la premiere — et
+ * aucun lien entre elles, parce que `backlog/2` n'avait aucun endroit ou en
+ * ecrire un. L'ordre du tableau restait juste ; il n'empechait simplement rien.
+ * Dans un workflow reellement autonome, cette absence autorise un ordre
+ * d'execution invalide.
+ *
+ * ## Pourquoi des positions, et pourquoi seulement en arriere
+ *
+ * Une tache proposee n'a pas encore de code : NOX les attribue a l'application.
+ * Le seul identifiant disponible est donc la **position** dans le tableau — la
+ * meme convention que `validationCommandIndexes`.
+ *
+ * Et une dependance ne peut designer qu'une position **strictement anterieure**.
+ * C'est la contrainte qui fait tout le travail :
+ *
+ * - elle rend un cycle structurellement impossible, sans parcours de graphe ;
+ * - elle interdit qu'une tache s'attende elle-meme ;
+ * - elle force l'ordre du tableau et les dependances a raconter la meme
+ *   histoire. Un plan ou la tache 2 attend la tache 5 est un plan dont l'ordre
+ *   est faux ; NOX le refuse et le dit, plutot que de reordonner en silence.
+ *
+ * ## Ce qu'elle ne fait pas
+ *
+ * Elle ne devine rien. NOX ne deduit aucune dependance d'un numero, d'un mot
+ * commun dans deux titres ou de l'ordre du backlog : la semantique appartient au
+ * fournisseur, et le code garantit le contrat et le graphe. Une regle qui
+ * pretendrait comprendre le produit avec une expression reguliere serait fausse
+ * exactement au moment ou elle compterait.
+ */
+export const ARCHITECT_BACKLOG_SCHEMA_VERSION_3 = 3;
+
+/** Nom du format v3 transmis au fournisseur ; doit rester stable. */
+export const ARCHITECT_BACKLOG_SCHEMA_NAME_3 = "nox_v1_backlog_v3";
+
+/** Un element de backlog en version 3. */
+export type ArchitectBacklogTaskProposalV3 = ArchitectBacklogTaskProposalV2 & {
+  /** Positions, strictement anterieures, des elements que celui-ci attend. */
+  dependsOn: number[];
+};
+
+/**
+ * Une proposition de backlog en version 3.
+ *
+ * C'est la **forme courante** de NOX : tout ce qui lit un backlog, quelle que
+ * soit la version dans laquelle il a ete ecrit, le recoit sous cette forme.
+ */
+export type ArchitectBacklogProposalV3 = {
+  schemaVersion: typeof ARCHITECT_BACKLOG_SCHEMA_VERSION_3;
+  message: string;
+  tasks: ArchitectBacklogTaskProposalV3[];
+};
+
+export type ArchitectBacklogResultV3 =
+  | { ok: true; proposal: ArchitectBacklogProposalV3 }
+  | { ok: false; refusal: ArchitectBacklogRefusal };
+
+/**
+ * Releve une proposition de version 2 dans la forme courante.
+ *
+ * Le defaut sur est la liste vide : une proposition ecrite avant TASK-033 n'a
+ * jamais exprime de dependance, et lui en inventer une apres coup reviendrait a
+ * lui faire dire ce que son auteur n'avait pas dit. Rien n'est reecrit en base.
+ */
+export function upgradeBacklogProposalV2(
+  proposal: ArchitectBacklogProposalV2,
+): ArchitectBacklogProposalV3 {
+  return {
+    schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
+    message: proposal.message,
+    tasks: proposal.tasks.map((task) => ({ ...task, dependsOn: [] })),
+  };
+}
+
+/**
+ * Lit les dependances d'un element.
+ *
+ * Refuse plutot que de corriger : une reference vers l'avant n'est pas une
+ * maladresse d'ecriture, c'est un plan dont l'ordre contredit les prerequis. La
+ * reordonner nous-memes ferait passer pour valide un decoupage que personne
+ * n'aurait relu.
+ */
+export function readBacklogDependsOn(
+  value: unknown,
+  position: number,
+  label: string,
+  at: (field: string) => string,
+): { ok: true; dependsOn: number[] } | { ok: false; refusal: ArchitectBacklogRefusal } {
+  const field = at("dependsOn");
+  if (value === undefined || value === null) {
+    return { ok: true, dependsOn: [] };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      refusal: { field, message: `Les dependances de ${label} ne sont pas lisibles.` },
+    };
+  }
+  if (value.length > ARCHITECT_BACKLOG_LIMITS.dependencies.max) {
+    return {
+      ok: false,
+      refusal: {
+        field,
+        message: `${label} attend plus de ${String(ARCHITECT_BACKLOG_LIMITS.dependencies.max)} autres taches.`,
+      },
+    };
+  }
+
+  const seen = new Set<number>();
+  for (const raw of value) {
+    if (typeof raw !== "number" || !Number.isInteger(raw)) {
+      return {
+        ok: false,
+        refusal: { field, message: `Les dependances de ${label} ne sont pas des positions.` },
+      };
+    }
+    if (raw === position) {
+      return { ok: false, refusal: { field, message: `${label} s'attend elle-meme.` } };
+    }
+    if (raw < 0 || raw >= position) {
+      return {
+        ok: false,
+        refusal: {
+          field,
+          message: `${label} attend la tache ${String(raw + 1)}, qui ne la precede pas : l'ordre du backlog et ses dependances se contredisent.`,
+        },
+      };
+    }
+    seen.add(raw);
+  }
+
+  return { ok: true, dependsOn: [...seen].sort((left, right) => left - right) };
+}
+
+/**
+ * Valide une proposition de backlog en version 3.
+ *
+ * Meme discipline que les versions precedentes : aucune confiance au Structured
+ * Output, le premier probleme arrete la lecture, et **toute** la proposition est
+ * refusee. Un backlog est une unite.
+ */
+export function readArchitectBacklogProposalV3(
+  value: unknown,
+  availableDocuments: readonly string[],
+): ArchitectBacklogResultV3 {
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      refusal: {
+        field: "backlog",
+        message: "La reponse de planification n'est pas une structure lisible.",
+      },
+    };
+  }
+  if (value["schemaVersion"] !== ARCHITECT_BACKLOG_SCHEMA_VERSION_3) {
+    return {
+      ok: false,
+      refusal: {
+        field: "schemaVersion",
+        message: "La reponse de planification ne suit pas la version de contrat attendue.",
+      },
+    };
+  }
+
+  // Le corps est exactement celui de la version 2 : meme contrat de tache, memes
+  // bornes, memes gardes. Une seconde implementation presque identique aurait
+  // diverge au premier ajout de champ.
+  const base = readArchitectBacklogProposalV2(
+    { ...value, schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_2 },
+    availableDocuments,
+  );
+  if (!base.ok) {
+    return base;
+  }
+
+  const rawTasks: unknown = value["tasks"];
+  const tasks: ArchitectBacklogTaskProposalV3[] = [];
+  for (const [position, task] of base.proposal.tasks.entries()) {
+    const raw: unknown = Array.isArray(rawTasks) ? rawTasks[position] : undefined;
+    const read = readBacklogDependsOn(
+      isRecord(raw) ? raw["dependsOn"] : undefined,
+      position,
+      `Tache ${String(position + 1)}`,
+      (field) => `tasks.${String(position)}.${field}`,
+    );
+    if (!read.ok) {
+      return { ok: false, refusal: read.refusal };
+    }
+    tasks.push({ ...task, dependsOn: read.dependsOn });
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      schemaVersion: ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
+      message: base.proposal.message,
+      tasks,
+    },
+  };
+}
+
+/**
+ * Schema JSON strict de la version 3.
+ *
+ * Comme en versions 1 et 2, **aucune borne de taille n'y figure** : le
+ * sous-ensemble de JSON Schema accepte en mode strict ignore `maxItems`,
+ * `minItems`, `maxLength` et `pattern`, et les declarer ferait echouer la
+ * requete entiere. Les bornes vivent dans le prompt, qui les annonce, et dans
+ * `readArchitectBacklogProposalV3`, qui les fait respecter.
+ *
+ * Il est **derive** de celui de la version 2 : un second schema recopie aurait
+ * diverge au premier ajout de champ, et celui qui aurait tort serait celui qui
+ * laisse passer.
+ */
+export function buildArchitectBacklogSchemaV3(): Record<string, unknown> {
+  const base = buildArchitectBacklogSchemaV2();
+  const properties = base["properties"] as Record<string, unknown>;
+  const tasks = properties["tasks"] as Record<string, unknown>;
+  const item = tasks["items"] as Record<string, unknown>;
+  const fields = item["properties"] as Record<string, unknown>;
+
+  const taskFields: Record<string, unknown> = {
+    ...fields,
+    dependsOn: {
+      type: "array",
+      items: { type: "integer" },
+      description:
+        "Positions, dans ce meme tableau, des taches que celle-ci attend reellement. Strictement anterieures a la sienne. Vide si cette tache n'a aucun prerequis dans ce backlog.",
+    },
+  };
+
+  return {
+    ...base,
+    properties: {
+      ...properties,
+      schemaVersion: { type: "integer", enum: [ARCHITECT_BACKLOG_SCHEMA_VERSION_3] },
+      tasks: {
+        ...tasks,
+        items: { ...item, required: Object.keys(taskFields), properties: taskFields },
+      },
+    },
+  };
+}
+
 /**
  * Relit une proposition enregistree, quelle que soit sa version.
  *
- * La version portee par le document decide : une proposition de version 1 est
- * relevee avec les defauts surs, une proposition de version 2 est lue telle
+ * La version portee par le document decide : une proposition de version 1 ou 2
+ * est relevee avec les defauts surs — chaque critere humain, chaque commande
+ * `AGENT_ONLY`, aucune dependance —, une proposition de version 3 est lue telle
  * quelle. Aucun document n'est reecrit, et une version inconnue n'est pas
- * devinee — elle est refusee.
+ * devinee : elle est refusee.
  */
 export function readAnyArchitectBacklogProposal(
   value: unknown,
   availableDocuments: readonly string[],
-): ArchitectBacklogResultV2 {
+): ArchitectBacklogResultV3 {
   if (!isRecord(value)) {
     return {
       ok: false,
@@ -1274,11 +1538,18 @@ export function readAnyArchitectBacklogProposal(
   if (value["schemaVersion"] === ARCHITECT_BACKLOG_SCHEMA_VERSION) {
     const read = readArchitectBacklogProposal(value, availableDocuments);
     return read.ok
-      ? { ok: true, proposal: upgradeBacklogProposal(read.proposal) }
+      ? { ok: true, proposal: upgradeBacklogProposalV2(upgradeBacklogProposal(read.proposal)) }
       : { ok: false, refusal: read.refusal };
   }
 
-  return readArchitectBacklogProposalV2(value, availableDocuments);
+  if (value["schemaVersion"] === ARCHITECT_BACKLOG_SCHEMA_VERSION_2) {
+    const read = readArchitectBacklogProposalV2(value, availableDocuments);
+    return read.ok
+      ? { ok: true, proposal: upgradeBacklogProposalV2(read.proposal) }
+      : { ok: false, refusal: read.refusal };
+  }
+
+  return readArchitectBacklogProposalV3(value, availableDocuments);
 }
 
 // --- Inventaire des taches existantes ----------------------------------------

@@ -96,6 +96,21 @@ export const ARCHITECT_PROMPT_VERSION_V4 = "architect/4";
 export const ARCHITECT_PROMPT_VERSION_V5 = "architect/5";
 
 /**
+ * Version du prompt d'une conversation projet, depuis TASK-033.
+ *
+ * `architect/6` : les consignes de dependance disent ce qu'une dependance
+ * **est** — un prerequis fonctionnel reel — la ou `architect/5` n'en decrivait
+ * que la syntaxe. Le premier pilote reel avait produit deux taches dont la
+ * seconde etendait le modele, la persistance et l'ecran de la premiere, et
+ * aucune arete entre elles : le champ existait, la semantique n'etait ecrite
+ * nulle part.
+ *
+ * Rien d'autre ne change, et les generations `architect/5` deja enregistrees
+ * gardent leur version.
+ */
+export const ARCHITECT_PROMPT_VERSION_V6 = "architect/6";
+
+/**
  * Version de prompt correspondant a ce que ce tour contient reellement.
  *
  * Le role de la session decide d'abord ; la presence d'un plan de travail
@@ -114,7 +129,7 @@ export function architectPromptVersion(
   if (kind !== ARCHITECT_SESSION_KIND.PROJECT) {
     return ARCHITECT_PROMPT_VERSION;
   }
-  return replanAvailable ? ARCHITECT_PROMPT_VERSION_V5 : ARCHITECT_PROMPT_VERSION_V4;
+  return replanAvailable ? ARCHITECT_PROMPT_VERSION_V6 : ARCHITECT_PROMPT_VERSION_V4;
 }
 
 /** Delimiteurs du contexte projet. */
@@ -653,6 +668,35 @@ function renderReplanInstructions(): string[] {
     "propre reponse. Une tache future peut dependre d'une tache terminee : c'est",
     "legitime, et cela documente pourquoi elle existe.",
     "",
+    "**Une dependance est un prerequis reel, pas un ordre de lecture.** Une tache",
+    "B attend une tache A des que B suppose l'existence de quelque chose que A a",
+    "la charge de creer : un modele de donnees, une structure persistee, un",
+    "fichier, un ecran, une route, une capacite d'infrastructure, un comportement.",
+    "Si B etait lancee sans A, un implementeur devrait creer lui-meme ce que A",
+    "devait livrer — ou echouerait faute de le trouver.",
+    "",
+    "C'est la question a poser pour chaque tache, une par une : **ce que cette",
+    "tache etend, lit, affiche ou complete, qui le cree ?** Si la reponse est une",
+    "autre tache du plan, cette tache l'attend, et le lien doit apparaitre.",
+    "",
+    "Le cas typique est celui d'une seconde capacite greffee sur la premiere :",
+    "une tache cree une entite, sa persistance et sa fiche de detail ; une autre",
+    "ajoute a cette meme entite une notion supplementaire, dans cette meme",
+    "persistance et cette meme fiche. La seconde attend la premiere, meme si",
+    "l'ordre du tableau le suggerait deja.",
+    "",
+    "**L'ordre ne remplace pas la dependance.** L'ordre du tableau est une",
+    "recommandation de sequencement, que NOX ne fait respecter par rien. Une",
+    "dependance, elle, empeche reellement un lancement premature. Un plan dont",
+    "l'ordre est correct et les dependances vides autorise l'execution des taches",
+    "dans n'importe quel ordre.",
+    "",
+    "**Et la dependance ne remplace pas l'ordre non plus.** Ne rattache pas",
+    "mecaniquement chaque tache a celle qui la precede : une tache qui pourrait",
+    "reellement etre implementee sans la precedente n'attend rien. Deux taches",
+    "consecutives qui touchent des zones independantes du produit restent",
+    "independantes, et une chaine ou tout attend tout n'apprend rien a personne.",
+    "",
     "Ne fais jamais attendre une tache que tu supprimes, et ne cree jamais de",
     "cycle.",
     "",
@@ -710,7 +754,7 @@ function renderLockedTask(task: ArchitectPromptLockedTask): string {
   return lines.join("\n");
 }
 
-function renderEditableTask(task: ArchitectPromptEditableTask): string {
+export function renderPromptEditableTask(task: ArchitectPromptEditableTask): string {
   const lines = [
     `### ${task.code} — ${neutralizeArchitectMarkers(task.title)}`,
     "",
@@ -1023,7 +1067,7 @@ export function renderArchitectPrompt(input: ArchitectPromptInput): ArchitectPro
           "",
           editable.length === 0
             ? "Aucune tache future. Le plan de travail est vide."
-            : editable.map(renderEditableTask).join("\n\n"),
+            : editable.map(renderPromptEditableTask).join("\n\n"),
         ].join("\n"),
       ),
     );
