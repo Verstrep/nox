@@ -67,9 +67,32 @@ export type ArchitectProviderSuccess = {
   usage: ArchitectUsage;
 };
 
+/**
+ * Ce que le fournisseur sait dire d'un echec, sans rien reveler.
+ *
+ * Deux chaines produites par **NOX** : le marqueur de l'etape qui a echoue, et
+ * une phrase qui la decrit. Ni le texte recu, ni les en-tetes, ni la trace n'y
+ * entrent — le type n'a aucun champ ou les mettre, ce qui est une garantie plus
+ * solide qu'un filtre.
+ */
+export type ArchitectProviderDiagnostic = {
+  field: string;
+  message: string;
+};
+
 export type ArchitectProviderResult =
   | { ok: true; value: ArchitectProviderSuccess }
-  | { ok: false; code: ArchitectErrorCode };
+  | {
+      ok: false;
+      code: ArchitectErrorCode;
+      /**
+       * Present quand une reponse a ete recue et refusee ici meme.
+       *
+       * Absent pour une panne de transport — delai, quota, cle refusee : il n'y
+       * a alors aucune reponse a diagnostiquer, et `code` dit deja tout.
+       */
+      diagnostic?: ArchitectProviderDiagnostic;
+    };
 
 export interface ArchitectProvider {
   /** Un tour de conversation, dont peut sortir une proposition de tache. */

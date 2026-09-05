@@ -18,6 +18,8 @@ import {
   ARCHITECT_PROMPT_VERSION_V4,
   ARCHITECT_PROMPT_VERSION_V5,
   ARCHITECT_PROMPT_VERSION_V6,
+  ARCHITECT_PROMPT_VERSION_V7,
+  ARCHITECT_PROMPT_VERSION_V8,
   ARCHITECT_SESSION_KIND,
   ARCHITECT_TURN_SCHEMA_VERSION,
   ARCHITECT_TURN_SCHEMA_VERSION_V3,
@@ -109,24 +111,35 @@ describe("version du contrat", () => {
   });
 
   it("etiquette le prompt de la version dont il porte les regles", () => {
-    // Un projet sans plan transmis ne recoit pas les consignes de
-    // replanification : il parle donc encore `architect/4`.
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.TASK_DESIGN_LEGACY),
       ARCHITECT_PROMPT_VERSION,
     );
+    // `architect/7` remplace `architect/4`, et `architect/8` remplace
+    // `architect/6`, depuis HOTFIX-003 : les deux jeux d'instructions ont recu
+    // les bornes des listes de mise a jour du projet. Ils changent ensemble
+    // parce que le texte ajoute est le meme dans les deux — mais ils gardent
+    // deux etiquettes, parce qu'un projet sans backlog applique ne recoit
+    // toujours pas les consignes de replanification.
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, false),
-      ARCHITECT_PROMPT_VERSION_V4,
+      ARCHITECT_PROMPT_VERSION_V7,
     );
-    // `architect/6` depuis TASK-033 : les consignes de dependance disent ce
-    // qu'une dependance **est**, la ou `architect/5` n'en decrivait que la
-    // syntaxe. Les generations deja enregistrees gardent leur version.
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, true),
-      ARCHITECT_PROMPT_VERSION_V6,
+      ARCHITECT_PROMPT_VERSION_V8,
     );
-    assert.notEqual(ARCHITECT_PROMPT_VERSION_V6, ARCHITECT_PROMPT_VERSION_V5);
+    // Aucune etiquette n'est reutilisee : les generations deja enregistrees se
+    // relisent avec les regles qu'elles ont reellement recues.
+    const distinctes = new Set([
+      ARCHITECT_PROMPT_VERSION,
+      ARCHITECT_PROMPT_VERSION_V4,
+      ARCHITECT_PROMPT_VERSION_V5,
+      ARCHITECT_PROMPT_VERSION_V6,
+      ARCHITECT_PROMPT_VERSION_V7,
+      ARCHITECT_PROMPT_VERSION_V8,
+    ]);
+    assert.equal(distinctes.size, 6);
   });
 });
 

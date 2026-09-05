@@ -17,11 +17,13 @@
 
 import {
   ARCHITECT_CONVERSATION_VERSION,
+  ARCHITECT_DIAGNOSTIC_LIMITS,
   ARCHITECT_GENERATION_STATUS,
   ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SESSION_KIND,
   ARCHITECT_SESSION_STATUS,
   architectSessionGenerationLimit,
+  architectTurnFailureCategory,
   formatTaskCode,
   isArchitectErrorCode,
   isArchitectGenerationStatus,
@@ -29,6 +31,7 @@ import {
   isArchitectSessionKind,
   isArchitectSessionStatus,
   isArchitectTurnState,
+  sanitizeArchitectDiagnosticText,
   type ArchitectContextManifest,
   type ArchitectErrorCode,
   REPLAN_PROPOSAL_STATUS,
@@ -39,6 +42,7 @@ import {
   type ArchitectSessionKind,
   type ArchitectSessionStatus,
   type ArchitectTaskProposal,
+  type ArchitectTurnDiagnostic,
   type ArchitectTurnState,
   type ArchitectUsage,
 } from "@nox/shared";
@@ -96,6 +100,14 @@ export type ArchitectGenerationView = {
   providerResponseId: string | null;
   usage: ArchitectUsage;
   errorCode: ArchitectErrorCode | null;
+  /**
+   * Ce que NOX a refuse, et pourquoi.
+   *
+   * `null` sur les deux champs pour une panne du fournisseur — il n'y a alors
+   * aucun champ fautif — et pour toute generation anterieure a HOTFIX-003.
+   * « Cause non enregistree » est un etat, pas une occasion d'en inventer une.
+   */
+  diagnostic: ArchitectTurnDiagnostic | null;
   /** Tache creee depuis la proposition de ce tour, une fois seulement. */
   appliedTaskId: string | null;
   createdAt: string;
@@ -160,6 +172,8 @@ type GenerationRow = {
   totalTokens: number | null;
   cachedInputTokens: number | null;
   errorCode: string | null;
+  errorField: string | null;
+  errorDetail: string | null;
   appliedTaskId: string | null;
   createdAt: Date;
 };
@@ -243,6 +257,17 @@ function toGeneration(row: GenerationRow): ArchitectGenerationView {
       cachedInputTokens: row.cachedInputTokens,
     },
     errorCode,
+    // Le diagnostic n'existe que pour un echec : le composer pour une
+    // generation reussie inventerait une categorie de panne sur un tour qui a
+    // abouti.
+    diagnostic:
+      row.status === ARCHITECT_GENERATION_STATUS.FAILED
+        ? {
+            category: architectTurnFailureCategory(errorCode, row.errorField),
+            field: row.errorField,
+            message: row.errorDetail,
+          }
+        : null,
     appliedTaskId: row.appliedTaskId,
     createdAt: row.createdAt.toISOString(),
   };
@@ -801,6 +826,15 @@ export type FinishGenerationInput = {
   usage?: ArchitectUsage;
   errorCode?: ArchitectErrorCode | null;
   /**
+   * Champ refuse et phrase de refus, tels que le validateur de NOX les nomme.
+   *
+   * Nettoyes et bornes a l'ecriture, jamais a la lecture : ce qui est en base
+   * est deja ce qui s'affiche, et une seconde normalisation a l'affichage
+   * finirait par diverger de celle-ci.
+   */
+  errorField?: string | null;
+  errorDetail?: string | null;
+  /**
    * Messages a figer dans la conversation, dans l'ordre.
    *
    * Fournis, ils sont ecrits et le brouillon est efface — dans la **meme**
@@ -891,6 +925,17 @@ export async function finishArchitectGeneration(
         totalTokens: input.usage?.totalTokens ?? null,
         cachedInputTokens: input.usage?.cachedInputTokens ?? null,
         errorCode: input.errorCode ?? null,
+        errorField:
+          input.errorField == null
+            ? null
+            : sanitizeArchitectDiagnosticText(input.errorField, ARCHITECT_DIAGNOSTIC_LIMITS.field),
+        errorDetail:
+          input.errorDetail == null
+            ? null
+            : sanitizeArchitectDiagnosticText(
+                input.errorDetail,
+                ARCHITECT_DIAGNOSTIC_LIMITS.message,
+              ),
       },
     });
     if (claimed.count !== 1) {

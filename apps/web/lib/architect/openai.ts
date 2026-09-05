@@ -44,7 +44,12 @@ import OpenAI, {
   RateLimitError,
 } from "openai";
 
-import { ARCHITECT_ERROR, EMPTY_ARCHITECT_USAGE, type ArchitectUsage } from "@nox/shared";
+import {
+  ARCHITECT_DIAGNOSTIC_FIELD,
+  ARCHITECT_ERROR,
+  EMPTY_ARCHITECT_USAGE,
+  type ArchitectUsage,
+} from "@nox/shared";
 
 import { architectReasoningEffort } from "./config.ts";
 import type {
@@ -59,7 +64,38 @@ type ResponseLike = {
   output_text?: unknown;
   output?: unknown;
   usage?: unknown;
+  /**
+   * Etat rapporte par le fournisseur : `completed`, `incomplete`, `failed`.
+   *
+   * Lu depuis HOTFIX-003. Sans lui, une reponse que le fournisseur declarait
+   * lui-meme incomplete arrivait ici comme un texte vide, et NOX la classait
+   * « format invalide » — en invitant a relancer une generation dont il ne
+   * savait pas dire ce qui avait manque.
+   */
+  status?: unknown;
+  /** Raison de l'incompletude, lorsque le fournisseur en donne une. */
+  incomplete_details?: unknown;
 };
+
+/**
+ * Le fournisseur declare-t-il lui-meme sa reponse incomplete ?
+ *
+ * Une seule question, et elle se pose **avant** de regarder le texte : une
+ * reponse coupee peut tres bien porter un debut de JSON parfaitement lisible
+ * jusqu'a sa troncature, et l'analyser produirait alors soit une erreur de
+ * syntaxe, soit — pire — un objet partiel accepte par hasard.
+ */
+function incompleteReason(response: ResponseLike): string | null {
+  if (response.status !== "incomplete") {
+    return null;
+  }
+  const details: unknown = response.incomplete_details;
+  const reason: unknown = isRecord(details) ? details["reason"] : null;
+  // Le motif est recopie seulement s'il ressemble a un identifiant du contrat
+  // du fournisseur : court, sans espace, sans ponctuation libre. NOX ne
+  // recopie pas une chaine arbitraire venue du reseau dans un diagnostic.
+  return typeof reason === "string" && /^[a-z][a-z0-9_]{0,39}$/u.test(reason) ? reason : "unknown";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -231,9 +267,34 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
       return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_REFUSED };
     }
 
+    // L'incompletude se lit **avant** le texte. Une reponse coupee peut porter
+    // un debut de JSON lisible jusqu'a sa troncature : l'analyser produirait
+    // une erreur de syntaxe imputee au contrat, alors que le fournisseur vient
+    // de dire lui-meme qu'il n'avait pas fini.
+    const incomplete = incompleteReason(response);
+    if (incomplete !== null) {
+      return {
+        ok: false,
+        code: ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE,
+        diagnostic: {
+          field: ARCHITECT_DIAGNOSTIC_FIELD.INCOMPLETE,
+          message: `Le fournisseur a interrompu sa reponse avant la fin (motif : ${incomplete}).`,
+        },
+      };
+    }
+
     const text = typeof response.output_text === "string" ? response.output_text : "";
     if (text.trim() === "") {
-      return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
+      // Reponse vide sans que le fournisseur declare une incompletude. Rare, et
+      // distinct : il n'y a rien a analyser, donc rien a imputer au contrat.
+      return {
+        ok: false,
+        code: ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE,
+        diagnostic: {
+          field: ARCHITECT_DIAGNOSTIC_FIELD.INCOMPLETE,
+          message: "Le fournisseur a rendu une reponse vide.",
+        },
+      };
     }
 
     let raw: unknown;
@@ -243,7 +304,17 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
       // Le mode strict rend ce cas improbable ; « improbable » n'est pas
       // « impossible », et un analyseur qui suppose le contraire finit par
       // lever une exception dans une Server Action.
-      return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
+      //
+      // Le texte recu n'est **pas** joint au diagnostic : il porterait du
+      // contenu de projet, et savoir que l'analyse a echoue suffit a orienter.
+      return {
+        ok: false,
+        code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+        diagnostic: {
+          field: ARCHITECT_DIAGNOSTIC_FIELD.JSON,
+          message: "Le texte rendu par le fournisseur n'est pas du JSON lisible.",
+        },
+      };
     }
 
     return {

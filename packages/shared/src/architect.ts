@@ -765,7 +765,15 @@ export function readArchitectTurn(
     if (isRecord(rawUpdate)) {
       const readUpdate = readArchitectProjectUpdate(rawUpdate);
       if (!readUpdate.ok) {
-        return refuse(readUpdate.refusal.field, readUpdate.refusal.message);
+        // Le chemin est **prefixe** avant de remonter. Le lecteur de mise a
+        // jour nomme ses champs sans contexte — `reason`, `goal`, `summary` —
+        // et un diagnostic enregistre qui dirait seulement `goal` ne permettrait
+        // pas de savoir de quelle partie de la reponse il parle. Un `summary`
+        // nu se confondrait meme avec un autre champ du tour.
+        const field = readUpdate.refusal.field.startsWith("projectUpdate")
+          ? readUpdate.refusal.field
+          : `projectUpdate.${readUpdate.refusal.field}`;
+        return refuse(field, readUpdate.refusal.message);
       }
       projectUpdate = readUpdate.proposal;
     }
@@ -1120,6 +1128,24 @@ export const ARCHITECT_ERROR = {
   ARCHITECT_REFUSED: "ARCHITECT_REFUSED",
   /** Reponse recue, mais inexploitable apres validation NOX. */
   ARCHITECT_OUTPUT_INVALID: "ARCHITECT_OUTPUT_INVALID",
+  /**
+   * Le fournisseur a rendu une reponse vide ou coupee avant la fin.
+   *
+   * Distinct de `ARCHITECT_OUTPUT_INVALID` : la reponse n'est pas malformee,
+   * elle est **incomplete**, et le fournisseur le dit lui-meme. Les confondre
+   * envoyait chercher une erreur de contrat la ou il fallait raccourcir la
+   * demande ou relancer. Le second pilote reel a paye cette confusion.
+   */
+  ARCHITECT_RESPONSE_INCOMPLETE: "ARCHITECT_RESPONSE_INCOMPLETE",
+  /**
+   * La mise a jour de projet proposee depasse le budget structure.
+   *
+   * Ce n'est pas une violation de contrat : la reponse etait bien formee, et
+   * NOX refuse de stocker un brief et un plan qui, cumules, depassent seize
+   * Kio. Relancer ne change rien — c'est deterministe, et c'est la demande
+   * qu'il faut raccourcir.
+   */
+  ARCHITECT_UPDATE_TOO_LARGE: "ARCHITECT_UPDATE_TOO_LARGE",
   /** Toute autre panne du fournisseur. */
   ARCHITECT_PROVIDER_ERROR: "ARCHITECT_PROVIDER_ERROR",
   /** Le contexte prepare depasse les bornes de NOX. */

@@ -25,6 +25,7 @@ import { architectOpeningMessage } from "@/lib/architect/composer";
 import { loadArchitectConfig } from "@/lib/architect/config";
 import { architectSessionUrl } from "@/lib/architect/display";
 import {
+  ARCHITECT_OPERATION,
   describeArchitectError,
   describeArchitectFailure,
   describeArchitectTextRefusal,
@@ -235,7 +236,14 @@ export async function sendTurnAction(
     if (outcome.ok) {
       return { error: null, message: "" };
     }
-    return { error: describeArchitectFailure(outcome, ARCHITECT_LIMITS.request), message: "" };
+    return {
+      error: describeArchitectFailure(
+        outcome,
+        ARCHITECT_LIMITS.request,
+        ARCHITECT_OPERATION.CONVERSATION,
+      ),
+      message: "",
+    };
   } catch (error) {
     console.error("[nox] Echec d'un tour Architecte :", error);
     return { error: UNEXPECTED_ERROR_MESSAGE, message: "" };
@@ -311,7 +319,11 @@ export async function sendMessageAction(
     // Le texte revient toujours : refuser un envoi ne justifie pas de faire
     // perdre a l'utilisateur ce qu'il vient d'ecrire.
     return {
-      error: describeArchitectFailure(outcome, ARCHITECT_LIMITS.request),
+      error: describeArchitectFailure(
+        outcome,
+        ARCHITECT_LIMITS.request,
+        ARCHITECT_OPERATION.CONVERSATION,
+      ),
       message: submitted,
     };
   } catch (error) {

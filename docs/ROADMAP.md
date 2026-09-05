@@ -325,12 +325,17 @@ seconde ce qu'on peut en voir.
 une `TASK-035` : c'est un **second vrai pilote**, sur un autre projet et une autre pile, dont le
 seul livrable est le relevé des frictions réellement rencontrées.
 
+Ce second pilote a commencé, sur TicketPulse, et a produit `HOTFIX-003`. Il confirme la méthode :
+le défaut trouvé n'était pas une capacité manquante, mais une information que NOX possédait et ne
+disait pas.
+
 | Correctif | Ce que le pilote a montré | Ce qui a changé |
 | --- | --- | --- |
 | `HOTFIX-001` | TripKit décidait son architecture sur `gpt-5-mini`, parce que `NOX_ARCHITECT_MODEL` était obligatoire et sa valeur recopiée d'un exemple. Et `BACKLOG-001` a échoué en n'affichant que « format attendu », alors que NOX connaissait le champ fautif. | Un modèle d'architecture par défaut, assumé et nommé à un seul endroit ; le diagnostic de refus d'un backlog persisté et affiché. Voir [D-378](DECISIONS.md) et [D-379](DECISIONS.md). |
 | `HOTFIX-002` | La validation autonome de `TASK-001` ne démarrait pas sous Windows — `npm` y est un `.cmd`, et trois défauts distincts s'additionnaient. Et la review affirmait que Claude Code n'avait jamais lancé des commandes qu'il avait bel et bien lancées, dans un enchaînement que NOX refuse de lire. | Une stratégie de lancement dépendante de la plateforme, écrite à un seul endroit ; un diagnostic d'infrastructure qui nomme sa cause ; une review qui dit ce que NOX a observé plutôt que ce que l'agent aurait fait. Voir [D-380](DECISIONS.md) à [D-383](DECISIONS.md). |
 | `TASK-033` | Quatre gestes humains restaient nécessaires alors que rien ne les exigeait : poser les dépendances à la main, savoir qu'un replan de vérification était possible après l'amorçage, et retourner dans un terminal pour livrer. | Les dépendances entrent dans `backlog/3` et `architect/6` ; un rafraîchissement borné des plans de vérification suit l'amorçage ; la commande de validation se demande littéralement ; la livraison Git devient visible depuis toute tâche terminée. Voir [D-384](DECISIONS.md) à [D-389](DECISIONS.md). |
 | `TASK-034` | Il fallait lire chaque pastille pour savoir où en était un projet ; `BACKLOG-002` a été généré par un modèle que son auteur croyait avoir remplacé, invisible avant l'appel ; comprendre un `VALIDATION_SPAWN_FAILED` a demandé de reproduire `spawn("npm")` à la main, alors que NOX avait déjà le diagnostic ; et l'autonomie obtenue restait éparpillée dans neuf tables. | Un langage visuel où terminé, bloqué et échoué se reconnaissent sans être lus ; le modèle du prochain appel affiché avec sa provenance ; Inspect Run devenu la surface qui dit ce que NOX a observé ; des compteurs d'activité par projet — des faits, jamais un score. Aucune migration. Voir [D-390](DECISIONS.md) à [D-395](DECISIONS.md). |
+| `HOTFIX-003` | Pendant le **second** pilote, deux tours d'Architecte ont échoué de suite sur « la réponse ne respecte pas le format attendu ; aucune tâche n'a été créée », alors qu'aucune tâche n'était demandée. Quatre causes de code produisaient ce message, et rien d'enregistré ne permettait de les distinguer : la seule façon d'en apprendre plus était de payer un troisième appel. | Un diagnostic sûr persisté par tour — catégorie, champ, phrase — comme HOTFIX-001 l'avait fait pour la planification ; un dépassement de budget classé à part, avec la mention que relancer n'y changera rien ; une réponse interrompue distinguée d'une réponse malformée ; une copie d'échec qui parle de l'opération réellement en cours. Voir [D-396](DECISIONS.md) à [D-401](DECISIONS.md). |
 
 ---
 

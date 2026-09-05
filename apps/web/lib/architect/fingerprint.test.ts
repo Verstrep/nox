@@ -25,6 +25,7 @@ import type { ArchitectContextBundle } from "./context.ts";
 import {
   architectContextFingerprint,
   architectTaskRevision,
+  architectTurnFingerprint,
   projectMemoryRevision,
 } from "./fingerprint.ts";
 
@@ -317,5 +318,108 @@ describe("architectContextFingerprint — memoire", () => {
       architectContextFingerprint(bundle({ projectMemory: [a, b] })),
       architectContextFingerprint(bundle({ projectMemory: [b, a] })),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOTFIX-003 — ce que l'empreinte affichee designe
+// ---------------------------------------------------------------------------
+
+/**
+ * Deux empreintes, deux roles, et la confusion que le pilote a failli creer.
+ *
+ * ## Ce qui a ete observe
+ *
+ * L'historique des tours de TicketPulse affichait `contexte 194b2de3c931` sur
+ * six tours consecutifs, alors que chaque message etait different. La question
+ * posee etait legitime : NOX envoyait-il un contexte perime ?
+ *
+ * ## La reponse
+ *
+ * Non. L'empreinte affichee est celle du **contexte projet** : brief, plan,
+ * documents, memoire, taches recentes. Elle ne couvre volontairement pas la
+ * conversation — sans quoi chaque message ferait dire « le projet a change ».
+ * Sa stabilite entre deux messages est donc exactement ce qu'on attend d'elle,
+ * et son changement entre les tours 3 et 4 signale un vrai changement du
+ * projet.
+ *
+ * L'empreinte qui couvre le message en attente existe, s'appelle
+ * `architectTurnFingerprint`, et n'est pas affichee : elle sert a refuser un
+ * envoi parti d'un onglet perime.
+ *
+ * **Aucune semantique n'a ete changee.** Ces tests fixent le comportement
+ * existant pour qu'il cesse d'etre une source de doute.
+ */
+describe("HOTFIX-003 — l'empreinte de contexte ne couvre pas la conversation", () => {
+  it("reste identique quand seul le message change", () => {
+    // Le fait observe pendant le pilote, et il est correct : ces deux tours
+    // parlent du meme projet.
+    const context = architectContextFingerprint(bundle());
+
+    const premier = architectTurnFingerprint({
+      contextFingerprint: context,
+      transcript: [],
+      newMessage: "Confirme le contrat d'import.",
+    });
+    const second = architectTurnFingerprint({
+      contextFingerprint: context,
+      transcript: [],
+      newMessage: "Ajuste le plan de V1 en consequence.",
+    });
+
+    assert.equal(architectContextFingerprint(bundle()), context, "le contexte n'a pas bouge");
+    assert.notEqual(premier, second, "le tour, lui, a bien change");
+  });
+
+  it("change des que le plan de V1 change", () => {
+    // Ce qui explique le passage de `ca84e11c461f` a `194b2de3c931` entre les
+    // tours 3 et 4 du pilote : le plan avait ete enregistre entre-temps.
+    const sans = architectContextFingerprint(bundle());
+    const avec = architectContextFingerprint(
+      bundle({
+        projectV1Plan: {
+          revision: "c".repeat(64),
+          goal: "Ingerer un export CSV.",
+          technicalDirection: "Import synchrone.",
+          inScope: [],
+          outOfScope: [],
+          milestones: [],
+        } as never,
+      }),
+    );
+
+    assert.notEqual(sans, avec);
+  });
+
+  it("change quand un document du contexte change", () => {
+    const initial = architectContextFingerprint(bundle());
+    const modifie = architectContextFingerprint(
+      bundle({ contextDocuments: [document({ path: "docs/ARCHITECTURE.md", content: "# Autre" })] }),
+    );
+
+    assert.notEqual(initial, modifie);
+  });
+
+  it("reste stable quand rien du projet ne change", () => {
+    // Un rendu ne doit pas produire une empreinte differente : l'utilisateur
+    // verrait un faux changement de contexte a chaque rafraichissement.
+    assert.equal(architectContextFingerprint(bundle()), architectContextFingerprint(bundle()));
+  });
+
+  it("l'empreinte de tour couvre le transcript, celle du contexte non", () => {
+    const context = architectContextFingerprint(bundle());
+
+    const vide = architectTurnFingerprint({
+      contextFingerprint: context,
+      transcript: [],
+      newMessage: "Meme message.",
+    });
+    const avecHistorique = architectTurnFingerprint({
+      contextFingerprint: context,
+      transcript: [{ role: "USER", content: "Un tour precedent." }],
+      newMessage: "Meme message.",
+    });
+
+    assert.notEqual(vide, avecHistorique);
   });
 });

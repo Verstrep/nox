@@ -25,7 +25,7 @@ import {
   type ArchitectBacklogDiagnostic,
 } from "@nox/shared";
 
-import { describeArchitectError } from "../architect/errors.ts";
+import { ARCHITECT_OPERATION, describeArchitectError } from "../architect/errors.ts";
 
 /**
  * Un echec de planification, decompose pour l'affichage.
@@ -75,7 +75,7 @@ export function describeBacklogFailure(
   diagnostic: ArchitectBacklogDiagnostic | null,
 ): BacklogFailureDisplay {
   const generic = isArchitectErrorCode(errorCode)
-    ? describeArchitectError(errorCode)
+    ? describeArchitectError(errorCode, ARCHITECT_OPERATION.BACKLOG)
     : "La planification a echoue. Aucune tache n'a ete creee.";
 
   if (diagnostic === null || diagnostic.category !== ARCHITECT_BACKLOG_FAILURE.OUTPUT_INVALID) {

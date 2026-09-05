@@ -21,7 +21,9 @@ import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  ARCHITECT_DIAGNOSTIC_FIELD,
   ARCHITECT_ERROR,
+  ARCHITECT_TURN_FAILURE,
   ARCHITECT_PROJECT_UPDATE_STATUS,
   ARCHITECT_TURN_STATE,
   PROJECT_PLAN_LIMITS,
@@ -346,15 +348,30 @@ describe("persistance liee au tour", () => {
     const outcome = await send(project, provider);
 
     assert.equal(outcome.ok, false);
+    // Ce test attendait `ARCHITECT_OUTPUT_INVALID` jusqu'a HOTFIX-003. Un
+    // depassement de budget n'est pas une violation de contrat : la reponse
+    // etait bien formee, et NOX refuse de l'ecrire. Les confondre disait a
+    // l'utilisateur de relancer un appel dont le refus est deterministe — ce
+    // que le second pilote reel a fait deux fois de suite.
     assert.equal(
       "code" in outcome ? outcome.code : null,
-      ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+      ARCHITECT_ERROR.ARCHITECT_UPDATE_TOO_LARGE,
     );
     assert.equal(await lastUpdate(project), null, "aucune proposition impossible n'est stockee");
 
     const session = await getArchitectSession(db, project.sessionId);
     assert.equal(session?.messages.length, 0, "aucun message n'a ete fige");
     assert.notEqual(session?.status, "GENERATING", "le verrou est rendu");
+
+    // Le diagnostic dit ou regarder et quoi faire, avec deux nombres que NOX a
+    // calcules lui-meme — jamais recopies de la reponse.
+    const generation = session?.generations[0];
+    assert.equal(generation?.diagnostic?.category, ARCHITECT_TURN_FAILURE.UPDATE_TOO_LARGE);
+    assert.equal(generation?.diagnostic?.field, ARCHITECT_DIAGNOSTIC_FIELD.BUDGET);
+    assert.match(generation?.diagnostic?.message ?? "", /caracteres/u);
+
+    // Et le message de l'utilisateur reste disponible pour un nouvel envoi.
+    assert.notEqual(session?.pendingTurn, null);
   });
 
   it("n'enregistre rien quand la mise a jour est incoherente", async () => {
@@ -573,5 +590,169 @@ describe("revue", () => {
     const summary = review.brief.fields.find((field) => field.field === "summary");
     assert.equal(summary?.currentText, "");
     assert.equal(summary?.proposedText, BRIEF.summary);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOTFIX-003 (suite) — le tour 10 de TicketPulse, et l'ordre des validations
+// ---------------------------------------------------------------------------
+
+/**
+ * La forme exacte du pilote : un plan deja fourni, cinq decisions nouvelles.
+ *
+ * Le tour 10 a rejoue la demande des tours 8 et 9 et le diagnostic a nomme la
+ * cause : `projectUpdate.plan.inScope` refuse pour `too_many`. Ces tests fixent
+ * les deux moities du correctif — le refus reste strict, et la reponse qui
+ * consolide passe.
+ */
+describe("HOTFIX-003 — le cas TicketPulse, de bout en bout", () => {
+  /** Un perimetre deja substantiellement rempli, comme celui du pilote. */
+  const EXISTING = Array.from(
+    { length: PROJECT_PLAN_LIMITS.items - 2 },
+    (_, index) => `Regle de perimetre deja etablie ${String(index + 1)}`,
+  );
+
+  /** Les cinq decisions durables que l'utilisateur vient de trancher. */
+  const NEW_DECISIONS = [
+    "Le classeur porte exactement une feuille, quel que soit son nom",
+    "Un CI ou une application vide reste valide et s'affiche « Non renseigne »",
+    "Un numero d'incident duplique rejette toutes ses occurrences, pas le fichier",
+    "Les valeurs textuelles sont debarrassees de leurs espaces de bord",
+    "Seuls les champs de ticket definis en V1 sont persistes",
+  ];
+
+  function planTurn(inScope: readonly string[]): Record<string, unknown> {
+    return {
+      ...fakeProjectTurn({}),
+      projectUpdate: {
+        reason: "Les decisions de contrat d'import sont tranchees.",
+        brief: { action: "UNCHANGED", value: null },
+        plan: {
+          action: "SET",
+          value: {
+            goal: "Ingerer un export de tickets et les afficher.",
+            technicalDirection: "Import synchrone d'un classeur a feuille unique.",
+            inScope: [...inScope],
+            outOfScope: ["Connecteurs tiers"],
+            milestones: ["Contrat d'import fige", "Ecran de liste utilisable"],
+          },
+        },
+      },
+    };
+  }
+
+  it("refuse la reponse qui ajoute une ligne par decision", async () => {
+    // Exactement ce qui s'est passe : 18 entrees existantes + 5 ajouts = 23.
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([
+      respond(planTurn([...EXISTING, ...NEW_DECISIONS])),
+    ]);
+
+    const outcome = await send(project, provider);
+
+    assert.equal(outcome.ok, false);
+    assert.equal(
+      "code" in outcome ? outcome.code : null,
+      ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+    );
+
+    const session = await getArchitectSession(db, project.sessionId);
+    const diagnostic = session?.generations[0]?.diagnostic;
+    // Le diagnostic que le pilote a effectivement lu au tour 10.
+    assert.equal(diagnostic?.field, "projectUpdate.plan.inScope");
+    assert.match(diagnostic?.message ?? "", /too_many/u);
+
+    // Rien n'est tronque, rien n'est applique, et le message reste disponible.
+    assert.equal(await lastUpdate(project), null);
+    assert.notEqual(session?.pendingTurn, null);
+  });
+
+  it("accepte la reponse qui consolide au lieu d'ajouter", async () => {
+    // Le geste que le prompt demande desormais : les cinq decisions tiennent en
+    // deux entrees consolidees, et le plan reste dans ses bornes.
+    const project = await newProject();
+    const consolidated = [
+      ...EXISTING,
+      "Import d'un classeur a feuille unique : valeurs textuelles normalisees, " +
+        "CI et application vides affiches « Non renseigne »",
+      "Doublons d'incident rejetes occurrence par occurrence, sans rejeter le fichier",
+    ];
+    assert.equal(consolidated.length, PROJECT_PLAN_LIMITS.items);
+
+    const provider = new FakeArchitectProvider([respond(planTurn(consolidated))]);
+
+    const outcome = await send(project, provider);
+
+    assert.ok(outcome.ok, "une section pleine reste proposable");
+    const update = await lastUpdate(project);
+    assert.notEqual(update, null, "la proposition est enregistree");
+  });
+
+  it("le refus survient au contrat, avant le budget de seize Kio", async () => {
+    // Les deux verifications ne doivent pas se confondre : le tour 10 a echoue
+    // sur le **nombre d'entrees**, pas sur la taille cumulee du brief et du
+    // plan. Une section qui viole les deux doit rendre le code du contrat.
+    const project = await newProject();
+    const enormous = Array.from({ length: PROJECT_PLAN_LIMITS.items + 1 }, () =>
+      "x".repeat(PROJECT_PLAN_LIMITS.item),
+    );
+    const provider = new FakeArchitectProvider([respond(planTurn(enormous))]);
+
+    const outcome = await send(project, provider);
+
+    assert.equal(outcome.ok, false);
+    // `ARCHITECT_OUTPUT_INVALID`, et non `ARCHITECT_UPDATE_TOO_LARGE` : le
+    // contrat par champ est verifie dans `readArchitectTurn`, le budget cumule
+    // seulement apres, dans `checkProviderProjectUpdate`.
+    assert.equal(
+      "code" in outcome ? outcome.code : null,
+      ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+    );
+    const session = await getArchitectSession(db, project.sessionId);
+    assert.equal(session?.generations[0]?.diagnostic?.field, "projectUpdate.plan.inScope");
+  });
+
+  it("le budget de seize Kio reste applique a ce qui passe le contrat", async () => {
+    // Une section dans ses bornes de comptage peut encore depasser le budget
+    // cumule. Les deux gardes restent distinctes, et toutes les deux actives.
+    const project = await newProject();
+    // Chaque champ dans sa borne, et pourtant hors budget cumule : trois listes
+    // pleines d'entrees maximales plus deux textes longs depassent seize Kio.
+    // C'est precisement pourquoi les deux gardes existent separement.
+    const full = Array.from({ length: PROJECT_PLAN_LIMITS.items }, () =>
+      "y".repeat(PROJECT_PLAN_LIMITS.item),
+    );
+    const provider = new FakeArchitectProvider([
+      respond({
+        ...fakeProjectTurn({}),
+        projectUpdate: {
+          reason: "Un plan volumineux mais formellement valide.",
+          brief: { action: "UNCHANGED", value: null },
+          plan: {
+            action: "SET",
+            value: {
+              goal: "g".repeat(PROJECT_PLAN_LIMITS.goal),
+              technicalDirection: "t".repeat(PROJECT_PLAN_LIMITS.technicalDirection),
+              inScope: full,
+              outOfScope: full,
+              milestones: full,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const outcome = await send(project, provider);
+
+    assert.equal(outcome.ok, false);
+    assert.equal(
+      "code" in outcome ? outcome.code : null,
+      ARCHITECT_ERROR.ARCHITECT_UPDATE_TOO_LARGE,
+    );
+    const session = await getArchitectSession(db, project.sessionId);
+    assert.equal(
+      session?.generations[0]?.diagnostic?.category,
+      ARCHITECT_TURN_FAILURE.UPDATE_TOO_LARGE,
+    );
   });
 });

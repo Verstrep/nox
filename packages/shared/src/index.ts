@@ -561,6 +561,8 @@ export {
   USER_MESSAGE_OPEN,
   ARCHITECT_PROMPT_VERSION_V4,
   ARCHITECT_PROMPT_VERSION_V5,
+  ARCHITECT_PROMPT_VERSION_V7,
+  ARCHITECT_PROMPT_VERSION_V8,
   ARCHITECT_PROMPT_VERSION_V6,
   BRIEF_CLOSE,
   BRIEF_OPEN,
@@ -777,6 +779,22 @@ export type {
   ArchitectBacklogDiagnostic,
   ArchitectBacklogFailureCategory,
 } from "./backlog-diagnostic.js";
+
+export {
+  ARCHITECT_DIAGNOSTIC_FIELD,
+  ARCHITECT_DIAGNOSTIC_LIMITS,
+  ARCHITECT_TURN_FAILURE,
+  ARCHITECT_TURN_FAILURE_CATEGORIES,
+  architectDiagnosticFieldLabel,
+  architectTurnFailureCategory,
+  architectTurnFailureCode,
+  sanitizeArchitectDiagnosticText,
+} from "./architect-diagnostic.js";
+
+export type {
+  ArchitectTurnDiagnostic,
+  ArchitectTurnFailureCategory,
+} from "./architect-diagnostic.js";
 
 export {
   BACKLOG_PROMPT_VERSION,

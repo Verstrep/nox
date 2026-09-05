@@ -62,6 +62,9 @@ function generation(overrides: Partial<ArchitectGenerationView> = {}): Architect
     providerResponseId: null,
     usage: { inputTokens: null, outputTokens: null, totalTokens: null, cachedInputTokens: null },
     errorCode: null,
+    // Une generation qui a abouti ne porte aucun diagnostic : composer une
+    // categorie de panne sur un tour reussi inventerait un echec.
+    diagnostic: null,
     appliedTaskId: null,
     createdAt: "2026-08-10T09:00:00.000Z",
     ...overrides,

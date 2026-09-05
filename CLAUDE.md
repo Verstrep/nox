@@ -1188,3 +1188,50 @@ doit le dire explicitement et la justifier.
 - **Un travail valide et sa livraison portent deux pastilles distinctes.** `Done` en vert et
   `Delivery failed` en rouge se lisent cote a cote : un push refuse ne transforme pas une
   implementation validee en echec, et une pastille unique mentirait forcement sur l'un des deux.
+
+### 8.24 Diagnostic d'un appel Architecte
+
+- **Un appel qui echoue enregistre pourquoi.** Categorie, champ fautif et phrase, nettoyes et
+  bornes a l'ecriture. Sans cela, relancer est le seul moyen d'apprendre ce que NOX savait
+  deja — c'est-a-dire payer un second appel pour lire un diagnostic qui existait avant le
+  premier.
+- **Un diagnostic ne porte jamais de contenu.** Ni JSON brut, ni prompt, ni reponse du
+  fournisseur, ni en-tete, ni cle, ni trace. Ce n'est pas un filtre applique en sortie : le type
+  n'a aucun champ ou les mettre. Les seules valeurs citees sont des nombres calcules par NOX.
+- **Un depassement de budget n'est pas une erreur de format.** La reponse etait bien formee ;
+  NOX refuse de l'ecrire. Le refus est **deterministe**, et conseiller de relancer y est la pire
+  consigne possible.
+- **Une reponse interrompue n'est pas une reponse malformee.** Le fournisseur le declare
+  lui-meme, et NOX le lit **avant** d'analyser le texte : une reponse coupee peut porter un JSON
+  lisible jusqu'a sa troncature, et l'analyser produirait une erreur imputee au contrat — ou un
+  objet partiel accepte par hasard.
+- **Rien venu du reseau n'entre tel quel dans un diagnostic.** Un motif rapporte n'est recopie
+  que s'il ressemble a un identifiant du contrat du fournisseur ; sinon il devient `unknown`.
+- **La phrase d'echec parle de l'operation qui a echoue.** Un tour de conversation ne dit jamais
+  qu'aucune tache n'a ete creee : aucune n'etait attendue. Le **code** reste unique et stable ;
+  seule la phrase s'adapte, sans quoi la classification divergerait pour un probleme
+  d'affichage.
+- **Le message soumis survit a un tour echoue, et l'ecran le dit.** Le brouillon n'est efface
+  que lorsque le tour a abouti. Une garantie que l'utilisateur ne peut pas observer ne le
+  rassure pas.
+- **Un echec ne declenche jamais un second appel.** Ni reessai aveugle, ni repli de modele :
+  `maxRetries` vaut zero, et un echec remonte a l'utilisateur, qui recliquera s'il le souhaite.
+  Un reessai automatique produirait une facture en double, et parfois une proposition en double.
+- **Toute borne que le validateur applique est annoncee au fournisseur.** Le mode strict ignore
+  `maxItems` et `maxLength` : les bornes ne peuvent vivre qu'aux deux endroits qui existent, les
+  instructions et la validation. Une borne connue d'un seul des deux produit un refus
+  deterministe que le modele ne peut pas eviter, et les deux se lisent depuis **la meme
+  constante**.
+- **Le Living V1 Plan porte des regles produit durables, pas une specification.** Le detail
+  d'implementation appartient aux taches et a la documentation, ou il peut etre aussi precis
+  qu'il faut. Le recopier dans le plan le fait grossir a chaque decision, jusqu'a franchir ses
+  bornes.
+- **Une section pleine se consolide, elle ne se tronque pas.** NOX n'ecarte jamais une entree en
+  trop pour faire passer une mise a jour : la proposition entiere est refusee, et c'est
+  l'utilisateur qui decide quoi fusionner.
+- **Une categorie regroupe, un code constate.** L'affichage d'un echec part du code enregistre
+  quand il en existe un ; la categorie ne sert qu'a defaut. Une categorie utilisee comme libelle
+  efface ce que la base portait — un delai depasse cesserait de se lire comme un delai.
+- **L'empreinte affichee couvre le contexte projet, jamais la conversation.** Sa stabilite d'un
+  tour a l'autre est le comportement attendu, et non le signe d'un contexte perime. L'empreinte
+  qui couvre le message en attente existe, s'appelle autrement, et decide d'un refus d'envoi.

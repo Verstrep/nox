@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  ARCHITECT_DIAGNOSTIC_FIELD,
   ARCHITECT_ERROR,
   ARCHITECT_SCHEMA_NAME,
   buildArchitectTurnSchema,
@@ -221,9 +222,14 @@ describe("OpenAIArchitectProvider — reponses", () => {
     assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_REFUSED);
   });
 
-  it("refuse une sortie vide", async () => {
+  it("refuse une sortie vide, et la classe comme incomplete", async () => {
+    // Ce test disait `ARCHITECT_OUTPUT_INVALID` jusqu'a HOTFIX-003. Une reponse
+    // vide n'est pas une reponse malformee : il n'y a rien a analyser, donc
+    // rien a imputer au contrat. La confusion coutait a l'utilisateur le seul
+    // indice qui lui aurait dit de raccourcir sa demande plutot que de la
+    // relancer a l'identique.
     const result = await provider({ id: "r", output_text: "   " }).generateTaskTurn(INPUT);
-    assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
+    assert.equal(result.ok ? null : result.code, ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE);
   });
 
   it("refuse une sortie qui n'est pas du JSON", async () => {
@@ -490,4 +496,161 @@ describe("effort de raisonnement — les trois surfaces a forte consequence", ()
       assert.equal("reasoning" in body, false);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// HOTFIX-003 — classification des reponses inexploitables
+// ---------------------------------------------------------------------------
+
+/**
+ * Une reponse recue peut echouer de trois facons differentes.
+ *
+ * Jusqu'a HOTFIX-003, les trois rendaient `ARCHITECT_OUTPUT_INVALID` sans un
+ * mot de plus, et l'utilisateur lisait « le format attendu n'est pas
+ * respecte ». Le second pilote reel a vu ce message deux fois de suite sans
+ * pouvoir savoir laquelle des trois s'etait produite.
+ *
+ * Aucun appel reseau ici : le client OpenAI est injecte.
+ */
+describe("OpenAIArchitectProvider — reponses inexploitables", () => {
+  it("classe une reponse declaree incomplete a part, avec son motif", async () => {
+    // Le cas le plus probable des tours 8 et 9 : un modele de raisonnement qui
+    // s'arrete avant d'avoir rendu son JSON. La reponse arrive, le fournisseur
+    // dit lui-meme qu'elle est incomplete, et NOX la classait « format
+    // invalide » — en conseillant de relancer sans savoir quoi raccourcir.
+    const result = await provider({
+      id: "r",
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output_text: "",
+    }).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (result.ok) {
+      return;
+    }
+    assert.equal(result.code, ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE);
+    assert.equal(result.diagnostic?.field, ARCHITECT_DIAGNOSTIC_FIELD.INCOMPLETE);
+    assert.match(result.diagnostic?.message ?? "", /max_output_tokens/u);
+  });
+
+  it("lit l'incompletude avant le texte, meme si un debut de JSON est lisible", async () => {
+    // Une reponse coupee peut porter un JSON valide jusqu'a sa troncature.
+    // L'analyser produirait soit une erreur de syntaxe imputee au contrat, soit
+    // pire, un objet partiel accepte par hasard.
+    const result = await provider({
+      id: "r",
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output_text: VALID_PROPOSAL,
+    }).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.code, ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE);
+    }
+  });
+
+  it("classe une reponse vide comme incomplete, jamais comme un contrat viole", async () => {
+    const result = await provider({ id: "r", output_text: "   " }).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.code, ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE);
+      assert.notEqual(result.diagnostic, undefined);
+    }
+  });
+
+  it("classe un texte illisible comme un JSON malforme, en le nommant", async () => {
+    const result = await provider({
+      id: "r",
+      output_text: "Bien sur ! Voici le plan : { incomplet",
+    }).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.code, ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
+      assert.equal(result.diagnostic?.field, ARCHITECT_DIAGNOSTIC_FIELD.JSON);
+    }
+  });
+
+  it("ne recopie jamais le texte recu dans le diagnostic", async () => {
+    // Le texte porterait du contenu de projet. Savoir que l'analyse a echoue
+    // suffit a orienter ; le lire ne servirait a rien et exposerait tout.
+    const secret = "Le plan confidentiel de TicketPulse et sa cle sk-proj-abc";
+    const result = await provider({ id: "r", output_text: secret }).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      const serialized = JSON.stringify(result.diagnostic);
+      assert.equal(serialized.includes(secret), false);
+      assert.equal(serialized.includes("sk-proj"), false);
+      assert.equal(serialized.includes("TicketPulse"), false);
+    }
+  });
+
+  it("n'accepte comme motif qu'un identifiant du contrat du fournisseur", async () => {
+    // NOX ne recopie pas une chaine arbitraire venue du reseau dans un
+    // diagnostic qu'il va persister et afficher.
+    const result = await provider({
+      id: "r",
+      status: "incomplete",
+      incomplete_details: { reason: "<script>alert(1)</script> chemin C:\\secret" },
+      output_text: "",
+    }).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.diagnostic?.message ?? "", /unknown/u);
+      assert.equal((result.diagnostic?.message ?? "").includes("<script>"), false);
+      assert.equal((result.diagnostic?.message ?? "").includes("C:"), false);
+    }
+  });
+
+  it("un statut complete n'est jamais traite comme incomplet", async () => {
+    const result = await provider({
+      id: "r",
+      status: "completed",
+      output_text: VALID_PROPOSAL,
+    }).generateTaskTurn(INPUT);
+
+    assert.ok(result.ok);
+  });
+
+  it("une reponse sans champ status reste lue normalement", async () => {
+    // Retrocompatibilite : rien n'exige que le fournisseur declare un statut.
+    const result = await provider({ id: "r", output_text: VALID_PROPOSAL }).generateTaskTurn(INPUT);
+
+    assert.ok(result.ok);
+  });
+});
+
+describe("HOTFIX-003 — le delai reste distinct d'une reponse refusee", () => {
+  it("un delai depasse ne porte aucun diagnostic de contrat", async () => {
+    // Requirement 10 : le timeout se classe a part. Les tours 5-6 du pilote et
+    // ses tours 8-9 n'ont pas la meme cause, et ne doivent pas se lire pareil.
+    const timeout = Object.assign(new Error("Request timed out."), { name: "APIConnectionTimeoutError" });
+    const result = await provider(timeout).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.notEqual(result.code, ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
+      assert.notEqual(result.code, ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE);
+      // Aucune reponse n'a ete recue : il n'y a rien a diagnostiquer.
+      assert.equal(result.diagnostic, undefined);
+    }
+  });
+
+  it("transmet le delai configure au client, par requete", async () => {
+    const captures: Capture[] = [];
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn({
+      ...INPUT,
+      timeoutMs: 90_000,
+    });
+
+    assert.equal(captures[0]?.options["timeout"], 90_000);
+    // Aucun reessai automatique : un echec ne doit jamais produire une seconde
+    // facture ni une proposition dupliquee.
+    assert.equal(captures[0]?.options["maxRetries"], 0);
+  });
 });

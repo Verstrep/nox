@@ -52,7 +52,11 @@ import {
 } from "./architect.js";
 import { MAX_VALIDATION_COMMAND_LENGTH } from "./claude-commands.js";
 import type { ArchitectPromptMemory } from "./project-memory.js";
-import type { ArchitectPromptBrief, ArchitectPromptV1Plan } from "./project-plan.js";
+import {
+  PROJECT_PLAN_LIMITS,
+  type ArchitectPromptBrief,
+  type ArchitectPromptV1Plan,
+} from "./project-plan.js";
 
 /**
  * Version du prompt, persistee avec chaque generation.
@@ -111,6 +115,33 @@ export const ARCHITECT_PROMPT_VERSION_V5 = "architect/5";
 export const ARCHITECT_PROMPT_VERSION_V6 = "architect/6";
 
 /**
+ * Versions du prompt d'une conversation projet, depuis HOTFIX-003.
+ *
+ * `architect/7` remplace `architect/4`, et `architect/8` remplace `architect/6`.
+ * Le changement est le meme dans les deux : la section « Comment remplir une
+ * mise a jour » **annonce desormais les bornes** des listes du brief et du plan,
+ * dit de fusionner plutot que d'ajouter quand une section approche de sa borne,
+ * et separe une regle produit durable d'un detail de specification.
+ *
+ * ## Pourquoi deux nouvelles versions plutot qu'une
+ *
+ * Parce que les deux jeux d'instructions existent en service : un projet sans
+ * backlog applique ne recoit pas les consignes de replanification. Leur donner
+ * la meme etiquette ferait dire a une generation qu'elle a recu des regles
+ * qu'elle n'a pas vues — la seule erreur que ce champ existe pour empecher.
+ *
+ * ## Ce que cela ne change pas
+ *
+ * Le **schema** ne bouge pas : `architect/7` parle toujours le schema 3, et
+ * `architect/8` le schema 4. `readArchitectTurn` accepte exactement ce qu'il
+ * acceptait, et les generations `architect/4` deja enregistrees restent lisibles
+ * avec leurs propres regles.
+ */
+export const ARCHITECT_PROMPT_VERSION_V7 = "architect/7";
+
+export const ARCHITECT_PROMPT_VERSION_V8 = "architect/8";
+
+/**
  * Version de prompt correspondant a ce que ce tour contient reellement.
  *
  * Le role de la session decide d'abord ; la presence d'un plan de travail
@@ -129,7 +160,7 @@ export function architectPromptVersion(
   if (kind !== ARCHITECT_SESSION_KIND.PROJECT) {
     return ARCHITECT_PROMPT_VERSION;
   }
-  return replanAvailable ? ARCHITECT_PROMPT_VERSION_V6 : ARCHITECT_PROMPT_VERSION_V4;
+  return replanAvailable ? ARCHITECT_PROMPT_VERSION_V8 : ARCHITECT_PROMPT_VERSION_V7;
 }
 
 /** Delimiteurs du contexte projet. */
@@ -579,11 +610,44 @@ function renderProjectUpdateInstructions(): string[] {
     "- `SET` : la section prend la valeur de `value`, qui doit etre **complete**.",
     "",
     "Une section `SET` decrit l'etat cible entier, jamais une difference ni un ajout.",
-    "Si tu veux ajouter une etape au plan, rends le plan complet avec cette etape",
-    "en plus : recopie les champs que tu ne changes pas.",
+    "Rends la section complete : recopie les champs que tu ne changes pas.",
     "",
     "Ne rends jamais une mise a jour dont les deux sections sont `UNCHANGED` :",
     "laisse alors `projectUpdate` vide.",
+    "",
+    "### Les listes sont bornees",
+    "",
+    `Chaque liste — objectifs, hors objectifs, perimetre, hors perimetre, etapes —`,
+    `porte **au plus ${String(PROJECT_PLAN_LIMITS.items)} entrees**, et chaque entree fait au plus`,
+    `${String(PROJECT_PLAN_LIMITS.item)} caracteres. Une section qui depasse une de ces bornes est`,
+    "refusee entierement : la mise a jour n'est pas appliquee, et rien n'est tronque",
+    "pour la faire passer.",
+    "",
+    "**Compte les entrees avant de repondre.** Une section deja fournie ne se",
+    "complete pas en ajoutant une ligne par decision nouvelle : tu atteindrais la",
+    "borne, et la proposition entiere serait perdue.",
+    "",
+    "Quand une section approche de la borne, **fusionne et reformule** les entrees",
+    "existantes plutot que d'en ajouter. Plusieurs regles qui portent sur le meme",
+    "objet se disent en une entree : « import d'un classeur a feuille unique, avec",
+    "valeurs textuelles normalisees et champs vides affiches comme non renseignes »",
+    "vaut mieux que quatre lignes separees. Consolider n'est pas perdre de",
+    "l'information : c'est la mettre au bon niveau.",
+    "",
+    "### Le plan n'est pas une specification",
+    "",
+    "Le Living V1 Plan porte des regles **produit durables** — ce que la V1 fait, ce",
+    "qu'elle exclut, la direction retenue. Il ne porte pas le detail d'une",
+    "implementation : format exact d'un fichier, comportement ligne a ligne, regles",
+    "de rejet, noms de colonnes, semantique de mise a jour champ par champ.",
+    "",
+    "Ce detail appartient aux **taches** et a la documentation du repository, ou il",
+    "peut etre aussi precis que necessaire. Le recopier dans le plan le fait grossir",
+    "a chaque decision, jusqu'a le rendre illisible — et jusqu'a depasser les bornes",
+    "ci-dessus.",
+    "",
+    "Quand l'utilisateur demande une mise a jour **minimale**, prends-le au mot :",
+    "n'ecris que ce qui change durablement, et laisse le reste tel quel.",
     "",
     "Une etape du plan decrit une **capacite atteinte** — « le planning hebdomadaire",
     "est utilisable » —, jamais un travail a faire. Le brief et le plan ne portent ni",

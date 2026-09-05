@@ -1056,9 +1056,9 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `TASK-034` : `1225543`
-  (`feat: harden autonomous project workflow`), contenant `TASK-033`.
-- `TASK-034` reste **local**, non indexé et non commité.
+- Commit de départ de `HOTFIX-003` : `1f1cf30`
+  (`feat: improve operator visibility and observability`), contenant `TASK-034`.
+- `HOTFIX-003` reste **local**, non indexé et non commité.
 
 ---
 
@@ -1229,3 +1229,67 @@ exactement les octets que la review affiche déjà, et un outil qui imprime son 
 l'imprime dans les deux.
 
 **Ce qui vient ensuite n'est pas une `TASK-035`.** C'est un second vrai pilote.
+
+---
+
+## 12. HOTFIX-003 — diagnostic d'un appel Architecte, pendant le second pilote
+
+Le second pilote réel, sur TicketPulse, a rencontré une panne reproductible. Deux tours consécutifs
+ont échoué sur la même phrase — « la réponse ne respecte pas le format attendu par NOX. Aucune
+tâche n'a été créée » — alors que la demande était un ajustement du Living V1 Plan, sans aucune
+tâche en jeu.
+
+**Ce que l'enquête a trouvé.** Quatre causes de code distinctes produisent ce message : une réponse
+vide ou tronquée, un JSON illisible, un contrat de tour refusé, et une mise à jour de projet
+hors budget. Aucune n'était enregistrée. Le seul moyen d'en apprendre davantage aurait été de payer
+un troisième appel — c'est-à-dire de racheter un diagnostic qui existait avant le premier.
+
+**Ce qui est corrigé.** `ArchitectGeneration` porte désormais un diagnostic sûr, exactement comme
+`ArchitectBacklogGeneration` depuis HOTFIX-001 : catégorie, champ fautif, phrase — et rien du
+contenu. Un dépassement de budget devient un code à part, qui dit que relancer n'y changera rien.
+Une réponse que le fournisseur déclare incomplète cesse de passer pour une réponse malformée. Et la
+phrase d'échec parle enfin de l'opération réellement en cours. Voir [D-396](DECISIONS.md) à
+[D-399](DECISIONS.md).
+
+**Ce qui était déjà correct.** Le message soumis survivait déjà à un échec — le brouillon n'est
+effacé que lorsque le tour aboutit — et l'empreinte de contexte affichée se comportait exactement
+comme prévu : elle couvre le projet, jamais la conversation, donc sa stabilité entre deux messages
+est attendue. Les deux sont désormais testés et **dits à l'écran**, plutôt que garantis en
+silence. Voir [D-400](DECISIONS.md) et [D-401](DECISIONS.md).
+
+**Le délai n'a pas été changé.** `ARCHITECT_REQUEST_TIMEOUT_MS` vaut 90 s, s'applique par requête,
+sans réessai, et est partagé par les quatre surfaces d'appel. L'enquête n'a pas produit de preuve
+qu'il soit mal dimensionné : deux dépassements sur une requête large, suivis d'une requête compacte
+qui passe, sont compatibles avec un délai trop court **comme** avec une lenteur passagère du
+fournisseur. La portée est désormais fixée par des tests ; la valeur attend une observation qui la
+départage.
+
+**Migration.** Deux colonnes nullables sur `ArchitectGeneration`, par `ALTER TABLE ADD COLUMN`.
+Aucune ligne réécrite : les tours 8 et 9 du pilote restent exactement ce qu'ils étaient, et
+afficheront « cause non enregistrée » plutôt qu'une cause reconstruite après coup.
+
+### Ce que le diagnostic a immédiatement révélé
+
+Le pilote a rejoué la demande qui avait échoué deux fois. Le tour 10 a nommé la cause :
+`projectUpdate.plan.inScope` refusé pour `too_many`.
+
+**Le validateur bornait chaque liste à vingt entrées, et le prompt ne l'annonçait nulle part.** Il
+disait même l'inverse — « rends le plan complet avec cette étape en plus » —, c'est-à-dire
+exactement le geste qui franchit la borne sur un plan déjà fourni. Le refus était donc
+déterministe, ce qui explique deux échecs consécutifs identiques.
+
+Les instructions annoncent maintenant les bornes, en interpolant la constante que le validateur
+utilise ; elles demandent de fusionner plutôt que d'ajouter, et séparent une règle produit durable
+d'un détail de spécification. La borne n'a **pas** été relevée : les cinq décisions de TicketPulse
+tiennent en deux entrées consolidées, et un plan qui demanderait plus de vingt lignes de périmètre
+serait une spécification — laquelle appartient aux tâches. Voir [D-402](DECISIONS.md).
+
+`architect/4` devient `architect/7` et `architect/6` devient `architect/8` : le texte des
+instructions a changé, donc l'étiquette aussi. Le **schéma** ne bouge pas, et `readArchitectTurn`
+accepte exactement ce qu'il acceptait.
+
+**Une régression d'affichage, trouvée et corrigée dans la foulée.** Les tours 5 et 6, persistés en
+`ARCHITECT_TIMEOUT`, s'étaient mis à s'afficher « Panne du fournisseur ». La catégorie regroupe
+cinq codes ; l'utiliser comme libellé effaçait ce que la base portait toujours. L'affichage part
+désormais du code enregistré. Aucune ligne ancienne n'a été modifiée. Voir
+[D-403](DECISIONS.md).

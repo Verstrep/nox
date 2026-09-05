@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { loadArchitectConfig } from "@/lib/architect/config";
-import { describeArchitectError } from "@/lib/architect/errors";
+import { ARCHITECT_OPERATION, describeArchitectError } from "@/lib/architect/errors";
 import { OpenAIArchitectProvider } from "@/lib/architect/openai";
 import { architectAnalysisUrl, architectReviewUrl } from "@/lib/architect/review-display";
 import { loadArchitectReviewContext } from "@/lib/architect/review-load";
@@ -79,7 +79,7 @@ export async function analyzeReviewAction(
     revalidatePath(reviewUrl(projectId, taskId, runId));
 
     if (!outcome.ok) {
-      return { error: describeArchitectError(outcome.code) };
+      return { error: describeArchitectError(outcome.code, ARCHITECT_OPERATION.REVIEW) };
     }
 
     destination = architectAnalysisUrl(projectId, taskId, runId, outcome.analysis.id);

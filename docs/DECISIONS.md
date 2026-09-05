@@ -6255,3 +6255,184 @@ deux.
 **Ce qui ne change pas.** Aucune semantique de TASK-033. `BLOCKED` prend le ton `warn` et non
 `danger` : une precondition qui ne tenait pas n'a rien ecrit et n'a rien casse — c'est une attente,
 pas un incident.
+
+
+## HOTFIX-003 — diagnostic d'un tour d'Architecte
+
+### D-396 — Un tour echoue enregistre pourquoi, comme une planification depuis HOTFIX-001
+
+**Decision.** `ArchitectGeneration` recoit `errorField` et `errorDetail`, nettoyes et bornes a
+l'ecriture. La lecture en derive un `ArchitectTurnDiagnostic` — categorie, champ, phrase — affiche
+dans l'historique des tours.
+
+**Justification.** HOTFIX-001 avait donne exactement cela a la planification, et la conversation
+projet etait restee sans rien. Le second pilote reel l'a paye : les tours 8 et 9 de TicketPulse ont
+echoue sur la meme phrase generique, et **quatre causes de code distinctes** la produisent :
+
+```text
+reponse vide ou tronquee par le fournisseur   ← openai.ts
+JSON illisible                                 ← openai.ts
+contrat de tour refuse par NOX                 ← readArchitectTurn
+mise a jour de projet hors budget              ← checkProviderProjectUpdate
+```
+
+Rien de ce qui etait enregistre ne permettait de dire laquelle. Le seul moyen d'en apprendre
+davantage aurait ete de payer un troisieme appel — c'est-a-dire de racheter un diagnostic qui
+existait avant le premier.
+
+**Ce qui ne traverse jamais.** Le JSON brut, le prompt, la reponse du fournisseur, les en-tetes,
+la cle, une trace. Ce n'est pas un filtre : `ArchitectTurnDiagnostic` n'a aucun champ ou les
+mettre, et rien ne va les chercher ailleurs. Les seules valeurs citees sont des nombres que NOX a
+calcules lui-meme.
+
+### D-397 — Un depassement de budget n'est pas une erreur de format
+
+**Decision.** `ARCHITECT_UPDATE_TOO_LARGE` devient un code a part. La phrase associee dit que
+relancer ne changera rien, et nomme les deux nombres en cause.
+
+**Justification.** `checkProviderProjectUpdate` a deux refus — un champ invalide, et un budget
+depasse — et les deux tombaient dans `ARCHITECT_OUTPUT_INVALID`. Or un depassement de budget n'est
+pas une violation de contrat : la reponse etait **parfaitement formee**, et NOX refuse de
+l'ecrire parce que le brief et le plan cumules depasseraient seize Kio.
+
+Deux consequences, et la seconde est la plus couteuse. D'abord la phrase envoyait chercher un
+probleme de format qui n'existait pas. Ensuite elle conseillait « relancez la generation » sur un
+refus **deterministe** : la meme demande produit le meme refus, indefiniment. C'est le seul cas de
+figure du pilote ou deux echecs consecutifs identiques s'expliquent entierement.
+
+**Ce qu'elle ne change pas.** Le refus lui-meme. Le budget reste a seize Kio, mesure sur l'etat
+resultant, et aucune proposition hors bornes n'est persistee — stocker une proposition impossible
+a appliquer offrirait un bouton condamne a echouer.
+
+### D-398 — Une reponse interrompue se distingue d'une reponse malformee
+
+**Decision.** Le fournisseur declare `status` et `incomplete_details` ; NOX les lit desormais, et
+rend `ARCHITECT_RESPONSE_INCOMPLETE`. L'incompletude est examinee **avant** le texte.
+
+**Justification.** Une reponse coupee arrivait ici comme un `output_text` vide, et devenait
+« format invalide ». Le fournisseur disait pourtant lui-meme qu'il n'avait pas fini — et c'est une
+information que NOX jetait.
+
+L'ordre compte : une reponse tronquee peut porter un debut de JSON parfaitement lisible jusqu'a sa
+coupure. L'analyser produirait soit une erreur de syntaxe imputee au contrat, soit — pire — un
+objet partiel accepte par hasard.
+
+Le motif rapporte n'est recopie que s'il ressemble a un identifiant du contrat du fournisseur :
+court, minuscule, sans espace. NOX ne persiste pas une chaine arbitraire venue du reseau.
+
+**La consigne change avec la cause.** « Relancez » pour un contrat viole, « relancez ou
+raccourcissez » pour une reponse coupee, « relancer ne changera rien » pour un budget depasse.
+
+### D-399 — La phrase d'echec parle de l'operation qui a echoue
+
+**Decision.** `describeArchitectError` accepte une operation — conversation, planification,
+review — et rend une phrase adaptee. Le code d'erreur, lui, reste unique et stable.
+
+**Justification.** `ARCHITECT_OUTPUT_INVALID` disait « Aucune tache n'a ete creee », quelle que
+soit la surface. Le pilote a lu cette phrase deux fois en demandant un ajustement du Living V1
+Plan : aucune tache n'etait en jeu, et le message envoyait chercher un backlog qui n'existait pas.
+
+**Pourquoi une table de phrases plutot que des codes par surface.** Parce que le probleme est un
+probleme d'**affichage**. Multiplier les codes ferait diverger la classification — celle qui
+decide, celle qui s'enregistre, celle qui se relit — pour resoudre une question de vocabulaire.
+
+La table est volontairement minuscule : seuls les codes dont le texte parle de ce qui a ete
+**produit** y figurent. Un delai depasse et une cle refusee se decrivent pareil partout.
+
+**Ce qu'elle ne change pas.** La formulation d'origine reste exacte la ou elle decrit ce qui s'est
+reellement passe : une planification qui echoue ne cree aucune tache, et le dire est utile.
+
+### D-400 — Le message soumis survit a un echec, et l'ecran le dit
+
+**Decision.** Aucun changement de comportement. Des tests fixent la semantique, et la phrase
+d'echec de la conversation annonce desormais que le message est conserve.
+
+**Justification.** `finishArchitectGeneration` n'efface le brouillon que lorsque le tour a abouti,
+et c'etait deja un choix delibere : « sinon l'utilisateur perdrait son texte a cause d'une panne
+qui ne lui appartient pas ». La garantie existait donc, complete.
+
+Ce qui manquait est qu'elle etait **invisible**. Apres deux echecs, le pilote ne pouvait pas
+savoir si son message avait survecu — et le seul moyen de le verifier etait de reecrire le texte.
+Une garantie que l'utilisateur ne peut pas observer ne le rassure pas.
+
+**Ce qu'elle ecarte.** Toute duplication du message ailleurs. Il est deja durable dans
+`ArchitectSession.pendingMessageText` ; en ecrire une seconde copie creerait deux verites.
+
+### D-401 — L'empreinte affichee est celle du contexte projet, et sa stabilite est attendue
+
+**Decision.** Aucun changement de semantique. Une phrase a l'ecran dit ce que l'empreinte couvre,
+et des tests fixent le comportement.
+
+**Justification.** Le pilote a vu six tours consecutifs porter `194b2de3c931` avec des messages
+differents, et s'est demande si NOX envoyait un contexte perime.
+
+Il n'en etait rien. `architectContextFingerprint` couvre le brief, le plan, les documents, la
+memoire et les taches recentes — **jamais** la conversation, et c'est deliberé : sans cela, chaque
+message ferait dire « le projet a change ». Sa stabilite entre deux tours est exactement ce qu'on
+attend d'elle, et son changement entre les tours 3 et 4 signalait un vrai changement du projet.
+
+L'empreinte qui couvre le message en attente existe — `architectTurnFingerprint` — et n'est pas
+affichee : elle sert a refuser un envoi parti d'un onglet perime.
+
+**Ce qui a ete corrige.** Rien du calcul. Un affichage qui ne dit pas ce qu'il montre finit par
+faire soupconner un bug la ou le code est juste, et c'est un cout reel.
+
+
+### D-402 — Les bornes des listes du plan sont annoncees au fournisseur
+
+**Decision.** La section « Comment remplir une mise a jour » du prompt annonce desormais les
+bornes des listes du brief et du plan, en interpolant `PROJECT_PLAN_LIMITS` — la constante que le
+validateur utilise. Elle demande de fusionner plutot que d'ajouter quand une section approche de
+sa borne, et separe une regle produit durable d'un detail de specification. `architect/4` devient
+`architect/7`, `architect/6` devient `architect/8`.
+
+**Justification.** Le tour 10 du pilote TicketPulse, rejouant la demande qui avait echoue deux
+fois, a nomme la cause grace au diagnostic de D-396 :
+
+```text
+projectUpdate.plan.inScope — refuse : too_many
+```
+
+Le validateur borne chaque liste a vingt entrees. Le prompt ne l'annoncait **nulle part**, et
+disait meme l'inverse : « Si tu veux ajouter une etape au plan, rends le plan complet avec cette
+etape en plus ». Sur un plan deja fourni et cinq decisions nouvelles, cette consigne franchit la
+borne a coup sur, et le refus est deterministe.
+
+Le commentaire de `buildArchitectTurnSchema` decrivait pourtant deja la conception : le mode
+strict d'OpenAI ignore `maxItems`, donc « les bornes vivent a deux endroits qui, eux, existent :
+les instructions du prompt les annoncent, et `readArchitectTurn` les fait respecter ». Les autres
+sections le font — titre, questions, longueur de commande interpolent leurs constantes. La mise a
+jour du projet etait la seule section bornee dont le fournisseur ne savait rien.
+
+**Pourquoi la borne n'a pas ete relevee.** Vingt entrees par liste est raisonnable, et le cas
+TicketPulse le confirme : ses cinq decisions se disent en deux entrees consolidees. Un plan qui
+demande plus de vingt lignes de perimetre n'est plus un plan, c'est une specification — et une
+specification appartient aux taches, ou elle peut etre aussi precise que necessaire. Relever la
+borne aurait deplace le probleme d'un cran et rendu le Living V1 Plan illisible.
+
+**Ce qui ne change pas.** Le validateur, au caractere pres. Aucune troncature, aucun rejet
+silencieux d'entrees en trop, aucune acceptation partielle : une section hors bornes refuse la
+mise a jour entiere. Le schema ne bouge pas non plus — `architect/7` parle toujours le schema 3 —
+donc `readArchitectTurn` accepte exactement ce qu'il acceptait.
+
+**Deux etiquettes plutot qu'une.** Les deux jeux d'instructions coexistent en service : un projet
+sans backlog applique ne recoit pas les consignes de replanification. Leur donner la meme
+etiquette ferait dire a une generation qu'elle a recu des regles qu'elle n'a pas vues.
+
+### D-403 — Une categorie regroupe, un code constate
+
+**Decision.** L'historique des tours affiche le libelle et la consigne du **code** enregistre
+quand il en existe un, et retombe sur ceux de la categorie sinon.
+
+**Justification.** `PROVIDER_ERROR` regroupe cinq codes : delai depasse, quota, cle refusee,
+contexte trop grand, panne generique. S'en servir comme libelle a efface une information que la
+base portait toujours — le second pilote a vu ses tours 5 et 6, persistes en `ARCHITECT_TIMEOUT`,
+se mettre a afficher « Panne du fournisseur / Rien n'a ete recu de lisible ». C'etait une
+regression d'affichage introduite par D-396, et elle a ete corrigee dans le meme correctif.
+
+La consigne comptait autant que le libelle : « relancez dans un moment » est faux pour une cle
+refusee et pour un contexte trop grand, qui ne se corrigent pas en patientant.
+
+**Ce qu'elle ecarte.** Toute reconstruction. Une ligne sans diagnostic n'en recoit pas un apres
+coup, et aucune ligne ancienne n'a ete modifiee : les tours 8 et 9 du pilote gardent leur
+`errorCode` sans champ ni phrase, et l'ecran dit ce qu'il sait — pas davantage.

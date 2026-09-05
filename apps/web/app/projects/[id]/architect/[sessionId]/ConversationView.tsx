@@ -14,6 +14,7 @@ import {
   listArchitectSessionTasks,
   listReplanProposalsForSession,
   loadReplanPlanningState,
+  type ArchitectGenerationView,
   type ArchitectSessionView,
   type Project,
 } from "@nox/database";
@@ -38,6 +39,10 @@ import {
   architectOpeningMessage,
   type ComposerSession,
 } from "@/lib/architect/composer";
+import {
+  CONTEXT_FINGERPRINT_NOTICE,
+  architectDiagnosticView,
+} from "@/lib/architect/diagnostic-display";
 import { architectModelLine, proposalToFormValues } from "@/lib/architect/display";
 import { PROJECT_ARCHITECT_GREETING } from "@/lib/architect/greeting";
 import { loadRecentArchitectTasks } from "@/lib/architect/recent-tasks";
@@ -680,6 +685,11 @@ function GenerationHistory({ session }: { session: ArchitectSessionView }) {
                   ? ""
                   : ` · contexte ${generation.contextFingerprint.slice(0, 12)}`}
               </p>
+              {/* La cause de l'echec, enregistree depuis HOTFIX-003. Un tour
+                  anterieur n'en porte aucune, et n'affiche donc rien : NOX ne
+                  reconstruit pas apres coup une cause que personne n'a
+                  persistee. */}
+              <FailureDetail generation={generation} />
             </li>
           ))}
         </ul>
@@ -688,6 +698,38 @@ function GenerationHistory({ session }: { session: ArchitectSessionView }) {
         NOX n&apos;estime aucun cout : seuls les chiffres rapportes par le fournisseur sont
         affiches, et « non fourni » veut dire ce qu&apos;il dit.
       </p>
+      <p className="mt-2 text-xs leading-relaxed text-zinc-600">{CONTEXT_FINGERPRINT_NOTICE}</p>
     </SectionCard>
+  );
+}
+
+/**
+ * Pourquoi un tour a echoue, quand NOX l'a enregistre.
+ *
+ * Trois informations, et l'ordre compte : la nature du probleme, ou il se
+ * situe, puis quoi faire. C'est exactement ce qui manquait au second pilote
+ * reel — deux tours echoues sur la meme phrase generique, sans aucun moyen d'en
+ * apprendre plus qu'en payant un troisieme appel.
+ */
+function FailureDetail({ generation }: { generation: ArchitectGenerationView }) {
+  const view = architectDiagnosticView(generation.diagnostic, generation.errorCode);
+  if (view === null) {
+    return null;
+  }
+
+  return (
+    <div className="mt-1 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs leading-relaxed">
+      <p className="text-zinc-300">{view.category}</p>
+      {view.fieldLabel === null && view.fieldPath === null ? null : (
+        <p className="mt-1 text-zinc-400">
+          {view.fieldLabel}
+          {view.fieldPath === null ? null : (
+            <span className="ml-2 font-mono text-[11px] text-zinc-600">{view.fieldPath}</span>
+          )}
+        </p>
+      )}
+      {view.message === null ? null : <p className="mt-1 text-zinc-500">{view.message}</p>}
+      <p className="mt-1 text-zinc-600">{view.guidance}</p>
+    </div>
   );
 }

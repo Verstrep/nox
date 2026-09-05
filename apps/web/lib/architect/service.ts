@@ -34,6 +34,7 @@
  */
 
 import {
+  ARCHITECT_DIAGNOSTIC_FIELD,
   ARCHITECT_ERROR,
   ARCHITECT_GENERATION_STATUS,
   ARCHITECT_LIMITS,
@@ -78,7 +79,7 @@ import {
 } from "../replan/planning-context.ts";
 import { prepareArchitectGeneration, type PreparedArchitectGeneration } from "./prepare.ts";
 import { checkProviderProjectUpdate } from "./project-update.ts";
-import type { ArchitectProvider } from "./provider.ts";
+import type { ArchitectProvider, ArchitectProviderDiagnostic } from "./provider.ts";
 import { architectTranscript } from "./transcript.ts";
 
 /**
@@ -542,7 +543,10 @@ async function dispatchArchitectTurn(
   const generationId = reserved.generation.id;
 
   /** Conclut le tour en echec, sans jamais laisser le verrou pose. */
-  const fail = async (code: ArchitectErrorCode): Promise<SendTurnOutcome> => {
+  const fail = async (
+    code: ArchitectErrorCode,
+    diagnostic?: ArchitectProviderDiagnostic,
+  ): Promise<SendTurnOutcome> => {
     await finishArchitectGeneration(db, {
       generationId,
       status:
@@ -550,6 +554,11 @@ async function dispatchArchitectTurn(
           ? ARCHITECT_GENERATION_STATUS.REFUSED
           : ARCHITECT_GENERATION_STATUS.FAILED,
       errorCode: code,
+      // Present uniquement quand une reponse a ete recue et refusee : une panne
+      // de transport n'a aucun champ fautif, et en inventer un ferait chercher
+      // une erreur de contrat la ou le reseau a laché.
+      errorField: diagnostic?.field ?? null,
+      errorDetail: diagnostic?.message ?? null,
       // Aucun message : le tour n'a pas eu lieu. Le brouillon survit, et la
       // conversation ne montre ni question restee sans reponse, ni fausse
       // reponse d'architecte.
@@ -575,7 +584,7 @@ async function dispatchArchitectTurn(
   }
 
   if (!result.ok) {
-    return fail(result.code);
+    return fail(result.code, result.diagnostic);
   }
 
   const validated = readArchitectTurn(
@@ -591,6 +600,11 @@ async function dispatchArchitectTurn(
   if (!validated.ok) {
     // La reponse respectait le schema strict et reste inacceptable : c'est
     // exactement le cas que la validation metier existe pour attraper.
+    //
+    // Ce que le validateur sait est desormais **enregistre**, comme pour la
+    // planification depuis HOTFIX-001. Sans cela, relancer un tour etait le
+    // seul moyen d'apprendre ce que NOX savait deja — c'est-a-dire de payer un
+    // second appel pour lire un diagnostic qui existait avant le premier.
     console.error(
       "[nox] Tour Architecte refuse :",
       validated.refusal.field,
@@ -602,6 +616,8 @@ async function dispatchArchitectTurn(
       providerResponseId: result.value.responseId,
       usage: result.value.usage,
       errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+      errorField: validated.refusal.field,
+      errorDetail: validated.refusal.message,
     });
     return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
   }
@@ -627,14 +643,35 @@ async function dispatchArchitectTurn(
     );
     if (!check.ok) {
       console.error("[nox] Mise a jour de projet refusee :", check.reason);
+
+      // Un depassement de budget n'est **pas** une violation de contrat. La
+      // reponse etait bien formee ; elle demandait a ecrire plus que ce que NOX
+      // accepte de stocker. Le presenter comme une erreur de format envoyait
+      // chercher au mauvais endroit, et relancer n'y changeait rien : le refus
+      // est deterministe, et c'est la demande qu'il faut raccourcir.
+      //
+      // C'est le cas que le second pilote reel a rencontre deux fois de suite.
+      const budget = check.reason === "budget";
+      const code = budget
+        ? ARCHITECT_ERROR.ARCHITECT_UPDATE_TOO_LARGE
+        : ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID;
+      // Les deux nombres sont calcules par NOX, jamais recopies de la reponse.
+      const detail = budget
+        ? `Le brief et le plan proposes occuperaient ${String(check.used)} caracteres, ` +
+          `pour un budget commun de ${String(check.limit)}. Raccourcissez le plan, ou ` +
+          "demandez a l'architecte une mise a jour plus courte."
+        : "La mise a jour de projet proposee ne respecte pas le contrat de NOX.";
+
       await finishArchitectGeneration(db, {
         generationId,
         status: ARCHITECT_GENERATION_STATUS.FAILED,
         providerResponseId: result.value.responseId,
         usage: result.value.usage,
-        errorCode: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+        errorCode: code,
+        errorField: budget ? ARCHITECT_DIAGNOSTIC_FIELD.BUDGET : `projectUpdate.${check.field}`,
+        errorDetail: detail,
       });
-      return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
+      return { ok: false, code };
     }
 
     projectUpdate = {
