@@ -1131,3 +1131,60 @@ doit le dire explicitement et la justifier.
   `tasks/<code>.md` en est une projection à sens unique, sans case cochée et sans résultat.
   L'agent a pour consigne de ne pas le modifier, et la review **dit** qu'il l'a fait le cas
   échéant — sans rien bloquer, puisque le contrat, lui, n'a pas bougé.
+
+### 8.23 Lisibilite et observabilite
+
+- **Un statut se reconnait avant d'etre lu.** Une tache terminee est verte, un blocage et un
+  echec sont rouges, une review est ambre, un brouillon reste neutre. `accent` — le teal de
+  NOX — ne designe que ce qui se passe **en ce moment** : lui faire dire aussi « prete » et
+  « terminee » le rendait muet.
+- **La couleur n'est jamais la seule information.** Chaque pastille rend son libelle. `Blocked`
+  et `Failed` partagent volontairement un ton, parce qu'ils appellent la meme reaction ; ce qui
+  les distingue est leur texte, et il doit le rester.
+- **Aucun compteur d'avancement n'est stocke.** Repartitions, totaux et metriques se recalculent
+  a chaque rendu, a partir des lignes qui font autorite. Un compteur mis en cache deviendrait
+  faux a la premiere tache rouverte, et rien ne le signalerait.
+- **Une repartition par statut a un seul ordre**, celui du workflow, dans `task-display.ts`.
+  Deux tables d'ordre finiraient par raconter deux avancements differents du meme projet.
+- **Toute surface qui peut engager un appel Architecte affiche le modele resolu avant le clic.**
+  Le premier pilote a genere un backlog entier avec un modele que son utilisateur croyait avoir
+  remplace : la valeur n'apparaissait qu'apres l'appel, dans l'historique. La provenance est
+  dite avec le modele — « defaut NOX » et « vous l'avez impose » ne se lisent pas pareil.
+- **L'affichage et l'appel partagent une seule resolution.** Deux fonctions qui repondraient
+  differemment feraient annoncer un modele et en engager un autre, ce qui serait pire que de ne
+  rien annoncer. `EffectiveArchitectConfiguration` ne porte pas la cle : elle n'entre pas dans
+  un rendu, donc elle ne peut pas en sortir.
+- **L'historique n'est jamais reecrit pour afficher la configuration du jour.** Une generation
+  dit le modele qu'elle a reellement utilise ; la pastille dit celui du prochain appel. Deux
+  notions, deux affichages.
+- **Rendre visible n'est pas rendre configurable.** Aucun selecteur de modele, aucune page de
+  reglages, aucune ecriture dans `.env` : changer de modele reste une variable d'environnement,
+  c'est-a-dire une decision prise hors de l'interface.
+- **Inspect Run repond a « qu'est-ce que NOX a observe », et rien d'autre.** Lecture seule,
+  entierement en base : ni repository, ni runner, ni fournisseur, aucune commande relancee,
+  aucun formulaire, aucun bouton d'ecriture. Rien n'y est calcule qui ne soit deja persiste.
+- **Aucune valeur d'environnement, cle, jeton, en-tete, trace d'exception ni chemin absolu n'y
+  entre.** Ce n'est pas un filtre de sortie : ces valeurs ne figurent dans aucune des lectures
+  de la page. Le diagnostic d'une panne est celui que le runner ecrit a partir du seul code
+  systeme, jamais le message de Node qui porterait le chemin de l'executable.
+- **Toutes les tentatives de validation sont affichees, de la premiere a la derniere.** Une
+  reprise reussie n'efface pas la panne qui l'a precedee — c'etait la seule ligne qui expliquait
+  l'echec du premier pilote. L'ordre est croissant, contrairement au reste de NOX : ici on
+  raconte, on ne decide pas.
+- **Ce que Claude Code a lance reste informatif, et le dit.** La section porte un avertissement
+  permanent : seules les commandes que NOX a executees lui-meme valent preuve. `NOT_RUN` s'y
+  ecrit « aucune execution litterale observee », jamais « non lancee » — la seconde formulation
+  affirme plus que ce que NOX sait.
+- **Les metriques d'un projet sont des faits, jamais un score.** Chaque nombre correspond a des
+  lignes qu'on peut aller compter a la main. Aucun taux d'autonomie n'est calcule : NOX ne sait
+  pas combien de fois quelqu'un a clique, et un pourcentage precis serait cite d'autant plus
+  volontiers qu'il serait faux.
+- **Un rapport s'ecrit en fraction, jamais en pourcentage.** `1 / 2` montre son denominateur ;
+  `50 %` le cache, et rend `1 / 2` indiscernable de `500 / 1000`. Aucune division n'a lieu, donc
+  aucun `NaN` ne peut apparaitre.
+- **`null` n'est pas zero.** « Aucun cout rapporte » et « zero dollar » sont deux affirmations
+  differentes. NOX n'estime aucun cout, ne consulte aucun catalogue de prix, et affiche
+  « non rapporte » quand un fournisseur n'a rien rapporte.
+- **Un travail valide et sa livraison portent deux pastilles distinctes.** `Done` en vert et
+  `Delivery failed` en rouge se lisent cote a cote : un push refuse ne transforme pas une
+  implementation validee en echec, et une pastille unique mentirait forcement sur l'un des deux.

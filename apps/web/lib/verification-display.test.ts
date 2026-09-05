@@ -61,8 +61,14 @@ describe("libelles d'une commande executee", () => {
     assert.notEqual(autonomousStatusTone("TIMED_OUT"), autonomousStatusTone("ERROR"));
   });
 
-  it("ne rend une reussite qu'en accent", () => {
-    assert.equal(autonomousStatusTone("PASSED"), "accent");
+  it("rend une reussite dans le ton d'une tache terminee", () => {
+    // `accent` — le teal de NOX — jusqu'a TASK-034, ou il a ete reserve a ce qui
+    // se passe **en ce moment**. Une preuve obtenue n'est pas une activite en
+    // cours : elle porte le meme vert qu'une tache terminee, parce que c'est la
+    // meme nouvelle.
+    assert.equal(autonomousStatusTone("PASSED"), "success");
+    assert.notEqual(autonomousStatusTone("PASSED"), autonomousStatusTone("FAILED"));
+    assert.notEqual(autonomousStatusTone("PASSED"), autonomousStatusTone("ERROR"));
   });
 });
 

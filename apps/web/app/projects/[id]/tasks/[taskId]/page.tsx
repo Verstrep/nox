@@ -27,6 +27,7 @@ import {
   deliveryPolicyLabel,
   deliveryRefusalLabel,
   deliveryStateLabel,
+  deliveryStatusTone,
   deliveryUrl,
   noDeliveryNotice,
 } from "@/lib/delivery-display";
@@ -508,11 +509,19 @@ export default async function TaskDetailPage({
               </Link>
             }
           >
-            <p className="text-sm text-zinc-200">
-              {delivery === null
-                ? "Aucune livraison enregistrée pour ce travail."
-                : deliveryStateLabel(delivery.status, delivery.errorCode)}
-            </p>
+            {/* Une pastille a part, et volontairement : la tache porte deja la
+                sienne en haut de page. Un travail validé dont le push a échoué
+                doit se lire « Done » **et** « Delivery failed » — deux faits,
+                deux couleurs, jamais un seul verdict. */}
+            {delivery === null ? (
+              <p className="text-sm text-zinc-200">
+                Aucune livraison enregistrée pour ce travail.
+              </p>
+            ) : (
+              <StatusBadge tone={deliveryStatusTone(delivery.status)}>
+                {deliveryStateLabel(delivery.status, delivery.errorCode)}
+              </StatusBadge>
+            )}
             <p className="mt-1 text-sm text-zinc-400">
               {deliveryPolicyLabel(delivery?.policy ?? deliveryPolicy)}
               {delivery?.commitSha == null ? "" : ` · ${delivery.commitSha.slice(0, 12)}`}

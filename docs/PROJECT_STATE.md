@@ -1056,9 +1056,9 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `TASK-033` : `7b539a4`
-  (`fix: support Windows autonomous validation`), contenant `HOTFIX-002`.
-- `TASK-033` reste **local**, non indexé et non commité.
+- Commit de départ de `TASK-034` : `1225543`
+  (`feat: harden autonomous project workflow`), contenant `TASK-033`.
+- `TASK-034` reste **local**, non indexé et non commité.
 
 ---
 
@@ -1176,3 +1176,56 @@ par un humain sur d'autres tâches du projet. Deviner les scripts d'un `package.
 construire un catalogue d'écosystèmes que NOX refuse d'entretenir. Par ailleurs, une dépendance
 proposée par le backlog ne peut désigner qu'une tâche du même backlog : une dépendance vers une
 tâche **existante** se pose à la main après l'application, avec l'éditeur de TASK-024.
+
+---
+
+## 11. TASK-034 — ergonomie et observabilité, après le premier pilote
+
+`TASK-033` a rendu le workflow plus autonome. Cette tâche traite ce qu'on peut en **voir**, et
+uniquement cela : lisibilité des statuts, visibilité du modèle Architecte, utilité d'Inspect Run,
+métriques d'activité. Elle ne modifie aucune règle métier — ni file, ni dépendances, ni
+complétion, ni livraison, ni rafraîchissement, ni contrat de fournisseur.
+
+**Les statuts se reconnaissent avant d'être lus.** `success` et `info` rejoignent la palette : une
+tâche terminée est verte, un blocage et un échec sont rouges, une review est ambre, un brouillon
+reste neutre. `accent` — le teal de NOX — ne désigne plus que ce qui se passe en ce moment, ce qui
+est exactement ce qu'il fallait pour que « prête », « en cours » et « terminée » cessent de se
+ressembler. La couleur n'est jamais seule : chaque pastille rend son libellé. Voir
+[D-390](DECISIONS.md) et [D-391](DECISIONS.md).
+
+**Le modèle du prochain appel s'affiche avant le clic.** Conversation projet, génération de
+backlog et analyse de review annoncent le modèle résolu, son effort de raisonnement quand NOX en
+demande un, et d'où vient cette valeur. La résolution est celle de l'appel lui-même — un test le
+vérifie — et l'objet affiché ne porte pas la clé. Aucun sélecteur, aucune page de réglages :
+TASK-034 rend visible, elle ne rend pas configurable. Voir [D-392](DECISIONS.md).
+
+**Inspect Run répond à « qu'est-ce que NOX a observé ».** Résumé d'exécution, toutes les
+tentatives de validation avec leurs diagnostics, ce que Claude Code a lancé, l'état de livraison
+Git, la chaîne de corrections. Rien n'a été produit pour l'occasion : le champ qui expliquait le
+`VALIDATION_SPAWN_FAILED` du pilote existait depuis HOTFIX-002 et n'avait aucune surface. La page
+reste en lecture seule et ne charge pas le compte rendu final de l'agent. Voir
+[D-393](DECISIONS.md).
+
+**L'activité d'un projet se lit en quelques chiffres.** Travail, vérification, décisions humaines,
+consommation — chaque nombre est un `count` ou une somme sur des lignes réellement persistées.
+Aucun taux d'autonomie n'est calculé : un « 87 % » aurait l'air d'une mesure, se serait fait
+citer, et aurait été faux. Un rapport s'écrit en fraction, `null` n'est jamais affiché comme zéro,
+et aucun prix n'est estimé. Voir [D-394](DECISIONS.md).
+
+**Un travail validé et sa livraison portent deux pastilles.** `Done` en vert et `Delivery failed`
+en rouge se lisent côte à côte : la règle existait depuis TASK-033, l'écran ne la montrait pas.
+Voir [D-395](DECISIONS.md).
+
+**Aucune migration.** Toutes les métriques se dérivent de modèles existants ; `migrate diff` rend
+une migration vide. Aucune colonne n'a été ajoutée pour l'affichage — ce serait fabriquer une
+seconde vérité à côté de celle qui existe, et la première divergence serait invisible.
+
+**Limites connues.** Trois métriques ont été volontairement omises faute de donnée fiable : le
+nombre de messages échangés avec l'Architecte n'est pas un indicateur d'autonomie et n'est pas
+présenté comme tel ; les jetons ne sont pas ventilés par surface, parce que quatre petits nombres
+répondraient moins bien qu'un seul ; et le temps humain n'est mesuré nulle part, ni estimé. Par
+ailleurs, la sortie d'une commande de validation reste bornée sans être réécrite : Inspect affiche
+exactement les octets que la review affiche déjà, et un outil qui imprime son propre chemin absolu
+l'imprime dans les deux.
+
+**Ce qui vient ensuite n'est pas une `TASK-035`.** C'est un second vrai pilote.

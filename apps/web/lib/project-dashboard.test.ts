@@ -37,7 +37,6 @@ import {
   projectCard,
   projectExecutionBadge,
   sortProjectCards,
-  taskBreakdown,
   taskTotalLabel,
   waitingLabel,
   type ProjectCard,
@@ -123,36 +122,6 @@ describe("bootstrapCardLabel", () => {
     assert.equal(bootstrapCardLabel(TASK_STATUS.RUNNING), "Running");
     assert.equal(bootstrapCardLabel(TASK_STATUS.REVIEW), "Review");
     assert.equal(bootstrapCardLabel(TASK_STATUS.COMPLETED), "Done");
-  });
-});
-
-describe("taskBreakdown", () => {
-  it("omet les statuts vides", () => {
-    const breakdown = taskBreakdown(counts({ COMPLETED: 2, DRAFT: 5 }));
-    assert.deepEqual(breakdown, [
-      { status: TASK_STATUS.COMPLETED, count: 2 },
-      { status: TASK_STATUS.DRAFT, count: 5 },
-    ]);
-  });
-
-  it("suit l'ordre du workflow, pas celui de l'enum", () => {
-    const breakdown = taskBreakdown(
-      counts({ DRAFT: 1, READY: 1, RUNNING: 1, REVIEW: 1, COMPLETED: 1 }),
-    );
-    assert.deepEqual(
-      breakdown.map((entry) => entry.status),
-      [
-        TASK_STATUS.COMPLETED,
-        TASK_STATUS.REVIEW,
-        TASK_STATUS.RUNNING,
-        TASK_STATUS.READY,
-        TASK_STATUS.DRAFT,
-      ],
-    );
-  });
-
-  it("rend une liste vide pour un projet sans tache", () => {
-    assert.deepEqual(taskBreakdown(counts()), []);
   });
 });
 

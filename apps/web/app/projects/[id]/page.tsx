@@ -1,5 +1,6 @@
 import { ARCHITECT_SESSION_KIND, TASK_STATUS } from "@nox/shared";
 import {
+  collectProjectMetrics,
   findProjectArchitectSession,
   getBlockingDelivery,
   getDatabaseClient,
@@ -32,8 +33,17 @@ import {
   planUrl,
 } from "@/lib/plan-display";
 import { loadStructuredState } from "@/lib/project-plan";
+import {
+  METRICS_NOTICE,
+  costRows,
+  humanDecisionRows,
+  verificationRows,
+  workRows,
+  type MetricRow,
+} from "@/lib/project-metrics-display";
 import { loadProject, loadQueue } from "@/lib/projects";
-import { countTasksByStatus } from "@/lib/task-display";
+import { formatReportedCost } from "@/lib/run-display";
+import { breakdownLabel, countTasksByStatus, taskBreakdown, taskStatusTone } from "@/lib/task-display";
 
 import {
   deliveryPolicyLabel,
@@ -44,6 +54,32 @@ import {
 } from "@/lib/delivery-display";
 import { queueStateLabel, queueUrl } from "@/lib/queue-display";
 import { loadProjectTasks } from "@/lib/tasks";
+
+/**
+ * Un bloc de compteurs.
+ *
+ * Chaque valeur est deja formatee par `project-metrics-display.ts` : une case
+ * ne recoit jamais un nombre brut, parce que « non rapporte » est une reponse
+ * possible et qu'un `0` a sa place mentirait.
+ */
+function MetricGroup({ title, rows }: { title: string; rows: readonly MetricRow[] }) {
+  return (
+    <div>
+      <h3 className="text-xs uppercase tracking-wider text-zinc-600">{title}</h3>
+      <dl className="mt-3 flex flex-col gap-3">
+        {rows.map((entry) => (
+          <div key={entry.label}>
+            <dt className="text-xs text-zinc-500">{entry.label}</dt>
+            <dd className="mt-0.5 text-sm font-medium text-zinc-200">{entry.value}</dd>
+            {entry.detail === null ? null : (
+              <p className="text-xs text-zinc-600">{entry.detail}</p>
+            )}
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
 
 function TaskCount({ label, value }: { label: string; value: number }) {
   return (
@@ -122,6 +158,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // repository, et n'y ecrit evidemment rien.
   const deliveryPolicy = await readProjectDeliveryPolicy(getDatabaseClient(), project.id);
   const blockingDelivery = await getBlockingDelivery(getDatabaseClient(), project.id);
+
+  // Un lot d'agregats, emis ensemble, jamais une requete par tache. Rien n'est
+  // mis en cache : ces nombres se recalculent a chaque rendu, ce qui est la
+  // seule facon qu'ils restent vrais apres une reouverture ou une correction.
+  const metrics = await collectProjectMetrics(db, project.id);
 
   const backlog = await loadProjectBacklogView(project.id);
   const backlogState: BacklogSurfaceState =
@@ -337,6 +378,39 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               value={taskCounts[TASK_STATUS.BLOCKED]}
             />
           </dl>
+
+          {/* La repartition complete, dans l'ordre du workflow et sans les
+              statuts vides. Les trois chiffres ci-dessus repondent a « combien
+              de travail reste » ; cette ligne repond a « ou en est-il ». */}
+          {taskBreakdown(taskCounts).length === 0 ? null : (
+            <ul className="mt-5 flex flex-wrap items-center gap-2 border-t border-zinc-800 pt-4">
+              {taskBreakdown(taskCounts).map((entry) => (
+                <li key={entry.status}>
+                  <StatusBadge tone={taskStatusTone(entry.status)}>
+                    {breakdownLabel(entry)}
+                  </StatusBadge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Project activity"
+          description="Ce que ce projet a réellement produit, décidé et consommé."
+        >
+          <div className="grid gap-8 sm:grid-cols-2">
+            <MetricGroup title="Travail" rows={workRows(metrics)} />
+            <MetricGroup title="Vérification" rows={verificationRows(metrics)} />
+            <MetricGroup title="Décisions humaines" rows={humanDecisionRows(metrics)} />
+            <MetricGroup title="Consommation" rows={costRows(metrics, formatReportedCost)} />
+          </div>
+
+          {/* Affiche, et pas seulement ecrit dans le code : quelqu'un finira par
+              citer un de ces nombres, et il doit savoir ce qu'il ne dit pas. */}
+          <p className="mt-6 max-w-prose border-t border-zinc-800 pt-4 text-xs leading-relaxed text-zinc-500">
+            {METRICS_NOTICE}
+          </p>
         </SectionCard>
 
         <SectionCard

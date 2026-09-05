@@ -21,6 +21,41 @@ import type { ArchitectSourceStatus } from "../labels.ts";
 import type { TaskFormValues } from "../task-input.ts";
 
 /** Page des sessions Architecte d'un projet. */
+/**
+ * Le modele du prochain appel, en une ligne : « gpt-5.6-sol · reasoning high ».
+ *
+ * Compose ici plutot que dans le JSX, comme toutes les autres pastilles de
+ * NOX : plusieurs enfants React produiraient des separateurs de commentaire
+ * dans le HTML rendu, et la ligne cesserait d'etre cherchable — dans un test
+ * comme dans un navigateur.
+ *
+ * L'effort n'apparait que lorsque NOX en demande un. Ecrire « reasoning
+ * default » pour un modele impose laisserait croire que NOX en a choisi un ;
+ * il n'en demande aucun, parce qu'il ne connait pas les capacites de ce
+ * modele-la.
+ */
+export function architectModelLine(configuration: {
+  model: string;
+  reasoningEffort: string | null;
+}): string {
+  return configuration.reasoningEffort === null
+    ? configuration.model
+    : `${configuration.model} · reasoning ${configuration.reasoningEffort}`;
+}
+
+/**
+ * D'ou vient le modele affiche.
+ *
+ * Le premier pilote reel a genere un backlog entier avec un modele que son
+ * utilisateur croyait avoir remplace. Nommer la variable quand elle est active
+ * est ce qui rend la difference verifiable : « c'est le defaut de NOX » et
+ * « c'est ce que vous avez impose » ne se lisent pas pareil, et l'ecran ne doit
+ * jamais faire passer l'un pour l'autre.
+ */
+export function architectModelSourceLabel(source: "default" | "environment"): string {
+  return source === "environment" ? "NOX_ARCHITECT_MODEL" : "Défaut NOX";
+}
+
 export function architectUrl(projectId: string): string {
   return `/projects/${projectId}/architect`;
 }

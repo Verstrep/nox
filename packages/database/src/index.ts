@@ -437,3 +437,7 @@ export type {
   ClaimVerificationRefreshResult,
   VerificationRefreshRow,
 } from "./verification-refresh.js";
+
+export { collectProjectMetrics } from "./project-metrics.js";
+
+export type { ProjectMetrics } from "./project-metrics.js";

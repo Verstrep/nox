@@ -62,8 +62,14 @@ function OutputBlock({
   );
 }
 
-/** Une commande executee par NOX, avec tout ce qu'elle a produit. */
-function ValidationResult({ result }: { result: AutonomousValidationResultRow }) {
+/**
+ * Une commande executee par NOX, avec tout ce qu'elle a produit.
+ *
+ * Exportee depuis TASK-034 : Inspect Run affiche les memes lignes, et une
+ * seconde implementation aurait fini par montrer un code de sortie ici et une
+ * duree la. Ce composant est la seule facon dont NOX rend une preuve.
+ */
+export function ValidationResult({ result }: { result: AutonomousValidationResultRow }) {
   return (
     <li className="rounded-md border border-zinc-800 bg-zinc-950/40 px-4 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-3">

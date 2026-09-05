@@ -2,7 +2,6 @@ import Link from "next/link";
 
 import { formatDateTime } from "@/lib/format";
 import {
-  breakdownLabel,
   executionBadgeLabel,
   executionTone,
   taskTotalLabel,
@@ -10,7 +9,7 @@ import {
   type ProjectCard as Card,
 } from "@/lib/project-dashboard";
 import { queuedCountLabel } from "@/lib/queue-display";
-import { taskStatusTone } from "@/lib/task-display";
+import { breakdownLabel, taskStatusTone } from "@/lib/task-display";
 
 import { StatusBadge } from "./StatusBadge";
 

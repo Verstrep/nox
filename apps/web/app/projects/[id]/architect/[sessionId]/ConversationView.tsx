@@ -21,6 +21,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import process from "node:process";
 
+import { ArchitectModelBadge } from "@/components/ArchitectModelBadge";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { loadTimelineProjectChanges } from "@/lib/replan/change";
@@ -29,13 +30,15 @@ import {
   ARCHITECT_ENVIRONMENT_VARIABLES,
   ARCHITECT_OPTIONAL_ENVIRONMENT_VARIABLES,
   loadArchitectConfig,
+  nextArchitectConfiguration,
+  type EffectiveArchitectConfiguration,
 } from "@/lib/architect/config";
 import {
   architectComposerTitle,
   architectOpeningMessage,
   type ComposerSession,
 } from "@/lib/architect/composer";
-import { proposalToFormValues } from "@/lib/architect/display";
+import { architectModelLine, proposalToFormValues } from "@/lib/architect/display";
 import { PROJECT_ARCHITECT_GREETING } from "@/lib/architect/greeting";
 import { loadRecentArchitectTasks } from "@/lib/architect/recent-tasks";
 import { prepareArchitectTurn, type PrepareTurnResult } from "@/lib/architect/service";
@@ -98,6 +101,10 @@ export async function ArchitectConversation({
   }
 
   const config = loadArchitectConfig(process.env);
+  // Ce que le **prochain** appel utilisera, sans la cle. Resolu par la meme
+  // fonction que l'appel lui-meme : l'ecran ne peut pas annoncer un modele et
+  // en engager un autre.
+  const architectConfiguration = nextArchitectConfiguration();
   const isProject = session.kind === ARCHITECT_SESSION_KIND.PROJECT;
   // Une conversation projet n'est jamais `APPLIED` : creer une tache n'y met pas
   // fin. Ce drapeau ne concerne donc que le modele historique.
@@ -166,7 +173,11 @@ export async function ArchitectConversation({
     prepared,
     configured: config.ok,
     missingConfig: config.ok ? [] : config.missing,
-    model: config.ok ? config.config.model : "modele non configure",
+    // Le modele est resolu meme sans cle : c'est bien celui qui serait
+    // utilise. Ce qui manque alors est l'autorisation d'appeler, et c'est
+    // `configured` qui le porte — pas le nom du modele.
+    model: architectModelLine(architectConfiguration),
+    architectConfiguration,
     backHref,
     backLabel,
   };
@@ -186,6 +197,7 @@ type SurfaceProps = {
   configured: boolean;
   missingConfig: readonly string[];
   model: string;
+  architectConfiguration: EffectiveArchitectConfiguration;
   backHref: string;
   backLabel: string;
 };
@@ -208,6 +220,7 @@ function ProjectChat({
   configured,
   missingConfig,
   model,
+  architectConfiguration,
   backHref,
   backLabel,
 }: SurfaceProps) {
@@ -236,6 +249,9 @@ function ProjectChat({
           <span className="font-mono text-xs text-zinc-600">{session.code}</span>
           <span className="truncate text-xs text-zinc-600">{project.name}</span>
         </div>
+        {/* Envoyer un message engage un appel : le modele qui le traitera se lit
+            avant le clic, et non dans l'historique une fois la facture payee. */}
+        <ArchitectModelBadge configuration={architectConfiguration} />
       </header>
 
       {configured ? null : (

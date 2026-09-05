@@ -7,21 +7,32 @@ import { RunnerStatusBadge } from "@/components/RunnerStatusBadge";
 import { TaskRow } from "@/components/TaskRow";
 import { taskStatusLabel } from "@/lib/labels";
 import { loadProject } from "@/lib/projects";
-import { backlogUrl, countTasksByStatus, readStatusFilter } from "@/lib/task-display";
+import {
+  backlogUrl,
+  countTasksByStatus,
+  readStatusFilter,
+  taskSummaryLine,
+} from "@/lib/task-display";
 import { loadProjectDependencyCounts, loadProjectTasks, loadQueuedTaskIds } from "@/lib/tasks";
 
 /**
- * Statuts proposes comme filtres.
+ * Statuts proposes comme filtres, dans l'ordre du workflow.
  *
- * `RUNNING`, `FAILED` et `REVIEW` en sont absents : aucune tache ne peut les
- * porter tant que NOX ne lance pas Claude Code, et offrir un filtre qui ne
- * renvoie jamais rien laisse croire a une fonctionnalite qui n'existe pas.
+ * `RUNNING`, `REVIEW` et `FAILED` en etaient absents parce que NOX ne lancait
+ * pas encore Claude Code : un filtre qui ne renvoie jamais rien laisse croire a
+ * une fonctionnalite qui n'existe pas. Ils existent depuis longtemps, et le
+ * premier pilote reel a passe ses taches par les trois. Les omettre revenait a
+ * cacher exactement les lignes qu'on vient chercher : celle qui tourne, celle
+ * qui attend une decision, celle qui a echoue.
  */
 const FILTERABLE_STATUSES: readonly TaskStatus[] = [
-  TASK_STATUS.DRAFT,
-  TASK_STATUS.READY,
-  TASK_STATUS.BLOCKED,
   TASK_STATUS.COMPLETED,
+  TASK_STATUS.REVIEW,
+  TASK_STATUS.RUNNING,
+  TASK_STATUS.READY,
+  TASK_STATUS.DRAFT,
+  TASK_STATUS.BLOCKED,
+  TASK_STATUS.FAILED,
 ];
 
 function FilterLink({
@@ -78,6 +89,10 @@ export default async function ProjectTasksPage({
   // des entrees, jamais dans une colonne.
   const queuePositions = await loadQueuedTaskIds(project.id);
   const counts = countTasksByStatus(tasks);
+  // Derive au rendu, a partir des taches qui viennent d'etre lues. Rien n'est
+  // persiste, et rien n'est mis en cache : un compteur stocke deviendrait faux
+  // a la premiere tache rouverte.
+  const summary = taskSummaryLine(counts);
   const visible = statusFilter === null ? tasks : tasks.filter((task) => task.status === statusFilter);
 
   return (
@@ -102,6 +117,15 @@ export default async function ProjectTasksPage({
             </Link>
           </div>
         </div>
+
+        {summary === null ? null : (
+          <p className="text-xs text-zinc-500">
+            {/* Une seule chaine, et non `{count} {label}` par statut : plusieurs
+                enfants React produiraient des separateurs de commentaire dans le
+                HTML, et la ligne cesserait d'etre cherchable. */}
+            {summary}
+          </p>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           <FilterLink
@@ -151,7 +175,7 @@ export default async function ProjectTasksPage({
 
       <footer className="mt-auto border-t border-zinc-800 pt-6 text-xs text-zinc-600">
         Les taches sont enregistrees dans la base locale de NOX ; leur document Markdown est ecrit
-        dans le repository. Aucune tache n&apos;est executee : NOX ne lance pas encore Claude Code.
+        dans le repository. Une tache se lance depuis sa propre page, ou par la file du projet.
       </footer>
     </div>
   );

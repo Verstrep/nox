@@ -438,3 +438,45 @@ export function noDeliveryNotice(policy: DeliveryPolicy, hasDelivery: boolean): 
     : "La politique de ce projet écrit dans Git après une tâche validée, mais aucun candidat " +
         "n'a été enregistré pour ce travail. Ouvrez « Git delivery » pour savoir pourquoi.";
 }
+
+/**
+ * Ton d'affichage d'un etat de livraison.
+ *
+ * ## Pourquoi il n'existait pas avant
+ *
+ * Parce que l'etat de livraison s'affichait en texte simple, a cote d'une
+ * pastille verte disant `Done`. Le premier pilote reel n'a pas rencontre le
+ * probleme — sa livraison etait manuelle — mais la forme etait deja la : une
+ * tache **validee** dont le push a echoue devait pouvoir se lire d'un coup
+ * d'oeil comme « le travail est bon, la livraison ne l'est pas ».
+ *
+ * ## Ce que ce ton ne dit jamais
+ *
+ * Il ne decrit **que** la livraison. Le statut fonctionnel de la tache garde le
+ * sien, et les deux pastilles restent cote a cote sans jamais fusionner : un
+ * push refuse ne transforme pas un travail valide en echec, et une interface
+ * qui les peindrait de la meme couleur le laisserait croire.
+ */
+export function deliveryStatusTone(
+  status: DeliveryStatus,
+): "accent" | "success" | "muted" | "warn" | "danger" {
+  switch (status) {
+    case DELIVERY_STATUS.DELIVERED:
+    case DELIVERY_STATUS.COMMITTED:
+      // `COMMITTED` est un aboutissement sous `AUTO_COMMIT`, et une etape sous
+      // `AUTO_COMMIT_PUSH`. Le libelle dit laquelle ; le ton dit qu'aucune
+      // ecriture n'a echoue.
+      return "success";
+    case DELIVERY_STATUS.COMMITTING:
+    case DELIVERY_STATUS.PUSHING:
+      return "accent";
+    case DELIVERY_STATUS.FAILED:
+      return "danger";
+    case DELIVERY_STATUS.BLOCKED:
+      // Une precondition qui ne tenait pas : rien n'a ete ecrit, rien n'est
+      // casse, et un humain doit regarder. Ce n'est pas un echec d'ecriture.
+      return "warn";
+    case DELIVERY_STATUS.PENDING:
+      return "muted";
+  }
+}

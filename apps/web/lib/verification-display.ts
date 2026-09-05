@@ -32,8 +32,15 @@ import {
   type VerificationMode,
 } from "@nox/shared";
 
-/** Tons disponibles pour les pastilles de statut. */
-export type VerificationTone = "accent" | "muted" | "warn" | "danger";
+/**
+ * Tons disponibles pour les pastilles de statut.
+ *
+ * Sous-ensemble de `BadgeTone`, volontairement plus etroit : la verification
+ * n'a pas besoin du gris `neutral`, qui ne dirait rien de plus que `muted`.
+ * `success` y est entre en TASK-034, pour qu'une preuve obtenue se lise du meme
+ * vert qu'une tache terminee — c'est la meme nouvelle.
+ */
+export type VerificationTone = "accent" | "success" | "muted" | "warn" | "danger";
 
 /** Libelle d'une commande executee par NOX. */
 export function autonomousStatusLabel(status: AutonomousValidationStatus): string {
@@ -52,7 +59,7 @@ export function autonomousStatusLabel(status: AutonomousValidationStatus): strin
 export function autonomousStatusTone(status: AutonomousValidationStatus): VerificationTone {
   switch (status) {
     case AUTONOMOUS_VALIDATION_STATUS.PASSED:
-      return "accent";
+      return "success";
     case AUTONOMOUS_VALIDATION_STATUS.ERROR:
       return "warn";
     default:
@@ -79,7 +86,7 @@ export function batchStatusLabel(status: ValidationBatchStatus): string {
 export function batchStatusTone(status: ValidationBatchStatus): VerificationTone {
   switch (status) {
     case VALIDATION_BATCH_STATUS.PASSED:
-      return "accent";
+      return "success";
     case VALIDATION_BATCH_STATUS.FAILED:
       return "danger";
     case VALIDATION_BATCH_STATUS.ERROR:
@@ -106,7 +113,7 @@ export function criterionResultLabel(result: CriterionVerificationResult): strin
 export function criterionResultTone(result: CriterionVerificationResult): VerificationTone {
   switch (result) {
     case CRITERION_VERIFICATION_RESULT.PASSED:
-      return "accent";
+      return "success";
     case CRITERION_VERIFICATION_RESULT.FAILED:
       return "danger";
     case CRITERION_VERIFICATION_RESULT.NOT_VERIFIED:

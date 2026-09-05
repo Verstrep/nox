@@ -7,8 +7,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { ArchitectModelBadge } from "@/components/ArchitectModelBadge";
 import { SectionCard } from "@/components/SectionCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { nextArchitectConfiguration } from "@/lib/architect/config";
 import { architectUrl } from "@/lib/architect/display";
 import { loadBacklogInput, loadProjectBacklogView } from "@/lib/backlog";
 import {
@@ -118,6 +120,12 @@ export default async function ProjectBacklogPage({
   ]);
 
   const planDefined = structured.plan.present;
+
+  // Resolu cote serveur, a chaque rendu : c'est la meme resolution que celle de
+  // l'appel lui-meme, donc l'ecran ne peut pas annoncer un modele et en
+  // appeler un autre. Ne porte jamais la cle — seulement sa presence, et la
+  // page ne touche pas elle-meme a l'environnement.
+  const architectConfiguration = nextArchitectConfiguration();
 
   // La fraicheur n'est calculee que si elle sert : une proposition en attente.
   // `null` veut dire « je ne sais pas », et la page le dit.
@@ -257,6 +265,11 @@ export default async function ProjectBacklogPage({
                   les taches deja enregistrees et la documentation du repository, puis proposera le
                   backlog des taches restantes.
                 </p>
+                {/* Le modele du prochain appel, resolu cote serveur. Le pilote
+                    TripKit a genere un backlog entier avec un modele que son
+                    utilisateur croyait avoir remplace : il n'apparaissait
+                    qu'apres coup, dans l'historique. */}
+                <ArchitectModelBadge configuration={architectConfiguration} />
                 <GenerateBacklogButton projectId={project.id} />
                 <Link
                   href={backlogContextUrl(project.id)}

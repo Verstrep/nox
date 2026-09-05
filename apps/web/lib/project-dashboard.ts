@@ -27,6 +27,10 @@ import {
 
 import { deliveryPolicyLabel } from "./delivery-display.ts";
 import { taskStatusLabel } from "./labels.ts";
+// La repartition par statut vit dans `task-display.ts` depuis TASK-034 : la
+// liste des taches l'affiche desormais aussi, et un second ordre finirait par
+// diverger de celui-ci.
+import { taskBreakdown } from "./task-display.ts";
 
 /** Faits d'un projet, tels que la couche de donnees les derive. */
 export type ProjectCardFacts = {
@@ -84,18 +88,25 @@ export type ProjectExecutionBadge = {
   detail: string | null;
 };
 
-/** Ton d'affichage d'un etat d'execution. */
+/**
+ * Ton d'affichage d'un etat d'execution.
+ *
+ * `BLOCKED` a quitte `warn` pour `danger` en TASK-034 : une attente et un
+ * incident ne se lisent pas pareil. Les deux `WAITING_*` restent `warn` — ils
+ * disent « quelqu'un doit agir », pas « quelque chose s'est mal passe ».
+ */
 export function executionTone(
   state: ProjectExecutionState,
-): "accent" | "neutral" | "muted" | "warn" {
+): "accent" | "neutral" | "muted" | "warn" | "danger" {
   switch (state) {
     case PROJECT_EXECUTION_STATE.RUNNING:
     case PROJECT_EXECUTION_STATE.CORRECTING:
     case PROJECT_EXECUTION_STATE.VALIDATING:
       return "accent";
+    case PROJECT_EXECUTION_STATE.BLOCKED:
+      return "danger";
     case PROJECT_EXECUTION_STATE.WAITING_REVIEW:
     case PROJECT_EXECUTION_STATE.WAITING_DELIVERY:
-    case PROJECT_EXECUTION_STATE.BLOCKED:
       return "warn";
     case PROJECT_EXECUTION_STATE.QUEUE_ACTIVE:
       return "neutral";
@@ -169,22 +180,6 @@ export type ProjectCard = {
  */
 export const CARD_SUMMARY_MAX_LENGTH = 180;
 
-/**
- * Ordre d'affichage de la repartition.
- *
- * Celui du workflow, pas celui de l'alphabet ni celui de l'enum : on lit une
- * ligne de gauche a droite comme on lit l'avancement d'un projet.
- */
-const BREAKDOWN_ORDER: readonly TaskStatus[] = [
-  TASK_STATUS.COMPLETED,
-  TASK_STATUS.REVIEW,
-  TASK_STATUS.RUNNING,
-  TASK_STATUS.READY,
-  TASK_STATUS.DRAFT,
-  TASK_STATUS.BLOCKED,
-  TASK_STATUS.FAILED,
-];
-
 /** Coupe un resume sans casser un mot, et signale la coupure. */
 export function cardSummary(summary: string | null): string | null {
   if (summary === null) {
@@ -211,33 +206,6 @@ export function cardSummary(summary: string | null): string | null {
  */
 export function bootstrapCardLabel(bootstrapStatus: TaskStatus | null): string {
   return bootstrapStatus === null ? "Not prepared" : taskStatusLabel(bootstrapStatus);
-}
-
-/**
- * Repartition des taches, statuts vides omis.
- *
- * Afficher « 0 Failed » sur chaque carte ferait sept colonnes de zeros et
- * noierait les deux chiffres qui comptent.
- */
-export function taskBreakdown(
-  counts: Record<TaskStatus, number>,
-): readonly { status: TaskStatus; count: number }[] {
-  return BREAKDOWN_ORDER.filter((status) => counts[status] > 0).map((status) => ({
-    status,
-    count: counts[status],
-  }));
-}
-
-/**
- * Une entree de la repartition, en un seul morceau de texte.
- *
- * Composee ici plutot que dans le JSX : `{count} {label}` produirait trois
- * enfants React, donc des separateurs de commentaire dans le HTML rendu. La
- * pastille se lit pareil, mais son texte cesse d'etre cherchable — dans un test
- * comme dans un navigateur.
- */
-export function breakdownLabel(entry: { status: TaskStatus; count: number }): string {
-  return `${String(entry.count)} ${taskStatusLabel(entry.status)}`;
 }
 
 /** « 6 Tasks », « 1 Task », « 0 Tasks » — jamais un etat vide technique. */

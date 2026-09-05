@@ -12,16 +12,32 @@ import { RUN_STATUS, isFinalRunStatus, type RunStatus } from "@nox/shared";
 
 import type { BadgeTone } from "@/components/StatusBadge";
 
+/**
+ * Ton de chaque statut d'execution.
+ *
+ * Aligne sur celui des taches depuis TASK-034, et pour la meme raison : `Failed`
+ * portait le gris d'un statut ordinaire, et une execution terminee le meme teal
+ * qu'une execution en cours. L'historique d'une tache melange les deux — il
+ * fallait lire chaque ligne pour savoir laquelle tournait encore.
+ *
+ * `accent` ne designe plus que ce qui **se passe en ce moment**. Une execution
+ * terminee prend `success`, et une execution en attente `info` : la seconde est
+ * disponible, elle n'est pas active.
+ *
+ * `CANCELLED` reste `muted` : un arret demande par un humain n'est pas un
+ * incident, et le peindre en rouge ferait chercher une panne la ou il n'y en a
+ * pas.
+ */
 const STATUS_TONES: Record<RunStatus, BadgeTone> = {
-  [RUN_STATUS.QUEUED]: "muted",
+  [RUN_STATUS.QUEUED]: "info",
   [RUN_STATUS.RUNNING]: "accent",
   // `accent` comme `RUNNING` : quelque chose se passe encore, et l'oeil doit le
   // voir. Le libelle, lui, dit lequel des deux.
   [RUN_STATUS.CANCELLING]: "accent",
-  [RUN_STATUS.BLOCKED]: "neutral",
-  [RUN_STATUS.FAILED]: "neutral",
+  [RUN_STATUS.BLOCKED]: "danger",
+  [RUN_STATUS.FAILED]: "danger",
   [RUN_STATUS.CANCELLED]: "muted",
-  [RUN_STATUS.COMPLETED]: "accent",
+  [RUN_STATUS.COMPLETED]: "success",
 };
 
 export function runStatusTone(status: RunStatus): BadgeTone {

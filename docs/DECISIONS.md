@@ -6091,3 +6091,167 @@ Une interface qui possède la bonne action et n'y mène pas équivaut à ne pas 
 **Ce qu'elle ne change pas.** Aucun nouveau chemin d'écriture Git : la surface de livraison reste
 la seule, et elle appelle le moteur unique de TASK-029. Ni `git add`, ni commit, ni push libre
 n'apparaissent dans un chemin d'interface.
+
+
+## TASK-034 — Ergonomie et observabilite, apres le premier pilote
+
+### D-390 — Un statut se reconnait avant d'etre lu
+
+**Decision.** `success` et `info` rejoignent la palette de `StatusBadge`. Une tache terminee
+passe en vert, un blocage et un echec en rouge, une review en ambre, une tache prete en bleu.
+`accent` — le teal de NOX — ne designe plus que ce qui se passe **en ce moment**.
+
+**Justification.** Le premier pilote reel a formule la demande directement : il fallait *lire*
+chaque pastille pour savoir ou en etait un projet. `COMPLETED` portait `muted`, le ton le plus
+efface de la palette ; `BLOCKED` et `FAILED` portaient le gris `neutral` d'un statut ordinaire.
+Les deux etats qu'on vient chercher dans une liste — ce qui est fini, ce qui est casse — etaient
+exactement les deux qui ne ressortaient pas.
+
+Reserver `accent` a l'activite en cours est le choix qui structure le reste. `READY` et
+`COMPLETED` le portaient aussi, ce qui faisait ressembler une tache en attente et une tache
+terminee a une tache en train de tourner. Un ton qui veut dire trois choses ne veut plus rien
+dire.
+
+**Ce qu'elle ecarte.** Un tableau multicolore. `DRAFT` reste neutre, `CANCELLED` reste attenue :
+un statut qui n'appelle aucune reaction ne doit pas attirer l'oeil, sans quoi la couleur cesse
+d'etre un signal pour devenir une decoration.
+
+**Ce qui ne change pas.** Aucun statut en base. La couleur n'est jamais la seule information :
+`StatusBadge` rend toujours son libelle, et `Blocked` et `Failed` — qui partagent volontairement
+un ton, parce qu'ils appellent la meme reaction — restent distingues par leur texte.
+
+### D-391 — L'ordre d'affichage des statuts a une seule autorite
+
+**Decision.** `taskBreakdown` et `breakdownLabel` quittent `project-dashboard.ts` pour
+`task-display.ts`, ou vit deja `countTasksByStatus`.
+
+**Justification.** La page d'accueil affichait une repartition par statut ; la liste des taches en
+affiche desormais une aussi. Deux tables d'ordre auraient tenu quelques semaines, puis auraient
+diverge — et deux ecrans auraient raconte deux avancements differents du meme projet, sans que
+rien ne le signale.
+
+**Ce qu'elle ne change pas.** L'ordre lui-meme, qui reste celui du workflow :
+`Done, Review, Running, Ready, Draft, Blocked, Failed`. On lit une ligne de gauche a droite comme
+on lit l'avancement d'un projet, et non dans l'ordre de l'enum ni dans celui des nombres — un
+classement par effectif changerait a chaque rendu.
+
+### D-392 — Le modele du prochain appel s'affiche avant le clic
+
+**Decision.** Les surfaces qui peuvent engager un appel Architecte — conversation projet,
+generation de backlog, analyse de review — affichent le modele **resolu**, son effort de
+raisonnement quand NOX en demande un, et d'ou vient cette valeur.
+
+**Justification.** Le premier pilote a genere `BACKLOG-002` en entier avec `gpt-5-mini` : la
+variable `NOX_ARCHITECT_MODEL` avait ete saisie sans etre enregistree. L'ecran n'a rien affirme de
+faux — il n'a rien dit du tout, et le modele n'est apparu qu'apres l'appel, dans l'historique.
+Une decision qui structure toute une V1 s'est ainsi prise sur un petit modele, et personne ne
+pouvait le voir avant de payer.
+
+**Pourquoi la provenance est affichee.** Annoncer `gpt-5.6-sol` sans dire d'ou vient cette valeur
+reproduirait le probleme a l'envers : quelqu'un qui a configure un modele doit voir le sien, et
+savoir que c'est le sien. `Défaut NOX` et `NOX_ARCHITECT_MODEL` ne se lisent pas pareil.
+
+**Pourquoi une resolution partagee.** `effectiveArchitectConfiguration` applique exactement la
+resolution de `loadArchitectConfig` — un test le verifie sur plusieurs valeurs. Deux resolutions
+qui repondraient differemment feraient afficher un modele et en appeler un autre, ce qui serait
+pire que de ne rien afficher.
+
+**Pourquoi un type separe.** `ArchitectConfig` porte la cle ; `EffectiveArchitectConfiguration` ne
+la porte pas. La seule facon de garantir qu'un secret ne fuit pas dans un rendu est de ne pas l'y
+faire entrer — meme regle que pour le texte des criteres en TASK-033, et pour la meme raison :
+une absence de chemin vaut mieux qu'un filtre. Une seconde fonction sans parametre,
+`nextArchitectConfiguration`, evite qu'une **page** nomme `process.env`.
+
+**Ce qu'elle ecarte.** Un selecteur de modele, une page de reglages, une liste deroulante
+d'effort, une ecriture dans `.env`. TASK-034 rend visible ; elle ne rend pas configurable. Changer
+de modele reste une variable d'environnement, c'est-a-dire une decision qu'on prend hors de
+l'interface.
+
+**Ce qu'elle ne change pas.** L'historique. `BACKLOG-001` continue de dire `gpt-5-mini` s'il a
+utilise `gpt-5-mini` : une generation enregistre le modele reellement employe, et la pastille
+annonce celui du prochain appel. Ce sont deux notions differentes, et elles doivent le rester.
+
+### D-393 — Inspect Run repond a « qu'est-ce que NOX a observe »
+
+**Decision.** Inspect Run recoit le resume d'execution, toutes les tentatives de validation
+autonome avec leurs diagnostics, ce que Claude Code a lance, l'etat de livraison Git et la chaine
+de corrections. Aucune donnee nouvelle n'est produite : tout etait deja en base.
+
+**Justification.** `TASK-001` de TripKit s'est terminee sur `VALIDATION_SPAWN_FAILED`. La page ne
+portait alors que le prompt et deux empreintes ; comprendre l'echec a demande de reproduire
+`spawn("npm")` a la main dans un terminal, pour retrouver un `ENOENT` que NOX connaissait deja et
+n'affichait nulle part.
+
+Le champ qui portait la reponse — `AutonomousValidationBatch.errorMessage`, ecrit par le runner a
+partir du seul code systeme depuis HOTFIX-002 — existait. Il n'avait simplement aucune surface.
+
+**Pourquoi les tentatives sont affichees dans l'ordre croissant.** C'est l'inverse du reste de
+NOX, ou la tentative courante prime parce que c'est elle qui decide. Ici on ne decide rien, on
+raconte : « la tentative 1 n'a pas pu demarrer, la tentative 2 est passee » se comprend d'un coup,
+la ou l'ordre inverse demande de remonter le temps. Aucune tentative n'est masquee — une reprise
+reussie n'efface pas la panne qui l'a precedee, et c'etait la seule ligne qui expliquait le
+probleme du pilote.
+
+**Pourquoi la section Claude Code porte un avertissement permanent.** Parce que les deux sections
+se ressemblent, portent les memes commandes, et qu'une seule prouve quelque chose. Une page de
+diagnostic est precisement l'endroit ou la distinction de TASK-027 serait oubliee. `NOT_RUN` s'y
+dit « aucune execution litterale observee », et jamais « non lancee » : le pilote a montre que la
+seconde formulation affirme plus que ce que NOX sait.
+
+**Ce qu'elle ecarte.** Un vidage de la base, une console d'administration, une trace d'exception,
+un chemin absolu, une variable d'environnement, le compte rendu final de Claude Code — les
+metadonnees structurees suffisent — et toute action. Inspect est en lecture seule : pas un
+formulaire, pas un bouton d'ecriture. Des tests lisent la **source** des deux modules pour le
+verifier, parce qu'une garantie verifiee sur un rendu se contourne au prochain champ ajoute.
+
+### D-394 — Des compteurs, jamais un score d'autonomie
+
+**Decision.** La page d'un projet affiche une section `Project activity` : travail, verification,
+decisions humaines, consommation. Chaque nombre est un `count` ou une somme sur des lignes
+reellement persistees. Aucun ratio synthetique n'est calcule.
+
+**Justification.** La vraie question de NOX n'est pas « Claude a-t-il reussi » — la review y
+repond deja — mais « combien de fois a-t-il fallu intervenir entre une idee et une V1 ». Le pilote
+a rendu cette question impossible a lire : l'information existait entierement, eparpillee dans
+neuf tables.
+
+**Pourquoi plusieurs compteurs plutot qu'un seul indicateur.** Parce qu'il n'existe aucune
+definition unique et fiable d'« une intervention humaine ». Accepter une review, confirmer un
+critere, forcer un passage et livrer a la main sont quatre gestes de poids differents ; les
+additionner produirait un total que personne ne saurait interpreter. Chacun de ces nombres, en
+revanche, correspond exactement a une ligne qu'on peut aller compter a la main — c'est la seule
+propriete qui compte pour une metrique.
+
+**Pourquoi pas de pourcentage.** Un « Autonomy 87 % » aurait l'air d'une mesure, se serait fait
+citer, et aurait ete faux — d'autant plus dangereux qu'il aurait ete precis. NOX ne sait pas
+combien de fois quelqu'un a clique, combien de temps il a passe a relire un diff, ni combien de
+messages il a reecrits. Quand un rapport est honnete — deux nombres qui comptent la meme
+population — il s'ecrit `1 / 2`, jamais `50 %` : une fraction montre son denominateur, et
+`1 / 2` ne merite pas la confiance de `500 / 1000`.
+
+**Pourquoi `null` plutot que zero.** « Aucun cout rapporte » et « zero dollar » sont deux
+affirmations differentes, et la seconde inventerait une gratuite. Chaque somme nullable porte son
+denominateur : le nombre de lignes qui ont reellement rapporte quelque chose.
+
+**Ce qu'elle ecarte.** Une migration — aucune colonne n'a ete ajoutee pour l'affichage —, un
+cache, une page Analytics globale, des graphiques, et toute estimation de prix a partir d'un
+catalogue externe. NOX affiche ce que les fournisseurs lui ont dit, et « non rapporté » quand ils
+n'ont rien dit.
+
+### D-395 — Un travail valide et sa livraison portent deux pastilles
+
+**Decision.** L'etat d'une livraison Git s'affiche en pastille, avec son propre ton, a cote — et
+jamais a la place — du statut fonctionnel de la tache.
+
+**Justification.** TASK-033 a etabli que le code produit valide et l'etat de livraison sont deux
+concepts distincts : un push refuse ne transforme jamais une implementation validee en echec.
+L'ecran, lui, affichait cet etat en texte simple sous une pastille verte `Done`. La regle etait
+juste dans le moteur et invisible a la lecture.
+
+`Done` en vert et `Delivery failed` en rouge, cote a cote, disent exactement ce qui s'est passe :
+le travail est bon, il n'est pas parti. Une seule pastille aurait forcement menti sur l'un des
+deux.
+
+**Ce qui ne change pas.** Aucune semantique de TASK-033. `BLOCKED` prend le ton `warn` et non
+`danger` : une precondition qui ne tenait pas n'a rien ecrit et n'a rien casse — c'est une attente,
+pas un incident.

@@ -4,9 +4,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import process from "node:process";
 
+import { ArchitectModelBadge } from "@/components/ArchitectModelBadge";
 import { SectionCard } from "@/components/SectionCard";
 import { WorkflowLink } from "@/components/WorkflowLink";
-import { ARCHITECT_ENVIRONMENT_VARIABLES, loadArchitectConfig } from "@/lib/architect/config";
+import {
+  ARCHITECT_ENVIRONMENT_VARIABLES,
+  loadArchitectConfig,
+  nextArchitectConfiguration,
+} from "@/lib/architect/config";
 import { formatChars } from "@/lib/architect/display";
 import {
   ARCHITECT_REVIEW_PRIVACY_NOTICE,
@@ -287,6 +292,11 @@ export default async function ArchitectReviewPage({
             restent consultables ci-dessous.
           </p>
         )}
+
+        {/* Analyser engage un appel : le modele se lit avant le clic. La meme
+            configuration sert la conversation, la planification et cette
+            analyse — une seule autorite, un seul affichage. */}
+        <ArchitectModelBadge configuration={nextArchitectConfiguration()} />
 
         <AnalyzeReviewForm
           projectId={id}

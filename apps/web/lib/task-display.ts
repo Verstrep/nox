@@ -18,18 +18,111 @@ import {
 
 import type { BadgeTone } from "@/components/StatusBadge";
 
+import { taskStatusLabel } from "./labels.ts";
+
+/**
+ * Ton de chaque statut de tache.
+ *
+ * ## Ce que le premier pilote reel a montre
+ *
+ * Son utilisateur devait lire chaque pastille pour savoir ou en etait son
+ * projet. `COMPLETED` s'affichait `muted` — le ton le plus efface de la
+ * palette — et `BLOCKED` comme `FAILED` portaient le gris `neutral` d'un statut
+ * ordinaire. Une liste de taches doit se **survoler** : ce qui est fini et ce
+ * qui est casse sont les deux choses qu'on y cherche, et c'etaient justement
+ * les deux qui ne ressortaient pas.
+ *
+ * ## Pourquoi ces tons-la
+ *
+ * `accent` — le teal de NOX — garde un seul role : quelque chose se passe en ce
+ * moment. Il reste donc a `RUNNING`, et le quitte partout ailleurs. `READY` le
+ * portait aussi, ce qui faisait ressembler une tache en attente a une tache en
+ * cours ; elle prend `info`, qui dit « disponible » sans dire « en train de ».
+ *
+ * `REVIEW` passe en `warn` parce que c'est le statut qui **demande quelque
+ * chose a un humain** : c'est la seule ligne d'une liste sur laquelle
+ * l'utilisateur doit agir lui-meme.
+ *
+ * La couleur n'est jamais seule : `StatusBadge` rend toujours le libelle, et
+ * c'est lui qui distingue `Blocked` de `Failed`, que le ton confond
+ * volontairement — les deux appellent la meme reaction.
+ */
 const STATUS_TONES: Record<TaskStatus, BadgeTone> = {
   [TASK_STATUS.DRAFT]: "muted",
-  [TASK_STATUS.READY]: "accent",
+  [TASK_STATUS.READY]: "info",
   [TASK_STATUS.RUNNING]: "accent",
-  [TASK_STATUS.BLOCKED]: "neutral",
-  [TASK_STATUS.FAILED]: "neutral",
-  [TASK_STATUS.REVIEW]: "neutral",
-  [TASK_STATUS.COMPLETED]: "muted",
+  [TASK_STATUS.BLOCKED]: "danger",
+  [TASK_STATUS.FAILED]: "danger",
+  [TASK_STATUS.REVIEW]: "warn",
+  [TASK_STATUS.COMPLETED]: "success",
 };
 
 export function taskStatusTone(status: TaskStatus): BadgeTone {
   return STATUS_TONES[status];
+}
+
+/**
+ * Ordre d'affichage d'une repartition par statut.
+ *
+ * Celui du workflow, pas celui de l'alphabet ni celui de l'enum : on lit une
+ * ligne de gauche a droite comme on lit l'avancement d'un projet.
+ *
+ * Il vit ici — et non dans le module du tableau de bord, ou il a ete ecrit —
+ * parce que la page d'accueil et la liste des taches affichent desormais la
+ * meme repartition. Deux ordres pour la meme information finiraient par
+ * diverger, et deux ecrans raconteraient alors deux avancements differents.
+ */
+const BREAKDOWN_ORDER: readonly TaskStatus[] = [
+  TASK_STATUS.COMPLETED,
+  TASK_STATUS.REVIEW,
+  TASK_STATUS.RUNNING,
+  TASK_STATUS.READY,
+  TASK_STATUS.DRAFT,
+  TASK_STATUS.BLOCKED,
+  TASK_STATUS.FAILED,
+];
+
+/**
+ * Repartition des taches, statuts vides omis.
+ *
+ * Afficher « 0 Failed » sur chaque carte ferait sept colonnes de zeros et
+ * noierait les deux chiffres qui comptent.
+ */
+export function taskBreakdown(
+  counts: Record<TaskStatus, number>,
+): readonly { status: TaskStatus; count: number }[] {
+  return BREAKDOWN_ORDER.filter((status) => counts[status] > 0).map((status) => ({
+    status,
+    count: counts[status],
+  }));
+}
+
+/**
+ * Une entree de la repartition, en un seul morceau de texte.
+ *
+ * Composee ici plutot que dans le JSX : `{count} {label}` produirait trois
+ * enfants React, donc des separateurs de commentaire dans le HTML rendu. La
+ * pastille se lit pareil, mais son texte cesse d'etre cherchable — dans un test
+ * comme dans un navigateur.
+ */
+export function breakdownLabel(entry: { status: TaskStatus; count: number }): string {
+  return `${String(entry.count)} ${taskStatusLabel(entry.status)}`;
+}
+
+/**
+ * L'avancement d'un projet, en une ligne : « 3 Done · 1 Running · 4 Draft ».
+ *
+ * Derivee des taches reelles a chaque rendu, comme tout le reste : aucun
+ * compteur n'est stocke, et il ne doit pas en apparaitre. Un total mis en cache
+ * deviendrait faux a la premiere tache rouverte, et le seul moyen de s'en
+ * apercevoir serait de le recalculer.
+ *
+ * `null` quand le projet n'a aucune tache : une ligne vide sous un titre
+ * n'apprend rien que la liste vide juste en dessous ne dise deja.
+ */
+export function taskSummaryLine(counts: Record<TaskStatus, number>): string | null {
+  const parts = taskBreakdown(counts).map(breakdownLabel);
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 /**

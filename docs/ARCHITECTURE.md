@@ -1668,3 +1668,6 @@ serait un changement d'architecture.
 | Une dépendance est un prérequis réel, jamais une chronologie | L'ordre recommande ; la dépendance refuse un lancement. Aucune n'est déduite d'un numéro ou d'un mot commun |
 | Ce que le fournisseur ne peut pas écrire ne peut pas arriver | Un contrat qui n'offre pas la place vaut mieux qu'une garde qui filtre après coup |
 | Un travail validé et son état de livraison sont deux faits | Un push refusé ne rend jamais une implémentation « échouée » |
+| Tout ce qui s'affiche se dérive | Aucun compteur d'avancement n'est stocké : un total mis en cache devient faux à la première tâche rouverte |
+| Ce qui est annoncé est ce qui sera appelé | L'affichage d'un modèle et l'appel partagent une seule résolution, et l'objet affiché ne porte pas la clé |
+| Une surface de diagnostic ne fait rien | Inspect Run lit la base, n'écrit pas, ne relance rien, et n'expose que ce qui y est déjà persisté |

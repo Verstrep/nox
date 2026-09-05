@@ -1,3 +1,5 @@
+import process from "node:process";
+
 /**
  * Configuration de l'Architecte, cote serveur uniquement.
  *
@@ -109,6 +111,85 @@ export function architectReasoningEffort(model: string): ArchitectReasoningEffor
 export type ArchitectConfigResult =
   | { ok: true; config: ArchitectConfig }
   | { ok: false; missing: string[] };
+
+/**
+ * Ce que le **prochain** appel utilisera, sans rien de secret.
+ *
+ * ## Pourquoi ce type existe separement de `ArchitectConfig`
+ *
+ * Parce que `ArchitectConfig` porte la cle. Un ecran qui veut annoncer un
+ * modele n'a aucune raison de manipuler un objet qui contient un secret : la
+ * seule facon de garantir qu'une cle ne fuit pas dans un rendu est de ne pas
+ * l'y faire entrer. C'est la meme regle que pour le texte des criteres en
+ * TASK-033 — l'absence de chemin, plutot qu'un filtre.
+ *
+ * ## Pourquoi `source`
+ *
+ * Le premier pilote reel a genere un backlog entier avec `gpt-5-mini`, parce
+ * que `NOX_ARCHITECT_MODEL` avait ete saisie sans etre enregistree. L'ecran
+ * n'avait pas menti — il ne disait rien du tout, et le modele n'apparaissait
+ * qu'**apres** l'appel, dans l'historique. Dire « gpt-5.6-sol » sans dire d'ou
+ * vient cette valeur reproduirait exactement le probleme a l'envers : un
+ * utilisateur qui a configure un modele doit voir le sien, et savoir que c'est
+ * le sien.
+ */
+export type EffectiveArchitectConfiguration = {
+  /** Le modele que le prochain appel utilisera. */
+  model: string;
+  /** L'effort demande, ou `null` : NOX n'en demande pas pour un modele impose. */
+  reasoningEffort: ArchitectReasoningEffort | null;
+  /** `environment` quand `NOX_ARCHITECT_MODEL` impose ce modele. */
+  source: "default" | "environment";
+  /** Faux quand la cle manque : aucun appel ne partira, quel que soit le modele. */
+  configured: boolean;
+};
+
+/**
+ * Resout ce que le prochain appel Architecte utilisera.
+ *
+ * Meme resolution que `loadArchitectConfig`, et c'est le point : deux fonctions
+ * qui repondraient differemment feraient afficher un modele et en appeler un
+ * autre. L'absence de cle ne change pas la reponse — elle change seulement
+ * `configured`, parce qu'un modele reste ce qui serait utilise une fois la cle
+ * renseignee.
+ *
+ * Ne retourne **jamais** la cle, ni un fragment, ni sa longueur, ni sa presence
+ * autrement que par ce booleen.
+ */
+export function effectiveArchitectConfiguration(
+  environment: Record<string, string | undefined>,
+): EffectiveArchitectConfiguration {
+  assertServerOnly();
+
+  const configured = environment["NOX_ARCHITECT_MODEL"]?.trim() ?? "";
+  const model = configured === "" ? DEFAULT_ARCHITECT_MODEL : configured;
+
+  return {
+    model,
+    reasoningEffort: architectReasoningEffort(model),
+    source: configured === "" ? "default" : "environment",
+    configured: (environment["NOX_OPENAI_API_KEY"]?.trim() ?? "") !== "",
+  };
+}
+
+/**
+ * Ce que le prochain appel utilisera, lu depuis l'environnement du serveur.
+ *
+ * ## Pourquoi une seconde fonction sans parametre
+ *
+ * Pour qu'aucune **page** n'ait a nommer `process.env`. Les surfaces qui
+ * affichent le modele sont des Server Components : elles pourraient lire
+ * l'environnement elles-memes, et c'est precisement ce qu'il faut leur
+ * interdire. Un fichier de page qui manipule `process.env` est un fichier ou
+ * quelqu'un finira par lire une variable de plus — et les tests de source de
+ * NOX refusent deja ce mot dans une page, pour cette raison exacte.
+ *
+ * La resolution reste entierement dans la fonction pure ci-dessus, qui est
+ * celle que les tests exercent avec un environnement injecte.
+ */
+export function nextArchitectConfiguration(): EffectiveArchitectConfiguration {
+  return effectiveArchitectConfiguration(process.env);
+}
 
 /**
  * Garde-fou : si ce module se retrouvait dans un bundle navigateur, l'erreur
