@@ -18,6 +18,7 @@
 import {
   ARCHITECT_CONVERSATION_VERSION,
   ARCHITECT_DIAGNOSTIC_LIMITS,
+  ARCHITECT_ERROR,
   ARCHITECT_GENERATION_STATUS,
   ARCHITECT_MESSAGE_ROLE,
   ARCHITECT_SESSION_KIND,
@@ -111,6 +112,17 @@ export type ArchitectGenerationView = {
   /** Tache creee depuis la proposition de ce tour, une fois seulement. */
   appliedTaskId: string | null;
   createdAt: string;
+  /** Instant de conclusion, `null` tant que le tour est en vol ou avant HOTFIX-004. */
+  finishedAt: string | null;
+  /**
+   * Duree reelle du tour, en millisecondes.
+   *
+   * **Derivee, jamais stockee** : deux colonnes et un ecart calcule finiraient
+   * par se contredire. `null` quand l'un des deux instants manque — une
+   * generation encore en vol, ou anterieure a HOTFIX-004. « Duree inconnue » est
+   * un etat, et le distinguer de « zero » est tout l'interet.
+   */
+  durationMs: number | null;
 };
 
 /** Une session, avec ses generations de la plus recente a la plus ancienne. */
@@ -176,6 +188,7 @@ type GenerationRow = {
   errorDetail: string | null;
   appliedTaskId: string | null;
   createdAt: Date;
+  finishedAt: Date | null;
 };
 
 type SessionRow = {
@@ -269,6 +282,9 @@ function toGeneration(row: GenerationRow): ArchitectGenerationView {
           }
         : null,
     appliedTaskId: row.appliedTaskId,
+    finishedAt: row.finishedAt === null ? null : row.finishedAt.toISOString(),
+    durationMs:
+      row.finishedAt === null ? null : row.finishedAt.getTime() - row.createdAt.getTime(),
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -891,6 +907,10 @@ const SESSION_STATUS_BY_GENERATION: Record<
   [ARCHITECT_GENERATION_STATUS.NEEDS_INPUT]: ARCHITECT_SESSION_STATUS.NEEDS_INPUT,
   [ARCHITECT_GENERATION_STATUS.REFUSED]: ARCHITECT_SESSION_STATUS.FAILED,
   [ARCHITECT_GENERATION_STATUS.FAILED]: ARCHITECT_SESSION_STATUS.FAILED,
+  // Un arret ne casse pas la conversation : elle reprend exactement la ou elle
+  // etait, avec le brouillon intact. `FAILED` ferait chercher une panne que
+  // personne n'a subie.
+  [ARCHITECT_GENERATION_STATUS.CANCELLED]: ARCHITECT_SESSION_STATUS.CONTINUE,
 };
 
 /**
@@ -936,9 +956,17 @@ export async function finishArchitectGeneration(
                 input.errorDetail,
                 ARCHITECT_DIAGNOSTIC_LIMITS.message,
               ),
+        // Pose ici, dans la transaction qui conclut : la duree mesuree est celle
+        // de l'appel, pas celle d'un rendu ulterieur.
+        finishedAt: new Date(),
       },
     });
     if (claimed.count !== 1) {
+      // Deja conclue. Depuis HOTFIX-004, ce n'est plus seulement un double appel
+      // improbable : c'est le chemin normal d'un resultat qui arrive apres un
+      // arret. Le `where` sur `RUNNING` est ce qui empeche une reponse tardive
+      // de ressusciter un tour que l'utilisateur a stoppe — et il le fait sans
+      // qu'aucun appelant ait a y penser.
       return null;
     }
 
@@ -1323,4 +1351,116 @@ export function architectProposalOfMessage(
 /** Taille du transcript, mesuree sur ce qui partirait reellement. */
 export function architectTranscriptChars(session: ArchitectSessionView): number {
   return session.messages.reduce((total, message) => total + message.content.length, 0);
+}
+
+// --- Arret d'un tour en vol ------------------------------------------------
+
+/** Ce qu'un arret a effectivement trouve. */
+export type CancelArchitectGenerationResult =
+  | { ok: true; generation: ArchitectGenerationView }
+  /** Aucune generation `RUNNING` : jamais commencee, ou deja conclue. */
+  | { ok: false; reason: "not_running" }
+  | { ok: false; reason: "not_found" };
+
+/**
+ * Conclut le tour en vol d'une session comme `CANCELLED`.
+ *
+ * ## Pourquoi la base est servie avant le reseau
+ *
+ * L'ordre est : conclure la ligne, **puis** abandonner la requete. L'inverse
+ * laisserait une fenetre ou la reponse du fournisseur arriverait entre
+ * l'abandon et l'ecriture, et serait acceptee — c'est-a-dire exactement la
+ * course que l'arret existe pour fermer.
+ *
+ * Ici, la mise a jour conditionnelle sur `RUNNING` tranche seule : soit l'arret
+ * l'obtient et le tour est arrete, soit la conclusion normale l'a devance et le
+ * tour a abouti. Il n'existe pas de troisieme issue, et aucun des deux chemins
+ * n'a besoin de connaitre l'autre.
+ *
+ * ## Ce qu'il ne fait pas
+ *
+ * Il n'ecrit aucun message. Un tour arrete n'a pas eu lieu : inscrire une
+ * fausse reponse d'architecte raconterait un echange qui n'existe pas. Et le
+ * brouillon est **conserve** — `CLEAR_PENDING_TURN` n'est pas applique — pour
+ * la meme raison qu'apres un echec : l'utilisateur ne doit pas perdre son texte
+ * parce qu'il a repris la main.
+ *
+ * Idempotent : un second arret rend `not_running` et n'ecrit rien.
+ */
+export async function cancelArchitectGeneration(
+  db: DatabaseClient,
+  input: { sessionId: string },
+): Promise<CancelArchitectGenerationResult> {
+  return db.$transaction(async (tx): Promise<CancelArchitectGenerationResult> => {
+    const session = await tx.architectSession.findUnique({
+      where: { id: input.sessionId },
+      select: { id: true },
+    });
+    if (session === null) {
+      return { ok: false, reason: "not_found" };
+    }
+
+    const running = await tx.architectGeneration.findFirst({
+      where: { sessionId: input.sessionId, status: ARCHITECT_GENERATION_STATUS.RUNNING },
+      orderBy: { sequence: "desc" },
+    });
+    if (running === null) {
+      return { ok: false, reason: "not_running" };
+    }
+
+    const claimed = await tx.architectGeneration.updateMany({
+      where: { id: running.id, status: ARCHITECT_GENERATION_STATUS.RUNNING },
+      data: {
+        status: ARCHITECT_GENERATION_STATUS.CANCELLED,
+        errorCode: ARCHITECT_ERROR.ARCHITECT_CANCELLED,
+        finishedAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1) {
+      // La conclusion normale a gagne la course, au millieme pres. Le tour a
+      // donc abouti, et l'arret n'a rien a defaire.
+      return { ok: false, reason: "not_running" };
+    }
+
+    // Le verrou de session est rendu, sans quoi la conversation resterait
+    // `GENERATING` pour toujours : c'est elle qui le porte.
+    await tx.architectSession.updateMany({
+      where: { id: input.sessionId, status: { not: ARCHITECT_SESSION_STATUS.APPLIED } },
+      data: { status: ARCHITECT_SESSION_STATUS.CONTINUE },
+    });
+
+    const row = await tx.architectGeneration.findUnique({ where: { id: running.id } });
+    return row === null
+      ? { ok: false, reason: "not_found" }
+      : { ok: true, generation: toGeneration(row) };
+  });
+}
+
+/** Le tour en vol d'une session, pour l'affichage du temps ecoule. */
+export type ActiveArchitectGeneration = {
+  id: string;
+  sequence: number;
+  /** Instant de reservation, autorite du chronometre affiche. */
+  startedAt: string;
+};
+
+/**
+ * La generation `RUNNING` d'une session, s'il y en a une.
+ *
+ * Volontairement pauvre : un identifiant, un numero, un instant. Ni modele, ni
+ * empreinte, ni manifest, ni contenu — cette lecture alimente un compteur de
+ * secondes, et rien de plus n'a a traverser jusqu'au navigateur.
+ */
+export async function getActiveArchitectGeneration(
+  db: DatabaseClient,
+  sessionId: string,
+): Promise<ActiveArchitectGeneration | null> {
+  const row = await db.architectGeneration.findFirst({
+    where: { sessionId, status: ARCHITECT_GENERATION_STATUS.RUNNING },
+    orderBy: { sequence: "desc" },
+    select: { id: true, sequence: true, createdAt: true },
+  });
+  return row === null
+    ? null
+    : { id: row.id, sequence: row.sequence, startedAt: row.createdAt.toISOString() };
 }

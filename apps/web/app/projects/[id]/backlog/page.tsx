@@ -25,6 +25,7 @@ import {
 } from "@/lib/backlog/display";
 import { BACKLOG_FAILURE_FOOTER, describeBacklogFailure } from "@/lib/backlog/failure";
 import { isBacklogProposalStale } from "@/lib/backlog/service";
+import { architectDurationLabel } from "@/lib/architect/duration";
 import { formatIsoDateTime } from "@/lib/format";
 import { planUrl } from "@/lib/plan-display";
 import { loadStructuredState } from "@/lib/project-plan";
@@ -366,6 +367,13 @@ export default async function ProjectBacklogPage({
                   </span>
                   <span className="text-xs text-zinc-600">
                     {formatIsoDateTime(generation.createdAt) ?? "-"}
+                  </span>
+                  {/* La duree reelle, depuis HOTFIX-004. C'est la surface qui a
+                      depasse deux fois le delai chez le second pilote sans que
+                      personne ne puisse dire combien de temps elle avait
+                      travaille. */}
+                  <span className="font-mono text-xs tabular-nums text-zinc-600">
+                    {architectDurationLabel(generation.durationMs) ?? "duree non enregistree"}
                   </span>
                   {failureDetail(generation)}
                 </li>

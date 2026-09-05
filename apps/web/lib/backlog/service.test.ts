@@ -43,6 +43,7 @@ import {
   type ProjectV1PlanInput,
 } from "@nox/shared";
 import {
+  cancelBacklogGeneration,
   createDatabaseClient,
   createProject,
   createProjectMemory,
@@ -62,8 +63,15 @@ import {
 } from "@nox/database";
 
 import {
+  abortArchitectCall,
+  activeArchitectCallCount,
+} from "../architect/cancellation.ts";
+import { ARCHITECT_HARD_TIMEOUT_MS } from "../architect/config.ts";
+import {
   FakeArchitectProvider,
   fakeProviderSuccess,
+  type ArchitectProvider,
+  type ArchitectProviderInput,
   type ArchitectProviderResult,
 } from "../architect/provider.ts";
 import type { ArchitectRepositoryPorts } from "../architect/service.ts";
@@ -1335,5 +1343,376 @@ describe("regression TripKit — un critere d'acceptation refuse", () => {
     });
 
     assert.equal(provider.backlogCalls[0]?.model, "gpt-5.6-sol");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOTFIX-004 — arreter une planification en vol
+// ---------------------------------------------------------------------------
+
+/**
+ * La surface exacte sur laquelle le second pilote reel a perdu deux appels.
+ *
+ * `Generate V1 backlog` a depasse le delai deux fois de suite, sur un projet
+ * dont le brief et le plan etaient substantiels, avec `gpt-5.6-sol` en
+ * raisonnement eleve. Rien a l'ecran ne disait depuis combien de temps la
+ * planification travaillait, et la seule issue etait de recharger la page — ce
+ * qui laissait la requete continuer.
+ *
+ * Ces tests fixent les trois garanties du correctif : un plafond genereux, un
+ * arret qui ferme reellement la requete, et **aucune proposition** derriere une
+ * planification arretee.
+ */
+class StoppableBacklogProvider implements ArchitectProvider {
+  readonly calls: ArchitectProviderInput[] = [];
+  readonly started: Promise<void>;
+
+  #announceStart!: () => void;
+  #respond: ((result: ArchitectProviderResult) => void) | null = null;
+
+  constructor() {
+    this.started = new Promise<void>((resolve) => {
+      this.#announceStart = resolve;
+    });
+  }
+
+  #call(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    this.calls.push(input);
+    return new Promise<ArchitectProviderResult>((resolve) => {
+      this.#respond = resolve;
+      input.signal?.addEventListener(
+        "abort",
+        () => {
+          resolve({ ok: false, code: ARCHITECT_ERROR.ARCHITECT_CANCELLED });
+        },
+        { once: true },
+      );
+      this.#announceStart();
+    });
+  }
+
+  generateTaskTurn(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+  analyzeRunReview(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+  generateBacklog(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+  refreshVerification(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+
+  respond(result: ArchitectProviderResult): void {
+    this.#respond?.(result);
+  }
+}
+
+/** Rejoue la route d'arret : la base d'abord, la requete ensuite. */
+async function stopBacklog(projectId: string): Promise<{ stopped: boolean; aborted: boolean }> {
+  const cancelled = await cancelBacklogGeneration(db, { projectId });
+  if (!cancelled.ok) {
+    return { stopped: false, aborted: false };
+  }
+  return { stopped: true, aborted: abortArchitectCall(cancelled.generation.id) };
+}
+
+describe("HOTFIX-004 — arreter une planification de backlog", () => {
+  it("recoit le plafond genereux, et aucune echeance propre", async () => {
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+
+    // Toujours en vol : rien cote NOX ne l'a interrompue.
+    const during = await loadProjectBacklog(db, project.id);
+    assert.equal(during.history[0]?.status, ARCHITECT_BACKLOG_GENERATION_STATUS.RUNNING);
+
+    provider.respond(respond(backlogPayload(["A", "B"])));
+    const generated = await pending;
+
+    assert.ok(generated.ok);
+    assert.equal(provider.calls[0]?.timeoutMs, ARCHITECT_HARD_TIMEOUT_MS);
+    assert.equal(provider.calls[0]?.timeoutMs > 90_000, true);
+  });
+
+  it("un arret ferme la requete et conclut en CANCELLED", async () => {
+    // Requirements 3 et 4.
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+
+    const result = await stopBacklog(project.id);
+    const generated = await pending;
+
+    assert.equal(result.stopped, true);
+    assert.equal(result.aborted, true);
+    assert.equal(provider.calls[0]?.signal?.aborted, true);
+
+    assert.equal(generated.ok, false);
+    assert.equal(
+      "code" in generated ? generated.code : null,
+      ARCHITECT_ERROR.ARCHITECT_CANCELLED,
+    );
+
+    const backlog = await loadProjectBacklog(db, project.id);
+    assert.equal(backlog.history[0]?.status, ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED);
+    assert.notEqual(backlog.history[0]?.status, ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED);
+  });
+
+  it("une planification arretee ne laisse aucune proposition et aucune tache", async () => {
+    // Requirement 6. Une proposition creee derriere un arret offrirait un
+    // bouton `Apply` sur un travail que personne n'a laisse finir.
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+    await stopBacklog(project.id);
+    await pending;
+
+    const backlog = await loadProjectBacklog(db, project.id);
+    assert.equal(backlog.pending, null);
+    assert.equal((await listTasksByProject(db, project.id)).length, 0);
+  });
+
+  it("un resultat arrive apres l'arret ne cree aucune proposition", async () => {
+    // Requirement 8. La proposition appartient a la transaction de conclusion :
+    // refuser celle-ci refuse aussi celle-la, sans qu'aucun appelant ait a y
+    // penser.
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+
+    const cancelled = await cancelBacklogGeneration(db, { projectId: project.id });
+    assert.ok(cancelled.ok);
+    provider.respond(respond(backlogPayload(["A", "B", "C"])));
+
+    const generated = await pending;
+
+    assert.equal(generated.ok, false);
+    assert.equal(
+      "code" in generated ? generated.code : null,
+      ARCHITECT_ERROR.ARCHITECT_CANCELLED,
+    );
+
+    const backlog = await loadProjectBacklog(db, project.id);
+    assert.equal(backlog.pending, null, "aucune proposition tardive");
+    assert.equal(backlog.history[0]?.status, ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED);
+    assert.equal((await listTasksByProject(db, project.id)).length, 0);
+  });
+
+  it("un arret rend le verrou : le projet reste replanifiable", async () => {
+    // Sans cela, un arret condamnerait le projet a ne plus jamais pouvoir
+    // relancer une planification.
+    const project = await newProject();
+    const premier = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider: premier,
+    });
+    await premier.started;
+    await stopBacklog(project.id);
+    await pending;
+
+    const second = new FakeArchitectProvider([respond(backlogPayload(["A"]))]);
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider: second,
+    });
+
+    assert.ok(generated.ok, "une seconde planification reste possible");
+  });
+
+  it("un second arret est idempotent", async () => {
+    // Requirement 9.
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+
+    const premier = await stopBacklog(project.id);
+    const second = await stopBacklog(project.id);
+    await pending;
+
+    assert.equal(premier.stopped, true);
+    assert.equal(second.stopped, false);
+    assert.equal(second.aborted, false);
+  });
+
+  it("un arret arrive apres la reussite ne defait rien", async () => {
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+    provider.respond(respond(backlogPayload(["A", "B"])));
+    const generated = await pending;
+    assert.ok(generated.ok);
+
+    const result = await stopBacklog(project.id);
+
+    assert.equal(result.stopped, false);
+
+    const backlog = await loadProjectBacklog(db, project.id);
+    assert.equal(backlog.history[0]?.status, ARCHITECT_BACKLOG_GENERATION_STATUS.READY);
+    assert.notEqual(backlog.pending, null, "la proposition obtenue reste");
+  });
+
+  it("le controleur est retire apres une reussite comme apres un arret", async () => {
+    // Requirements 10 et 13, du cote de la planification.
+    const avant = activeArchitectCallCount();
+
+    const abouti = await newProject();
+    const premier = new StoppableBacklogProvider();
+    const aboutiPending = generateProjectBacklog(db, {
+      ...(await inputFor(abouti)),
+      provider: premier,
+    });
+    await premier.started;
+    premier.respond(respond(backlogPayload(["A"])));
+    await aboutiPending;
+
+    assert.equal(activeArchitectCallCount(), avant);
+
+    const arrete = await newProject();
+    const second = new StoppableBacklogProvider();
+    const arretePending = generateProjectBacklog(db, {
+      ...(await inputFor(arrete)),
+      provider: second,
+    });
+    await second.started;
+    await stopBacklog(arrete.id);
+    await arretePending;
+
+    assert.equal(activeArchitectCallCount(), avant);
+  });
+
+  it("le controleur est retire apres une panne du fournisseur", async () => {
+    // Requirement 11.
+    const avant = activeArchitectCallCount();
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([
+      { ok: false, code: ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR },
+    ]);
+
+    await generateProjectBacklog(db, { ...(await inputFor(project)), provider });
+
+    assert.equal(activeArchitectCallCount(), avant);
+  });
+
+  it("le controleur est retire apres un plafond atteint", async () => {
+    // Requirement 12. Un delai depasse reste un delai depasse : il ne devient
+    // pas un arret parce que la requete a ete fermee.
+    const avant = activeArchitectCallCount();
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([
+      { ok: false, code: ARCHITECT_ERROR.ARCHITECT_TIMEOUT },
+    ]);
+
+    const generated = await generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+
+    assert.equal(activeArchitectCallCount(), avant);
+    assert.equal(generated.ok, false);
+    assert.equal("code" in generated ? generated.code : null, ARCHITECT_ERROR.ARCHITECT_TIMEOUT);
+
+    const backlog = await loadProjectBacklog(db, project.id);
+    assert.equal(backlog.history[0]?.status, ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED);
+    assert.notEqual(
+      backlog.history[0]?.status,
+      ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED,
+      "un plafond atteint n'est pas un arret",
+    );
+  });
+
+  it("une planification conclue enregistre sa duree", async () => {
+    const project = await newProject();
+    const provider = new FakeArchitectProvider([respond(backlogPayload(["A"]))]);
+
+    await generateProjectBacklog(db, { ...(await inputFor(project)), provider });
+
+    const backlog = await loadProjectBacklog(db, project.id);
+    assert.equal(typeof backlog.history[0]?.durationMs, "number");
+    assert.equal((backlog.history[0]?.durationMs ?? -1) >= 0, true);
+  });
+
+  it("une planification en vol n'a pas de duree, et pas zero", async () => {
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+
+    const during = await loadProjectBacklog(db, project.id);
+    assert.equal(during.history[0]?.durationMs, null);
+    assert.equal(during.history[0]?.finishedAt, null);
+
+    provider.respond(respond(backlogPayload(["A"])));
+    await pending;
+  });
+});
+
+describe("HOTFIX-004 — un arret pendant la validation garde le dernier mot", () => {
+  it("un backlog refuse apres un arret se lit comme un arret", async () => {
+    // Meme course que du cote de la conversation : la reponse arrive, elle est
+    // invalide, et l'arret a deja conclu la ligne. Le verdict enregistre fait
+    // foi, et la phrase rendue doit le suivre.
+    const project = await newProject();
+    const provider = new StoppableBacklogProvider();
+
+    const pending = generateProjectBacklog(db, {
+      ...(await inputFor(project)),
+      provider,
+    });
+    await provider.started;
+
+    const cancelled = await cancelBacklogGeneration(db, { projectId: project.id });
+    assert.ok(cancelled.ok);
+    // Un backlog vide : refuse par `readArchitectBacklogProposalV3`.
+    provider.respond(respond(backlogPayload([])));
+
+    const generated = await pending;
+
+    assert.equal(generated.ok, false);
+    assert.equal(
+      "code" in generated ? generated.code : null,
+      ARCHITECT_ERROR.ARCHITECT_CANCELLED,
+    );
+
+    const backlog = await loadProjectBacklog(db, project.id);
+    assert.equal(backlog.history[0]?.status, ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED);
+    assert.equal(backlog.pending, null);
   });
 });

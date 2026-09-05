@@ -274,6 +274,10 @@ const ARCHITECT_GENERATION_STATUS_LABELS: Record<ArchitectGenerationStatus, stri
   [ARCHITECT_GENERATION_STATUS.NEEDS_INPUT]: "Needs input",
   [ARCHITECT_GENERATION_STATUS.REFUSED]: "Refused",
   [ARCHITECT_GENERATION_STATUS.FAILED]: "Failed",
+  // « Stopped », et non « Cancelled » : `Cancel` designe deja, dans le
+  // composer, l'abandon d'un brouillon **qui n'est jamais parti**. Deux gestes
+  // differents ne partagent pas un mot.
+  [ARCHITECT_GENERATION_STATUS.CANCELLED]: "Stopped",
 };
 
 /**

@@ -71,7 +71,8 @@ import { listProjectDocuments, readProjectDocument } from "../runner/client.ts";
 import { describeRunnerFailure, type RunnerFailure } from "../runner/errors.ts";
 import { ARCHITECT_DOCUMENT_ALLOWLIST, type FetchedArchitectDocument } from "./context.ts";
 import { diffArchitectManifests, type ArchitectContextChange } from "./context-diff.ts";
-import { ARCHITECT_REQUEST_TIMEOUT_MS } from "./config.ts";
+import { registerArchitectAbort } from "./cancellation.ts";
+import { resolvedArchitectHardTimeoutMs } from "./config.ts";
 import {
   REPLAN_CONTEXT_ERROR,
   buildReplanPlanningContext,
@@ -547,6 +548,13 @@ async function dispatchArchitectTurn(
     code: ArchitectErrorCode,
     diagnostic?: ArchitectProviderDiagnostic,
   ): Promise<SendTurnOutcome> => {
+    if (code === ARCHITECT_ERROR.ARCHITECT_CANCELLED) {
+      // L'arret a **deja** conclu la ligne, verrou rendu et brouillon
+      // conserve, avant meme d'abandonner la requete. Reecrire ici serait au
+      // mieux inutile — la mise a jour conditionnelle refuserait — et au pire
+      // trompeur : ce tour n'a pas echoue, quelqu'un l'a arrete.
+      return { ok: false, code };
+    }
     await finishArchitectGeneration(db, {
       generationId,
       status:
@@ -566,6 +574,11 @@ async function dispatchArchitectTurn(
     return { ok: false, code };
   };
 
+  // Inscrit sous l'identifiant de la generation reservee : unique, attribue une
+  // seule fois, et deja ce que l'arret sait retrouver. Deux tours successifs ne
+  // peuvent donc pas partager un controleur.
+  const abort = registerArchitectAbort(generationId);
+
   let result;
   try {
     result = await input.provider.generateTaskTurn({
@@ -574,13 +587,18 @@ async function dispatchArchitectTurn(
       input: input.prepared.prompt.input,
       schemaName: ARCHITECT_SCHEMA_NAME,
       schema: buildArchitectTurnSchema(input.prepared.turnSchemaVersion),
-      timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
+      timeoutMs: resolvedArchitectHardTimeoutMs(),
+      signal: abort.signal,
     });
   } catch (error) {
     // Une exception inattendue du fournisseur ne doit pas remonter telle quelle :
     // elle porterait son URL et ses en-tetes.
     console.error("[nox] Echec inattendu du fournisseur Architecte :", error);
     return fail(ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR);
+  } finally {
+    // Reussite, panne, plafond atteint ou arret : le controleur part dans les
+    // quatre cas. Une entree oubliee ferait grossir la table sans fin.
+    abort.release();
   }
 
   if (!result.ok) {
@@ -610,7 +628,7 @@ async function dispatchArchitectTurn(
       validated.refusal.field,
       validated.refusal.message,
     );
-    await finishArchitectGeneration(db, {
+    const concluded = await finishArchitectGeneration(db, {
       generationId,
       status: ARCHITECT_GENERATION_STATUS.FAILED,
       providerResponseId: result.value.responseId,
@@ -619,7 +637,16 @@ async function dispatchArchitectTurn(
       errorField: validated.refusal.field,
       errorDetail: validated.refusal.message,
     });
-    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID };
+    // Rien n'a ete ecrit : la generation n'etait plus `RUNNING`, donc l'arret
+    // l'avait deja conclue. C'est **son** verdict qui est en base, et la phrase
+    // rendue a l'utilisateur doit dire la meme chose que la ligne enregistree.
+    return {
+      ok: false,
+      code:
+        concluded === null
+          ? ARCHITECT_ERROR.ARCHITECT_CANCELLED
+          : ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
+    };
   }
 
   const turn = validated.turn;
@@ -662,7 +689,7 @@ async function dispatchArchitectTurn(
           "demandez a l'architecte une mise a jour plus courte."
         : "La mise a jour de projet proposee ne respecte pas le contrat de NOX.";
 
-      await finishArchitectGeneration(db, {
+      const concluded = await finishArchitectGeneration(db, {
         generationId,
         status: ARCHITECT_GENERATION_STATUS.FAILED,
         providerResponseId: result.value.responseId,
@@ -671,7 +698,13 @@ async function dispatchArchitectTurn(
         errorField: budget ? ARCHITECT_DIAGNOSTIC_FIELD.BUDGET : `projectUpdate.${check.field}`,
         errorDetail: detail,
       });
-      return { ok: false, code };
+      // Meme raison qu'au-dessus : un arret arrive pendant la validation a deja
+      // conclu la ligne, et l'ecran ne doit pas annoncer un refus de contrat sur
+      // un tour que l'utilisateur a stoppe.
+      return {
+        ok: false,
+        code: concluded === null ? ARCHITECT_ERROR.ARCHITECT_CANCELLED : code,
+      };
     }
 
     projectUpdate = {
@@ -716,7 +749,15 @@ async function dispatchArchitectTurn(
   });
 
   if (generation === null) {
-    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR };
+    // La generation n'etait plus `RUNNING` : l'arret l'a conclue pendant que la
+    // reponse voyageait. Rien de ce tour n'a ete ecrit — ni message, ni mise a
+    // jour de projet, ni replanification — parce que tout appartenait a cette
+    // transaction, et que son `where` l'a refusee entiere.
+    //
+    // C'est la garantie centrale de HOTFIX-004 : un resultat tardif ne peut pas
+    // ressusciter un tour arrete, et la garantie vit dans l'ecriture plutot que
+    // dans la vigilance de cet appelant.
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CANCELLED };
   }
 
   return { ok: true, generation, turn };

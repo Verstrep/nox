@@ -1235,3 +1235,43 @@ doit le dire explicitement et la justifier.
 - **L'empreinte affichee couvre le contexte projet, jamais la conversation.** Sa stabilite d'un
   tour a l'autre est le comportement attendu, et non le signe d'un contexte perime. L'empreinte
   qui couvre le message en attente existe, s'appelle autrement, et decide d'un refus d'envoi.
+
+### 8.25 Attente, arret et duree d'un appel Architecte
+
+- **Quatre-vingt-dix secondes n'est plus l'echeance normale d'un appel.** Un travail d'Architecte
+  peut legitimement durer plusieurs minutes, et le second pilote reel l'a montre sur deux charges
+  differentes. Ce qui subsiste est un **plafond de securite** genereux, garde-fou contre une
+  requete reellement bloquee — jamais une duree attendue, jamais affiche.
+- **Une borne de temps d'attente n'est pas une borne de securite.** Les bornes de NOX ne se
+  desserrent pas depuis un `.env` parce qu'elles decident de ce qu'il accepte, enregistre ou
+  execute. Celle-ci dit seulement combien de temps NOX attend une reponse a une requete qu'il a
+  deja decide d'envoyer : la deplacer n'elargit aucune surface. Elle est bornee, et toute valeur
+  illisible retombe sur le defaut.
+- **Un arret ferme la requete, ou ne pretend pas l'avoir fait.** Marquer une ligne `CANCELLED` ne
+  coute rien au fournisseur : la requete, le raisonnement et la facture continuent. Le signal va
+  donc jusqu'a la couche reseau. Quand NOX ne detient plus le controleur — apres un redemarrage —
+  l'ecran dit qu'il ne peut pas confirmer, plutot que d'affirmer.
+- **La base est conclue avant que la requete soit abandonnee.** C'est cet ordre qui ferme la
+  course : une reponse arrivee ensuite trouve une ligne qui n'est plus `RUNNING`, et toute sa
+  transaction est refusee — messages, mise a jour de projet, replanification, proposition de
+  backlog. La garantie vit dans le `where`, pas dans la vigilance des appelants, et c'est elle qui
+  rend un second `Arrêter` sans effet.
+- **Un arret n'est pas un echec.** Rien n'a laché, rien n'a ete viole, aucun delai n'a ete
+  depasse : quelqu'un a decide de ne pas attendre. Un plafond atteint reste un delai depasse, et
+  les deux ne se confondent jamais — le SDK les distingue lui-meme.
+- **`Cancel` et `Arrêter` sont deux gestes.** Le premier renonce a un brouillon qui n'est jamais
+  parti, sans appel ni facture ; le second interrompt un appel en vol. Leur donner le meme mot
+  ferait croire qu'un brouillon abandonne a coute quelque chose.
+- **Une duree se mesure, elle ne se reconstruit pas.** `finishedAt` est pose dans la transaction
+  qui conclut, et la duree s'en **derive** — deux colonnes se contrediraient. Absente pour une
+  generation en vol ou anterieure, et « duree inconnue » n'est pas « zero ».
+- **Le temps ecoule s'affiche sans juger.** Aucun seuil, aucune couleur d'alerte, aucune animation :
+  reintroduire par l'ecran l'echeance qu'on vient de retirer du code ne vaudrait rien. Le compteur
+  avance dans le navigateur, a partir de l'instant **enregistre** au depart — la base n'est pas
+  interrogee chaque seconde.
+- **Un arret n'est expose que la ou quelqu'un regarde.** Conversation projet et planification de
+  backlog, c'est-a-dire exactement les surfaces ou des appels ont ete perdus. Les workflows sans
+  interface partagent le plafond, et rien de plus : un bouton qu'aucun ecran ne montre serait un
+  bouton mort.
+- **Le prochain reglage du plafond viendra de durees observees.** Pas d'un second pari : c'est pour
+  cela que la mesure a ete ajoutee en meme temps que la valeur a ete deplacee.

@@ -2,6 +2,8 @@
 
 import { useActionState, useId } from "react";
 
+import { ArchitectProgress } from "@/components/ArchitectProgress";
+
 import { cancelTurnAction, sendTurnAction } from "./actions";
 import { INITIAL_COMPOSER_STATE } from "./form-state";
 
@@ -24,6 +26,15 @@ type SendTurnFormProps = {
  * Deux boutons, deux actions distinctes. `Cancel` efface le brouillon et rend le
  * texte au composer ; il n'ecrit rien dans la conversation, parce qu'un tour
  * abandonne n'a pas eu lieu.
+ *
+ * ## `Cancel` et `Arrêter` ne font pas la meme chose
+ *
+ * `Cancel` renonce a un tour **qui n'est pas parti** : il n'y a rien a
+ * interrompre, et rien n'a ete facture. `Arrêter` interrompt un tour **en vol**,
+ * ferme la requete et conclut la generation. Les deux ne sont jamais visibles
+ * en meme temps, et leur libelle doit rester distinct : les confondre ferait
+ * croire qu'un brouillon abandonne a coute un appel, ou qu'un appel en cours
+ * peut etre repris.
  */
 export function SendTurnForm({
   projectId,
@@ -51,6 +62,14 @@ export function SendTurnForm({
           {error}
         </p>
       )}
+
+      {sending ? (
+        <ArchitectProgress
+          statusUrl={`/api/projects/${projectId}/architect/${sessionId}/generation`}
+          stopUrl={`/api/projects/${projectId}/architect/${sessionId}/generation`}
+          label="L'architecte réfléchit…"
+        />
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <form action={sendAction}>

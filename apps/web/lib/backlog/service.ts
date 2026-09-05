@@ -61,6 +61,7 @@ import {
   applyBacklogProposal,
   dismissBacklogProposal,
   finishBacklogGeneration,
+  getBacklogGeneration,
   getBacklogProposalForGeneration,
   peekNextTaskSequence,
   startBacklogGeneration,
@@ -70,7 +71,8 @@ import {
   type ProjectStructuredState,
 } from "@nox/database";
 
-import { ARCHITECT_REQUEST_TIMEOUT_MS } from "../architect/config.ts";
+import { registerArchitectAbort } from "../architect/cancellation.ts";
+import { resolvedArchitectHardTimeoutMs } from "../architect/config.ts";
 import { fetchArchitectContext, type ArchitectRepositoryPorts } from "../architect/service.ts";
 import type { ArchitectProvider } from "../architect/provider.ts";
 import { runnerArchitectPorts } from "../architect/service.ts";
@@ -222,6 +224,11 @@ export async function generateProjectBacklog(
 
   /** Conclut la planification en echec, sans jamais laisser le verrou pose. */
   const fail = async (code: ArchitectErrorCode): Promise<GenerateBacklogOutcome> => {
+    if (code === ARCHITECT_ERROR.ARCHITECT_CANCELLED) {
+      // L'arret a deja conclu la ligne et rendu le verrou du projet. Une
+      // planification arretee n'est pas une planification en echec.
+      return { ok: false, code };
+    }
     await finishBacklogGeneration(db, {
       generationId,
       status:
@@ -233,6 +240,10 @@ export async function generateProjectBacklog(
     return { ok: false, code };
   };
 
+  // Inscrit sous l'identifiant de la generation reservee, comme du cote de la
+  // conversation : la cle est unique et n'est jamais reattribuee.
+  const abort = registerArchitectAbort(generationId);
+
   let result;
   try {
     result = await input.provider.generateBacklog({
@@ -241,7 +252,8 @@ export async function generateProjectBacklog(
       input: prepared.prepared.prompt.input,
       schemaName: ARCHITECT_BACKLOG_SCHEMA_NAME_3,
       schema: buildArchitectBacklogSchemaV3(),
-      timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
+      timeoutMs: resolvedArchitectHardTimeoutMs(),
+      signal: abort.signal,
       maxOutputTokens: prepared.prepared.maxOutputTokens,
     });
   } catch (error) {
@@ -249,6 +261,8 @@ export async function generateProjectBacklog(
     // elle porterait son URL et ses en-tetes.
     console.error("[nox] Echec inattendu de la planification :", error);
     return fail(ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR);
+  } finally {
+    abort.release();
   }
 
   if (!result.ok) {
@@ -278,6 +292,13 @@ export async function generateProjectBacklog(
       errorField: validated.refusal.field,
       errorDetail: validated.refusal.message,
     });
+    if (finished?.status === ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED) {
+      // La ligne n'etait plus `RUNNING` : l'arret l'a conclue pendant la
+      // validation, et `finishBacklogGeneration` a donc refuse d'ecrire. Son
+      // verdict fait foi, et la phrase rendue a l'utilisateur doit dire la meme
+      // chose que la ligne enregistree.
+      return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CANCELLED };
+    }
     return {
       ok: false,
       code: ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID,
@@ -301,7 +322,19 @@ export async function generateProjectBacklog(
 
   const proposal = await getBacklogProposalForGeneration(db, input.projectId, generationId);
   if (proposal === null) {
-    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR };
+    // Aucune proposition ecrite. Depuis HOTFIX-004, la cause normale est un
+    // arret : `finishBacklogGeneration` refuse une ligne qui n'est plus
+    // `RUNNING`, et la proposition appartient a cette meme transaction. Un
+    // backlog arrete ne laisse donc rien a appliquer, ce qui est exactement ce
+    // qu'on attend de lui.
+    const concluded = await getBacklogGeneration(db, generationId);
+    return {
+      ok: false,
+      code:
+        concluded?.status === ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED
+          ? ARCHITECT_ERROR.ARCHITECT_CANCELLED
+          : ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR,
+    };
   }
 
   return { ok: true, proposal };

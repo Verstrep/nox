@@ -39,6 +39,7 @@
 import OpenAI, {
   APIConnectionTimeoutError,
   APIError,
+  APIUserAbortError,
   AuthenticationError,
   PermissionDeniedError,
   RateLimitError,
@@ -155,6 +156,13 @@ function containsRefusal(output: unknown): boolean {
 
 /** Traduit une exception du SDK en code stable, sans jamais la recopier. */
 function classify(error: unknown): ArchitectProviderResult {
+  // L'abandon se lit **avant** tout le reste. Le SDK distingue lui-meme son
+  // propre delai (`APIConnectionTimeoutError`) d'un signal recu de l'exterieur
+  // (`APIUserAbortError`), et c'est exactement la distinction qui compte :
+  // atteindre le plafond de securite est un incident, arreter est une decision.
+  if (error instanceof APIUserAbortError) {
+    return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_CANCELLED };
+  }
   if (error instanceof APIConnectionTimeoutError) {
     return { ok: false, code: ARCHITECT_ERROR.ARCHITECT_TIMEOUT };
   }
@@ -257,7 +265,14 @@ export class OpenAIArchitectProvider implements ArchitectProvider {
             },
           },
         },
-        { timeout: input.timeoutMs, maxRetries: 0 },
+        {
+          timeout: input.timeoutMs,
+          maxRetries: 0,
+          // Le signal va jusqu'a la couche reseau du SDK : abandonner ici ferme
+          // reellement la connexion. Un arret qui se contenterait de cesser
+          // d'attendre laisserait le fournisseur travailler — et facturer.
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+        },
       )) as ResponseLike;
     } catch (error) {
       return classify(error);

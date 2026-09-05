@@ -222,6 +222,16 @@ export const ARCHITECT_GENERATION_STATUS = {
   NEEDS_INPUT: "NEEDS_INPUT",
   REFUSED: "REFUSED",
   FAILED: "FAILED",
+  /**
+   * L'utilisateur a arrete le tour pendant que l'appel etait en vol.
+   *
+   * Distinct de `FAILED`, et le rester est tout l'interet : rien n'a echoue. Le
+   * fournisseur n'a pas laché, le contrat n'a pas ete viole, le delai n'a pas
+   * ete depasse — quelqu'un a decide de ne pas attendre. Ranger ce cas parmi
+   * les pannes ferait chercher un probleme qui n'existe pas, et polluerait la
+   * seule mesure qui dira un jour si le plafond est bien regle.
+   */
+  CANCELLED: "CANCELLED",
 } as const;
 
 export type ArchitectGenerationStatus =
@@ -1146,6 +1156,14 @@ export const ARCHITECT_ERROR = {
    * qu'il faut raccourcir.
    */
   ARCHITECT_UPDATE_TOO_LARGE: "ARCHITECT_UPDATE_TOO_LARGE",
+  /**
+   * L'utilisateur a arrete la generation avant qu'elle n'aboutisse.
+   *
+   * Ni panne, ni delai depasse, ni refus : un geste humain. Le distinguer est
+   * ce qui permettra de lire les durees reelles sans compter comme des echecs
+   * les appels que personne n'a laisse finir.
+   */
+  ARCHITECT_CANCELLED: "ARCHITECT_CANCELLED",
   /** Toute autre panne du fournisseur. */
   ARCHITECT_PROVIDER_ERROR: "ARCHITECT_PROVIDER_ERROR",
   /** Le contexte prepare depasse les bornes de NOX. */

@@ -47,6 +47,9 @@ const MESSAGES: Record<ArchitectErrorCode, string> = {
     "Rien n'a ete enregistre, et relancer ne changera rien : demandez a l'architecte une mise a " +
     "jour plus courte, ou raccourcissez le plan existant.",
 
+  [ARCHITECT_ERROR.ARCHITECT_CANCELLED]:
+    "Vous avez arrete la generation. NOX a ferme la requete ; rien n'a ete enregistre.",
+
   [ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR]:
     "Le fournisseur a renvoye une erreur. Aucune proposition n'a ete produite ; relancez la " +
     "generation dans un moment.",
@@ -145,6 +148,9 @@ const OPERATION_MESSAGES: Partial<
     [ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE]:
       "Le fournisseur a interrompu sa reponse avant la fin. Aucune tache n'a ete creee ; " +
       "relancez la generation.",
+    [ARCHITECT_ERROR.ARCHITECT_CANCELLED]:
+      "Vous avez arrete la planification. NOX a ferme la requete ; aucun backlog n'a ete " +
+      "propose et aucune tache n'a ete creee.",
   },
   [ARCHITECT_OPERATION.CONVERSATION]: {
     [ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID]:
@@ -159,6 +165,9 @@ const OPERATION_MESSAGES: Partial<
       "Le fournisseur n'a pas repondu dans le delai imparti. Aucune proposition ni mise a jour " +
       "n'a ete appliquee, et votre message est conserve : relancez-le, ou decoupez-le en " +
       "plusieurs messages plus courts.",
+    [ARCHITECT_ERROR.ARCHITECT_CANCELLED]:
+      "Vous avez arrete le tour. NOX a ferme la requete ; aucune proposition ni mise a jour " +
+      "n'a ete appliquee, et votre message est conserve tel quel.",
   },
   [ARCHITECT_OPERATION.REVIEW]: {
     [ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID]:

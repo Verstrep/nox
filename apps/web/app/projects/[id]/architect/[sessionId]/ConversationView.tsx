@@ -49,6 +49,7 @@ import { loadRecentArchitectTasks } from "@/lib/architect/recent-tasks";
 import { prepareArchitectTurn, type PrepareTurnResult } from "@/lib/architect/service";
 import { loadTimelineProjectUpdates } from "@/lib/architect/project-update";
 import { buildArchitectTimeline } from "@/lib/architect/timeline";
+import { formatArchitectDuration } from "@/lib/architect/duration";
 import { formatIsoDateTime } from "@/lib/format";
 import { architectGenerationStatusLabel, architectSessionStatusLabel } from "@/lib/labels";
 import { loadActiveProjectMemories } from "@/lib/memory";
@@ -678,6 +679,16 @@ function GenerationHistory({ session }: { session: ArchitectSessionView }) {
                 <span className="text-xs text-zinc-600">
                   {formatIsoDateTime(generation.createdAt)}
                 </span>
+                {/* La duree reelle du tour, depuis HOTFIX-004. Absente pour les
+                    tours anterieurs, dont personne n'a enregistre la fin — et
+                    ne rien afficher vaut mieux que reconstruire une mesure.
+                    Aucun seuil, aucune couleur : un tour long n'est pas un tour
+                    malade. */}
+                {generation.durationMs === null ? null : (
+                  <span className="font-mono text-xs tabular-nums text-zinc-600">
+                    {formatArchitectDuration(generation.durationMs)}
+                  </span>
+                )}
               </div>
               <p className="font-mono text-xs text-zinc-600">
                 {generation.model} · {generation.promptVersion}

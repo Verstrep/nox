@@ -67,6 +67,10 @@ function generation(overrides: Partial<ArchitectGenerationView> = {}): Architect
     diagnostic: null,
     appliedTaskId: null,
     createdAt: "2026-08-10T09:00:00.000Z",
+    // Deux champs nouveaux depuis HOTFIX-004 : un tour conclu porte sa
+    // duree, et un tour d'avant n'en porte aucune.
+    finishedAt: null,
+    durationMs: null,
     ...overrides,
   };
 }

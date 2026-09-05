@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { ArchitectProgress } from "@/components/ArchitectProgress";
 import { BACKLOG_GENERATE_NOTICE } from "@/lib/backlog/display";
 
 import { generateBacklogAction } from "./actions";
@@ -24,6 +25,13 @@ import { INITIAL_GENERATE_STATE, type BacklogGenerateState } from "./form-state"
  * Le bouton se desactive pendant l'envoi — ce qui evite un second clic — mais
  * ce n'est pas la que se joue la garantie : le verrou vit en base, et il
  * resisterait a deux onglets.
+ *
+ * ## Elle dit combien de temps elle travaille, et se laisse arreter
+ *
+ * C'est ici que le second pilote reel a perdu deux appels : deux depassements
+ * de delai consecutifs, sans qu'aucun ecran ne dise depuis combien de temps la
+ * planification tournait ni comment reprendre la main. Le plafond a change ;
+ * l'attente, elle, avait aussi besoin d'etre visible et interruptible.
  */
 export function GenerateBacklogButton({
   projectId,
@@ -52,6 +60,14 @@ export function GenerateBacklogButton({
           {state.error}
         </p>
       )}
+
+      {pending ? (
+        <ArchitectProgress
+          statusUrl={`/api/projects/${projectId}/backlog/generation`}
+          stopUrl={`/api/projects/${projectId}/backlog/generation`}
+          label="Génération du backlog…"
+        />
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <button

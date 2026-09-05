@@ -42,6 +42,7 @@ import {
   ARCHITECT_BACKLOG_PROPOSAL_STATUS,
   ARCHITECT_BACKLOG_DIAGNOSTIC_LIMITS,
   ARCHITECT_BACKLOG_SCHEMA_VERSION_3,
+  ARCHITECT_ERROR,
   COMMAND_EXECUTION_MODE,
   DEFAULT_HUMAN_INSTRUCTIONS,
   EMPTY_ARCHITECT_USAGE,
@@ -127,6 +128,13 @@ export type ArchitectBacklogGenerationView = {
   /** Date ISO 8601. */
   createdAt: string;
   finishedAt: string | null;
+  /**
+   * Duree reelle de la planification, en millisecondes.
+   *
+   * Derivee des deux instants, jamais stockee. `null` tant que la generation est
+   * en vol : « pas encore terminee » n'est pas « zero milliseconde ».
+   */
+  durationMs: number | null;
 };
 
 /** Un backlog propose, tel que l'interface le lit. */
@@ -433,6 +441,8 @@ function toGeneration(row: GenerationRow): ArchitectBacklogGenerationView {
     diagnostic: toDiagnostic(row),
     createdAt: row.createdAt.toISOString(),
     finishedAt: row.finishedAt?.toISOString() ?? null,
+    durationMs:
+      row.finishedAt === null ? null : row.finishedAt.getTime() - row.createdAt.getTime(),
   };
 }
 
@@ -1139,4 +1149,109 @@ export async function dismissBacklogProposal(
       ? { ok: false, reason: "not_found" }
       : { ok: true, proposal: toProposal(refreshed) };
   });
+}
+
+// --- Arret d'une planification en vol ---------------------------------------
+
+/** Ce qu'un arret de planification a effectivement trouve. */
+export type CancelBacklogGenerationResult =
+  | { ok: true; generation: ArchitectBacklogGenerationView }
+  /** Aucune planification `RUNNING` : jamais commencee, ou deja conclue. */
+  | { ok: false; reason: "not_running" }
+  | { ok: false; reason: "not_found" };
+
+/**
+ * Conclut la planification en vol d'un projet comme `CANCELLED`.
+ *
+ * Meme forme que du cote de la conversation, et pour les memes raisons : la
+ * base est conclue **avant** que la requete soit abandonnee, et c'est la mise a
+ * jour conditionnelle sur `RUNNING` qui tranche la course entre l'arret et la
+ * conclusion normale.
+ *
+ * ## Ce qu'un arret ne laisse jamais derriere lui
+ *
+ * Aucune proposition. Une planification arretee n'a pas de resultat a proposer,
+ * et `pendingBacklogProposalId` du projet reste tel quel — c'est-a-dire `null`,
+ * puisque la reservation refuse de demarrer quand une proposition attend.
+ *
+ * Le verrou d'appel, lui, est rendu : sans cela le projet resterait
+ * impossible a replanifier pour toujours.
+ *
+ * Idempotent : un second arret rend `not_running` et n'ecrit rien.
+ */
+export async function cancelBacklogGeneration(
+  db: DatabaseClient,
+  input: { projectId: string },
+): Promise<CancelBacklogGenerationResult> {
+  return db.$transaction(async (tx): Promise<CancelBacklogGenerationResult> => {
+    const project = await tx.project.findUnique({
+      where: { id: input.projectId },
+      select: { id: true, activeBacklogGenerationId: true },
+    });
+    if (project === null) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (project.activeBacklogGenerationId === null) {
+      return { ok: false, reason: "not_running" };
+    }
+
+    const claimed = await tx.architectBacklogGeneration.updateMany({
+      where: {
+        id: project.activeBacklogGenerationId,
+        projectId: input.projectId,
+        status: ARCHITECT_BACKLOG_GENERATION_STATUS.RUNNING,
+      },
+      data: {
+        status: ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED,
+        errorCode: ARCHITECT_ERROR.ARCHITECT_CANCELLED,
+        finishedAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1) {
+      return { ok: false, reason: "not_running" };
+    }
+
+    const generationId = project.activeBacklogGenerationId;
+    await tx.project.updateMany({
+      where: { id: input.projectId, activeBacklogGenerationId: generationId },
+      data: { activeBacklogGenerationId: null },
+    });
+
+    const row = await tx.architectBacklogGeneration.findUnique({ where: { id: generationId } });
+    return row === null
+      ? { ok: false, reason: "not_found" }
+      : { ok: true, generation: toGeneration(row) };
+  });
+}
+
+/** La planification en vol d'un projet, pour l'affichage du temps ecoule. */
+export type ActiveBacklogGeneration = {
+  id: string;
+  code: string;
+  /** Instant de reservation, autorite du chronometre affiche. */
+  startedAt: string;
+};
+
+/**
+ * La planification `RUNNING` d'un projet, s'il y en a une.
+ *
+ * Aussi pauvre que son equivalent de conversation : de quoi afficher un
+ * compteur de secondes, et rien de plus.
+ */
+export async function getActiveBacklogGeneration(
+  db: DatabaseClient,
+  projectId: string,
+): Promise<ActiveBacklogGeneration | null> {
+  const row = await db.architectBacklogGeneration.findFirst({
+    where: { projectId, status: ARCHITECT_BACKLOG_GENERATION_STATUS.RUNNING },
+    orderBy: { sequence: "desc" },
+    select: { id: true, sequence: true, createdAt: true },
+  });
+  return row === null
+    ? null
+    : {
+        id: row.id,
+        code: formatBacklogCode(row.sequence),
+        startedAt: row.createdAt.toISOString(),
+      };
 }

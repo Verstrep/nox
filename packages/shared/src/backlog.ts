@@ -180,6 +180,14 @@ export const ARCHITECT_BACKLOG_GENERATION_STATUS = {
   READY: "READY",
   REFUSED: "REFUSED",
   FAILED: "FAILED",
+  /**
+   * L'utilisateur a arrete la planification pendant que l'appel etait en vol.
+   *
+   * Distinct de `FAILED` pour la meme raison que du cote de la conversation :
+   * un arret n'est pas une panne, et une planification arretee ne dit rien de
+   * la sante du fournisseur.
+   */
+  CANCELLED: "CANCELLED",
 } as const;
 
 export type ArchitectBacklogGenerationStatus =

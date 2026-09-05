@@ -45,8 +45,22 @@ export type ArchitectProviderInput = {
   schemaName: string;
   /** Schema JSON strict de la proposition. */
   schema: Record<string, unknown>;
-  /** Delai maximal accorde a l'appel. */
+  /**
+   * Plafond de securite de l'appel.
+   *
+   * Ce n'est pas une duree attendue : c'est la derniere garde contre une
+   * requete reellement bloquee. Le depasser produit `ARCHITECT_TIMEOUT`, et
+   * reste distinct d'un arret demande par l'utilisateur.
+   */
   timeoutMs: number;
+  /**
+   * De quoi interrompre la requete depuis l'exterieur.
+   *
+   * Absent pour les surfaces qui n'exposent aucun arret. Present, il doit
+   * atteindre la couche reseau : un signal qui ne servirait qu'a court-circuiter
+   * la lecture du resultat laisserait le fournisseur travailler et facturer.
+   */
+  signal?: AbortSignal;
   /**
    * Plafond de jetons de sortie, lorsque la surface en declare un.
    *

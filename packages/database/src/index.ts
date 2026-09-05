@@ -123,8 +123,10 @@ export {
 
 export {
   applyBacklogProposal,
+  cancelBacklogGeneration,
   dismissBacklogProposal,
   finishBacklogGeneration,
+  getActiveBacklogGeneration,
   getBacklogGeneration,
   getBacklogProposal,
   getBacklogProposalForGeneration,
@@ -134,9 +136,11 @@ export {
 } from "./architect-backlog.js";
 
 export type {
+  ActiveBacklogGeneration,
   ApplyBacklogInput,
   ApplyBacklogResult,
   ArchitectBacklogGenerationView,
+  CancelBacklogGenerationResult,
   ArchitectBacklogProposalView,
   BacklogCreatedTask,
   BacklogPlanningBase,
@@ -197,6 +201,7 @@ export {
   attachArchitectTask,
   canCreateArchitectTask,
   claimArchitectGeneration,
+  cancelArchitectGeneration,
   claimArchitectSession,
   clearArchitectTurnDraft,
   createArchitectSession,
@@ -206,6 +211,7 @@ export {
   findProjectArchitectSession,
   finishArchitectGeneration,
   formatArchitectSessionCode,
+  getActiveArchitectGeneration,
   getArchitectSession,
   latestArchitectProposal,
   latestArchitectQuestions,
@@ -215,8 +221,10 @@ export {
   releaseArchitectSession,
   saveArchitectTurnDraft,
   startArchitectGeneration,
+  type ActiveArchitectGeneration,
   type ArchitectSessionTask,
   type ArchitectTaskOrigin,
+  type CancelArchitectGenerationResult,
   type ClaimArchitectGenerationResult,
   type ClaimArchitectSessionResult,
   type ArchitectGenerationView,

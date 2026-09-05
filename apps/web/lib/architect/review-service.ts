@@ -57,7 +57,7 @@ import {
   type DatabaseClient,
 } from "@nox/database";
 
-import { ARCHITECT_REQUEST_TIMEOUT_MS } from "./config.ts";
+import { resolvedArchitectHardTimeoutMs } from "./config.ts";
 import type { ArchitectProvider } from "./provider.ts";
 import {
   prepareArchitectReview,
@@ -152,7 +152,7 @@ export async function analyzeArchitectReview(
       input: prepared.prompt.input,
       schemaName: ARCHITECT_REVIEW_SCHEMA_NAME,
       schema: buildArchitectReviewSchema(),
-      timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
+      timeoutMs: resolvedArchitectHardTimeoutMs(),
     });
   } catch (error) {
     // Une exception inattendue du fournisseur ne doit pas remonter telle quelle :

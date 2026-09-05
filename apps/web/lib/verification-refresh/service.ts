@@ -57,7 +57,7 @@ import {
   type VerificationRefreshTarget,
 } from "@nox/shared";
 
-import { ARCHITECT_REQUEST_TIMEOUT_MS } from "../architect/config.ts";
+import { resolvedArchitectHardTimeoutMs } from "../architect/config.ts";
 import { createArchitectSanitizer } from "../architect/sanitize.ts";
 import type { ArchitectProvider } from "../architect/provider.ts";
 import {
@@ -276,7 +276,7 @@ export async function maybeRefreshVerificationPlans(
       input: prompt.input,
       schemaName: VERIFICATION_REFRESH_SCHEMA_NAME,
       schema: buildVerificationRefreshSchema(),
-      timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS,
+      timeoutMs: resolvedArchitectHardTimeoutMs(),
       maxOutputTokens: VERIFICATION_REFRESH_MAX_OUTPUT_TOKENS,
     });
   } catch (error) {

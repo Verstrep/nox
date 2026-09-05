@@ -5,7 +5,12 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ARCHITECT_REQUEST_TIMEOUT_MS } from "./config.ts";
+import {
+  ARCHITECT_HARD_TIMEOUT_BOUNDS,
+  ARCHITECT_HARD_TIMEOUT_MS,
+  ARCHITECT_TIMEOUT_VARIABLE,
+  architectHardTimeoutMs,
+} from "./config.ts";
 import {
   CONTEXT_FINGERPRINT_NOTICE,
   FAILED_TURN_DRAFT_NOTICE,
@@ -236,17 +241,26 @@ describe("empreinte de contexte", () => {
 });
 
 /**
- * Le delai du fournisseur.
+ * Le plafond de securite du fournisseur.
  *
- * ## Ce que ces tests fixent, et ce qu'ils ne fixent pas
+ * ## Ce que ces tests fixaient, et ce qui a change
  *
- * Ils fixent la **portee** : un seul delai, applique par requete, partage par
- * les quatre surfaces, et jamais accompagne d'un reessai automatique. Ils ne
- * fixent pas que 90 s soit la bonne valeur — l'enquete n'a pas produit de
- * preuve suffisante pour en changer, et la conclusion est consignee plutot que
- * devinee.
+ * Ils fixaient la portee — un seul delai, par requete, partage par les quatre
+ * surfaces, sans reessai — et disaient explicitement ne pas fixer que 90 s soit
+ * la bonne valeur : « l'enquete n'a pas produit de preuve suffisante pour en
+ * changer ».
+ *
+ * HOTFIX-004 a produit cette preuve. Le second pilote reel a vu quatre
+ * depassements sur **deux** charges de travail differentes — une conversation
+ * volumineuse, puis deux planifications de backlog — et une seule reussite,
+ * obtenue en amputant la demande. Quatre-vingt-dix secondes n'etait donc pas un
+ * garde-fou mais une echeance, et elle etait trop courte.
+ *
+ * Ce que ces tests fixent desormais : la portee, inchangee, et le fait que la
+ * valeur est un **plafond de securite** — genereux, borne, et jamais presente a
+ * l'utilisateur comme une duree attendue.
  */
-describe("configuration du delai", () => {
+describe("configuration du plafond de securite", () => {
   const WEB_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
   function source(relative: string): string {
@@ -254,8 +268,75 @@ describe("configuration du delai", () => {
   }
 
   it("est une constante unique, exprimee en millisecondes", () => {
-    assert.equal(Number.isInteger(ARCHITECT_REQUEST_TIMEOUT_MS), true);
-    assert.equal(ARCHITECT_REQUEST_TIMEOUT_MS, 90_000);
+    assert.equal(Number.isInteger(ARCHITECT_HARD_TIMEOUT_MS), true);
+    assert.equal(ARCHITECT_HARD_TIMEOUT_MS, 10 * 60 * 1000);
+  });
+
+  it("laisse largement passer une generation qui depasse l'ancienne echeance", () => {
+    // Le coeur du correctif : un travail de plusieurs minutes est legitime.
+    assert.equal(ARCHITECT_HARD_TIMEOUT_MS > 90_000, true);
+  });
+
+  it("un environnement vide donne le defaut", () => {
+    assert.equal(architectHardTimeoutMs({}), ARCHITECT_HARD_TIMEOUT_MS);
+    assert.equal(
+      architectHardTimeoutMs({ [ARCHITECT_TIMEOUT_VARIABLE]: "   " }),
+      ARCHITECT_HARD_TIMEOUT_MS,
+    );
+  });
+
+  it("une valeur entiere dans les bornes est retenue", () => {
+    assert.equal(
+      architectHardTimeoutMs({ [ARCHITECT_TIMEOUT_VARIABLE]: "300000" }),
+      300_000,
+    );
+    assert.equal(
+      architectHardTimeoutMs({
+        [ARCHITECT_TIMEOUT_VARIABLE]: String(ARCHITECT_HARD_TIMEOUT_BOUNDS.min),
+      }),
+      ARCHITECT_HARD_TIMEOUT_BOUNDS.min,
+    );
+    assert.equal(
+      architectHardTimeoutMs({
+        [ARCHITECT_TIMEOUT_VARIABLE]: String(ARCHITECT_HARD_TIMEOUT_BOUNDS.max),
+      }),
+      ARCHITECT_HARD_TIMEOUT_BOUNDS.max,
+    );
+  });
+
+  it("toute valeur illisible ou hors bornes retombe sur le defaut", () => {
+    // Une variable mal ecrite ne doit pas produire un plafond que personne n'a
+    // voulu — ni une seconde, ni une journee.
+    for (const value of [
+      "abc",
+      "",
+      "12.5",
+      "-1",
+      "0",
+      " 300000abc",
+      String(ARCHITECT_HARD_TIMEOUT_BOUNDS.min - 1),
+      String(ARCHITECT_HARD_TIMEOUT_BOUNDS.max + 1),
+    ]) {
+      assert.equal(
+        architectHardTimeoutMs({ [ARCHITECT_TIMEOUT_VARIABLE]: value }),
+        ARCHITECT_HARD_TIMEOUT_MS,
+        value,
+      );
+    }
+  });
+
+  it("une notation scientifique entiere reste une valeur entiere", () => {
+    // `Number("1e6")` vaut un million, et c'est un entier dans les bornes.
+    // Le refuser demanderait une regle de plus pour interdire une ecriture
+    // parfaitement claire ; ce test consigne le comportement plutot que de
+    // laisser croire qu'il a ete decide ailleurs.
+    assert.equal(architectHardTimeoutMs({ [ARCHITECT_TIMEOUT_VARIABLE]: "1e6" }), 1_000_000);
+  });
+
+  it("la variable porte le prefixe qui la met hors de portee de Claude Code", () => {
+    // Le runner retire toutes les variables `NOX_` de l'environnement de
+    // l'agent. Le prefixe n'est pas cosmetique.
+    assert.match(ARCHITECT_TIMEOUT_VARIABLE, /^NOX_/u);
   });
 
   it("s'applique par requete, et n'autorise aucun reessai automatique", () => {
@@ -276,7 +357,7 @@ describe("configuration du delai", () => {
       "lib/backlog/service.ts",
       "lib/verification-refresh/service.ts",
     ]) {
-      assert.match(source(file), /timeoutMs: ARCHITECT_REQUEST_TIMEOUT_MS/u, file);
+      assert.match(source(file), /timeoutMs: resolvedArchitectHardTimeoutMs\(\)/u, file);
     }
   });
 

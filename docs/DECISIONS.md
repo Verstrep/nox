@@ -6436,3 +6436,154 @@ refusee et pour un contexte trop grand, qui ne se corrigent pas en patientant.
 **Ce qu'elle ecarte.** Toute reconstruction. Une ligne sans diagnostic n'en recoit pas un apres
 coup, et aucune ligne ancienne n'a ete modifiee : les tours 8 et 9 du pilote gardent leur
 `errorCode` sans champ ni phrase, et l'ecran dit ce qu'il sait — pas davantage.
+
+## HOTFIX-004 — attente, arret et duree d'un appel Architecte
+
+### D-404 — Quatre-vingt-dix secondes n'est plus l'echeance normale d'un appel Architecte
+
+**Decision.** `ARCHITECT_REQUEST_TIMEOUT_MS = 90_000` disparait. Un seul nombre le remplace,
+`ARCHITECT_HARD_TIMEOUT_MS`, qui vaut **dix minutes** et qui est un **plafond de securite** : la
+derniere garde contre une requete reellement bloquee, jamais une duree attendue. Aucun ecran ne
+l'affiche.
+
+**Justification.** HOTFIX-003 avait deliberement laisse cette valeur tranquille, faute de preuve :
+« ne changez la configuration du delai que si le code ou les contraintes montrent qu'elle est mal
+dimensionnee ; sinon documentez plutot que de deviner ». Le second pilote reel a produit la preuve.
+
+```text
+conversation, message volumineux    depassement    deux fois
+conversation, message raccourci     aboutit
+planification de backlog complete   depassement    deux fois
+```
+
+Deux charges de travail sans rapport, quatre depassements, et **une seule reussite — obtenue en
+amputant la demande**. Un plafond qu'on ne franchit qu'en reduisant le travail n'est pas un
+garde-fou : c'est une echeance, et elle etait trop courte pour `gpt-5.6-sol` en raisonnement eleve
+sur un brief et un plan substantiels.
+
+**Pourquoi dix minutes, et pourquoi ce n'est pas une estimation.** Nous ne savons pas encore quelle
+duree est normale — c'est precisement ce que personne n'a jamais pu mesurer. Dix minutes est un
+ordre de grandeur assez large pour qu'un travail legitime ne le rencontre jamais, choisi en
+sachant que la mesure des durees, ajoutee par le meme correctif, dira plus tard quoi en faire. Le
+prochain reglage devra venir de durees observees, pas d'un second pari.
+
+**Ce qui remplace l'echeance supprimee.** L'utilisateur. Decider qu'une attente a trop dure est un
+jugement, pas un seuil : NOX ne l'a jamais su, et un nombre en dur faisait semblant de le savoir.
+
+### D-405 — Une borne de temps d'attente n'est pas une borne de securite
+
+**Decision.** `NOX_ARCHITECT_TIMEOUT_MS` peut deplacer le plafond, entre une minute et une heure.
+Toute valeur illisible ou hors bornes retombe sur le defaut, sans erreur et sans demi-mesure.
+
+**Justification.** La regle de NOX est qu'une borne ne se desserre pas depuis un `.env` — les
+tailles d'evenements du runner, le nombre de corrections automatiques. Cette regle vaut pour ce qui
+decide de ce que NOX **accepte, enregistre ou execute** : desserrer une de ces bornes elargit une
+surface, et une limite qu'on peut desserrer n'en est plus une.
+
+Celle-ci ne decide de rien de tel. Elle dit combien de temps NOX attend une reponse a une requete
+qu'il a **deja** decide d'envoyer. La deplacer n'autorise aucun contenu supplementaire, aucune
+ecriture, aucun appel de plus. Le pire qu'une valeur trop grande produise est une attente que
+l'utilisateur peut de toute facon interrompre lui-meme.
+
+Elle existe parce que le reglage juste sera connu par l'observation, et qu'un pilote ne devrait pas
+avoir a modifier du code pour le chercher.
+
+### D-406 — Un arret ferme la requete, ou ne pretend pas l'avoir fait
+
+**Decision.** `Arrêter` conclut la generation en base **puis** abandonne un `AbortController` dont
+le signal est transmis jusqu'au client du fournisseur. Le registre des controleurs vit sur
+`globalThis`, comme le cache du client Prisma.
+
+**Justification.** Marquer une ligne `CANCELLED` ne coute rien au fournisseur : la requete continue,
+le raisonnement continue, la facture continue. Un bouton qui ne ferait que cela mentirait sur ce
+qu'il fait, et le pilote qui rechargeait sa page pour sortir d'une attente faisait exactement cela
+sans le savoir.
+
+**Pourquoi un Route Handler et non une Server Action.** Parce qu'une Server Action ne peut pas
+arreter une Server Action : Next.js les met en file cote client, et un `Arrêter` ecrit ainsi
+partirait derriere l'envoi qu'il doit interrompre. Il n'arriverait qu'une fois l'attente terminee,
+c'est-a-dire toujours trop tard. Un Route Handler est une requete HTTP ordinaire, et traverse
+pendant que l'autre attend.
+
+**Pourquoi `globalThis`.** Next.js recharge ses modules serveur en developpement et ne garantit pas
+qu'un Route Handler et une Server Action partagent la meme instance d'un module. Une `Map` de module
+vivrait en double, et l'arret ne trouverait jamais le controleur qu'il cherche.
+
+**Ce que NOX ne pretend pas.** Le registre ne survit pas au processus. Un redemarrage perd les
+controleurs — les requetes qu'ils tenaient meurent avec le processus, donc rien ne fuit, mais une
+generation restee `RUNNING` ne serait plus interruptible par ce chemin. C'est pourquoi l'arret
+conclut la base **d'abord** : la partie qui compte pour l'etat du projet ne depend pas de la
+memoire. Et l'ecran distingue « NOX a ferme la requete » de « NOX ne peut pas le confirmer » : ce
+que le fournisseur fait de son cote n'est pas observable, et aucune phrase ne suggere le contraire.
+
+### D-407 — L'ordre de l'arret ferme la course, et rien d'autre n'a a y penser
+
+**Decision.** La base est conclue avant que la requete soit abandonnee. La mise a jour
+conditionnelle sur `RUNNING`, deja presente dans `finishArchitectGeneration` et
+`finishBacklogGeneration`, tranche seule entre l'arret et la conclusion normale.
+
+**Justification.** L'ordre inverse laisserait une fenetre : entre l'abandon et l'ecriture, une
+reponse arrivee du fournisseur serait acceptee, et un tour que l'utilisateur a arrete produirait
+une proposition, une mise a jour de projet ou un backlog.
+
+Avec cet ordre, une reponse tardive trouve une ligne qui n'est plus `RUNNING`, et **toute sa
+transaction** est refusee — messages, mise a jour de projet, replanification, proposition de
+backlog : tout appartenait a la meme ecriture. La garantie vit donc dans le `where`, et non dans la
+vigilance des appelants, qui devraient sinon la reimplementer chacun de leur cote.
+
+Un second `Arrêter` trouve la meme ligne deja conclue et rend « rien a arreter ». L'idempotence
+n'est pas une politesse ajoutee : c'est le meme mecanisme, vu une seconde fois.
+
+### D-408 — Un arret n'est pas un echec, et le rester est tout l'interet
+
+**Decision.** `ARCHITECT_GENERATION_STATUS.CANCELLED`,
+`ARCHITECT_BACKLOG_GENERATION_STATUS.CANCELLED` et `ARCHITECT_ERROR.ARCHITECT_CANCELLED` sont des
+valeurs a part. Un plafond atteint apres dix minutes reste `ARCHITECT_TIMEOUT`.
+
+**Justification.** Rien n'a echoue : le fournisseur n'a pas laché, le contrat n'a pas ete viole, le
+delai n'a pas ete depasse. Quelqu'un a decide de ne pas attendre. Ranger ce cas parmi les pannes
+ferait chercher un probleme qui n'existe pas — et polluerait la seule mesure qui dira un jour si le
+plafond est bien regle.
+
+Le SDK distingue lui-meme son propre delai d'un signal recu de l'exterieur, et NOX s'appuie sur
+cette distinction plutot que de la deviner. HOTFIX-003 avait separe quatre causes qui se
+confondaient ; ce correctif en ajoute une cinquieme sans en refondre aucune.
+
+**Le libelle est « Stopped », pas « Cancelled ».** `Cancel` designe deja, dans le composer, l'abandon
+d'un brouillon **qui n'est jamais parti** — aucun appel, aucune facture. Deux gestes differents ne
+partagent pas un mot.
+
+### D-409 — Une duree se mesure, elle ne se reconstruit pas
+
+**Decision.** `ArchitectGeneration` recoit `finishedAt`, pose dans la transaction qui conclut. La
+duree est **derivee** des deux instants, jamais stockee. `null` pour les generations anterieures et
+pour celles encore en vol.
+
+**Justification.** C'est la seule colonne qui n'etait pas derivable. `createdAt` seul ne dit rien
+d'une duree, et aucune autre ligne ne porte l'instant de conclusion d'un tour : les messages sont
+ecrits dans la meme transaction, mais un tour echoue n'en laisse aucun — c'est-a-dire exactement les
+tours dont la duree nous interesse. `ArchitectBacklogGeneration` avait deja ce champ ; la
+conversation ne l'avait pas.
+
+**Pourquoi deriver la duree plutot que la stocker.** Deux colonnes et un ecart calcule finiraient
+par se contredire, et rien ne signalerait laquelle a raison.
+
+**Ce que l'affichage ne fait pas.** Il ne juge pas. Aucun seuil, aucune couleur d'alerte, aucune
+animation. Depasser quatre-vingt-dix secondes etait la cause d'un echec hier ; c'est un fait sans
+consequence aujourd'hui, et suggerer l'inverse reintroduirait par l'ecran l'echeance que ce
+correctif vient de retirer du code.
+
+### D-410 — Un arret n'est expose que la ou quelqu'un regarde
+
+**Decision.** La conversation projet et la planification de backlog recoivent `Arrêter`. L'analyse
+de review et le rafraichissement des plans de verification n'en recoivent pas ; ils partagent le
+meme plafond genereux.
+
+**Justification.** Le rafraichissement est declenche par la completion d'un amorcage : personne ne
+le regarde travailler, et un bouton qu'aucun ecran ne montre serait un bouton mort. L'analyse de
+review, elle, part d'une entree bornee — un diff deja capture — et le pilote ne l'a jamais vue
+depasser le delai ; lui ajouter un arret triplerait la surface de ce correctif sans preuve pour le
+justifier.
+
+Les deux surfaces retenues sont exactement celles ou le second pilote a perdu des appels. Le jour ou
+une autre le fera, la mecanique est en place et se branche sans etre redecouverte.

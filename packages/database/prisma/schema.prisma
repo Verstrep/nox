@@ -1612,6 +1612,22 @@ model ArchitectGeneration {
 
   createdAt DateTime @default(now())
 
+  /// Moment ou la generation a cesse d'etre `RUNNING`, quelle qu'en soit l'issue.
+  ///
+  /// ## Pourquoi une colonne, alors que NOX ne stocke aucun compteur
+  ///
+  /// Parce que celle-ci n'est pas derivable. `createdAt` seul ne dit rien de la
+  /// duree, et aucune autre ligne ne porte l'instant de conclusion d'un tour :
+  /// les messages sont ecrits dans la meme transaction, mais un tour echoue n'en
+  /// laisse aucun — c'est-a-dire exactement les tours dont la duree nous
+  /// interesse. La planification de backlog avait deja ce champ ; la
+  /// conversation ne l'avait pas.
+  ///
+  /// `null` pour toute generation anterieure a HOTFIX-004, et pour celles encore
+  /// en vol. Ne pas savoir est un etat : aucune duree n'est reconstruite apres
+  /// coup.
+  finishedAt DateTime?
+
   /// `Cascade` comme `RunEvent` : une generation ne raconte rien sans sa session.
   session       ArchitectSession        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   appliedTask   Task?                   @relation("TaskFromGeneration", fields: [appliedTaskId], references: [id], onDelete: Restrict)

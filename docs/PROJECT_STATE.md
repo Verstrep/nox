@@ -1293,3 +1293,61 @@ accepte exactement ce qu'il acceptait.
 cinq codes ; l'utiliser comme libellé effaçait ce que la base portait toujours. L'affichage part
 désormais du code enregistré. Aucune ligne ancienne n'a été modifiée. Voir
 [D-403](DECISIONS.md).
+
+## 13. HOTFIX-004 — attente, arrêt et durée d'un appel Architecte
+
+Le second pilote a continué après HOTFIX-003, et a buté sur ce que le diagnostic ne pouvait pas
+réparer : **le délai lui-même**.
+
+### Ce qui a été observé
+
+| Charge de travail | Issue |
+| --- | --- |
+| Conversation, message volumineux | dépassement de délai, **deux fois** |
+| Conversation, message raccourci | aboutit |
+| `Generate V1 backlog`, projet complet | dépassement de délai, **deux fois** |
+
+Deux charges de travail sans rapport, quatre dépassements, et une seule réussite — obtenue en
+**amputant la demande**. Sur `gpt-5.6-sol` en raisonnement élevé, avec un brief et un plan de V1
+substantiels, quatre-vingt-dix secondes ne suffisaient pas.
+
+HOTFIX-003 avait délibérément laissé cette valeur tranquille faute de preuve. La preuve est arrivée.
+
+### Ce qui a changé
+
+**Le délai de quatre-vingt-dix secondes n'existe plus comme échéance de travail.** Il est remplacé
+par un plafond de sécurité de dix minutes — la dernière garde contre une requête réellement
+bloquée, jamais une durée attendue, et aucun écran ne l'affiche. `NOX_ARCHITECT_TIMEOUT_MS` peut le
+déplacer entre une minute et une heure ; toute valeur illisible retombe sur le défaut.
+
+Dix minutes n'est pas une estimation de la durée juste : personne ne la connaît encore. C'est un
+ordre de grandeur assez large pour qu'un travail légitime ne le rencontre jamais. Voir
+[D-404](DECISIONS.md) et [D-405](DECISIONS.md).
+
+**Ce qui remplace l'échéance supprimée est l'utilisateur.** Le temps écoulé s'affiche pendant
+l'appel, et un bouton `Arrêter` interrompt réellement la requête : le signal va jusqu'à la couche
+réseau du SDK. Marquer une ligne `CANCELLED` sans cela laisserait le fournisseur travailler et
+facturer — c'est exactement ce que faisait un rechargement de page. Voir [D-406](DECISIONS.md).
+
+**L'arrêt conclut la base avant d'abandonner la requête**, et c'est cet ordre qui ferme la course :
+une réponse arrivée ensuite trouve une ligne qui n'est plus `RUNNING`, et toute sa transaction est
+refusée — messages, mise à jour de projet, replanification, proposition de backlog. Un second clic
+est sans effet par le même mécanisme. Voir [D-407](DECISIONS.md).
+
+**Un arrêt n'est pas un échec**, et un plafond atteint reste un délai dépassé. Les quatre causes
+séparées par HOTFIX-003 sont intactes ; une cinquième s'y ajoute. Voir [D-408](DECISIONS.md).
+
+**Chaque génération enregistre désormais sa durée.** `ArchitectGeneration` reçoit `finishedAt` — la
+seule information qui n'était pas dérivable, et que la planification de backlog possédait déjà. La
+durée s'en dérive, et « durée inconnue » n'est pas « zéro ». Voir [D-409](DECISIONS.md).
+
+### Ce que le prochain pilote devrait regarder
+
+Les durées réelles. C'est la raison d'être de la mesure ajoutée ici : le réglage juste du plafond
+viendra de ce qui aura été observé, et non d'un second pari. Trois questions valent d'être posées
+au retour du pilote — combien de temps prend réellement une planification de backlog complète ;
+est-ce que quelqu'un a eu besoin d'`Arrêter` ; est-ce que dix minutes ont jamais été approchées.
+
+Une limite reste connue : le registre des contrôleurs vit en mémoire et ne survit pas à un
+redémarrage du serveur web. La ligne, elle, est conclue en base dans tous les cas — mais NOX dira
+alors qu'il ne peut pas confirmer avoir fermé la requête, plutôt que de l'affirmer.

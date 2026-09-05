@@ -45,8 +45,114 @@ import process from "node:process";
  * injectent un faux fournisseur ; ils ne detournent pas le vrai.
  */
 
-/** Delai maximal accorde a une generation. */
-export const ARCHITECT_REQUEST_TIMEOUT_MS = 90_000;
+/**
+ * Plafond de securite d'un appel a l'Architecte.
+ *
+ * ## Ce que ce nombre n'est pas
+ *
+ * **Ce n'est pas une duree de generation attendue.** C'est la derniere garde
+ * contre un appel reellement bloque — une connexion qui ne se ferme pas, un
+ * fournisseur qui ne repond plus — et rien d'autre. Aucun ecran ne l'affiche,
+ * et l'atteindre est un incident, jamais un fonctionnement normal.
+ *
+ * ## Pourquoi quatre-vingt-dix secondes ont ete abandonnees
+ *
+ * C'etait la valeur d'origine, et elle jouait les deux roles a la fois :
+ * echeance de travail normal **et** garde-fou. Le second pilote reel a montre
+ * qu'elle ne pouvait pas tenir le premier. Sur `gpt-5.6-sol` en raisonnement
+ * eleve, avec un brief et un plan de V1 substantiels :
+ *
+ * ```text
+ * conversation, message volumineux   depassement   deux fois
+ * conversation, message raccourci    aboutit
+ * planification de backlog complete  depassement   deux fois
+ * ```
+ *
+ * Deux charges de travail differentes, quatre depassements, et une reussite
+ * obtenue en **reduisant la demande** plutot qu'en reparant quoi que ce soit.
+ * Un plafond qu'on contourne en amputant le travail n'est pas un garde-fou :
+ * c'est une echeance, et elle etait trop courte.
+ *
+ * Dix minutes ne sont pas une estimation de la duree juste — nous ne la
+ * connaissons pas encore. C'est un ordre de grandeur assez large pour qu'un
+ * travail legitime ne le rencontre jamais, choisi en sachant que la mesure des
+ * durees reelles, ajoutee par ce meme correctif, dira plus tard quoi en faire.
+ *
+ * ## Ce qui remplace l'echeance supprimee
+ *
+ * L'utilisateur. Le temps ecoule est affiche pendant l'appel, et un bouton
+ * `Arrêter` interrompt reellement la requete. Decider qu'une attente a trop
+ * dure est un jugement, pas un seuil : NOX ne l'a jamais su, et faisait semblant
+ * de le savoir.
+ */
+export const ARCHITECT_HARD_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Bornes acceptees pour un plafond configure.
+ *
+ * En dessous d'une minute, la valeur redeviendrait l'echeance que ce correctif
+ * supprime. Au dela d'une heure, elle cesserait d'etre un garde-fou : un appel
+ * bloque tiendrait le verrou de la session ou du projet toute une matinee.
+ */
+export const ARCHITECT_HARD_TIMEOUT_BOUNDS = {
+  min: 60 * 1000,
+  max: 60 * 60 * 1000,
+} as const;
+
+/** Nom de la variable qui peut deplacer le plafond. */
+export const ARCHITECT_TIMEOUT_VARIABLE = "NOX_ARCHITECT_TIMEOUT_MS";
+
+/**
+ * Plafond effectivement applique, lu dans l'environnement du serveur.
+ *
+ * ## Pourquoi une variable, alors que les bornes de NOX sont des constantes
+ *
+ * La regle de NOX est qu'une borne de securite ne se desserre pas depuis un
+ * `.env` — les tailles d'evenements du runner, le nombre de corrections
+ * automatiques. Elle vaut pour ce qui decide de ce que NOX **accepte,
+ * enregistre ou execute** : desserrer une de ces bornes elargit une surface.
+ *
+ * Celle-ci ne decide de rien de tel. Elle dit combien de temps NOX attend une
+ * reponse a une requete qu'il a **deja** decide d'envoyer : la deplacer
+ * n'autorise aucun contenu, aucune ecriture et aucun appel supplementaire. Le
+ * pire qu'une valeur trop grande produise est une attente que l'utilisateur
+ * peut de toute facon interrompre lui-meme.
+ *
+ * Elle existe parce que le reglage juste sera connu par l'observation, et qu'un
+ * pilote ne devrait pas avoir a modifier du code pour le chercher.
+ *
+ * **Toute valeur illisible ou hors bornes retombe sur le defaut**, sans erreur
+ * et sans demi-mesure : une variable mal ecrite ne doit pas produire un plafond
+ * que personne n'a voulu.
+ */
+export function architectHardTimeoutMs(env: Record<string, string | undefined>): number {
+  const raw = env[ARCHITECT_TIMEOUT_VARIABLE];
+  if (raw === undefined || raw.trim() === "") {
+    return ARCHITECT_HARD_TIMEOUT_MS;
+  }
+  const parsed = Number(raw.trim());
+  if (!Number.isInteger(parsed)) {
+    return ARCHITECT_HARD_TIMEOUT_MS;
+  }
+  if (parsed < ARCHITECT_HARD_TIMEOUT_BOUNDS.min || parsed > ARCHITECT_HARD_TIMEOUT_BOUNDS.max) {
+    return ARCHITECT_HARD_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+/**
+ * Le plafond, pour les quatre surfaces qui appellent le fournisseur.
+ *
+ * Une seule autorite : deux lectures independantes de l'environnement
+ * finiraient par diverger, et la divergence serait invisible jusqu'au jour ou
+ * une surface attendrait deux fois moins longtemps que sa voisine.
+ *
+ * La valeur ne quitte jamais le serveur : aucun rendu ne la transporte, et
+ * aucune page ne la nomme.
+ */
+export function resolvedArchitectHardTimeoutMs(): number {
+  return architectHardTimeoutMs(process.env);
+}
 
 /**
  * Le modele des decisions d'architecture de NOX.

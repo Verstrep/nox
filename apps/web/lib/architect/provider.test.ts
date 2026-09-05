@@ -8,6 +8,7 @@
  */
 
 import assert from "node:assert/strict";
+
 import { describe, it } from "node:test";
 
 import {
@@ -16,10 +17,11 @@ import {
   ARCHITECT_SCHEMA_NAME,
   buildArchitectTurnSchema,
 } from "@nox/shared";
-import { APIError, APIConnectionTimeoutError } from "openai";
+import { APIError, APIConnectionTimeoutError, APIUserAbortError } from "openai";
 
 import {
   ARCHITECT_ENVIRONMENT_VARIABLES,
+  ARCHITECT_HARD_TIMEOUT_MS,
   ARCHITECT_OPTIONAL_ENVIRONMENT_VARIABLES,
   DEFAULT_ARCHITECT_MODEL,
   loadArchitectConfig,
@@ -652,5 +654,113 @@ describe("HOTFIX-003 — le delai reste distinct d'une reponse refusee", () => {
     // Aucun reessai automatique : un echec ne doit jamais produire une seconde
     // facture ni une proposition dupliquee.
     assert.equal(captures[0]?.options["maxRetries"], 0);
+  });
+});
+
+/**
+ * HOTFIX-004 — le plafond, et l'abandon.
+ *
+ * ## Ce que le second pilote reel a montre
+ *
+ * Quatre depassements de delai sur deux charges de travail distinctes, et une
+ * seule reussite — obtenue en raccourcissant la demande. Quatre-vingt-dix
+ * secondes n'etait donc pas un garde-fou mais une echeance de travail, et elle
+ * ne tenait pas.
+ *
+ * Ces tests fixent les deux moities du correctif a l'endroit ou elles vivent
+ * reellement : la valeur transmise au client, et la maniere dont un abandon se
+ * distingue d'un delai depasse.
+ */
+describe("HOTFIX-004 — plafond de securite et abandon", () => {
+  it("transmet le plafond genereux au client, toujours par requete", async () => {
+    const captures: Capture[] = [];
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn({
+      ...INPUT,
+      timeoutMs: ARCHITECT_HARD_TIMEOUT_MS,
+    });
+
+    assert.equal(captures[0]?.options["timeout"], ARCHITECT_HARD_TIMEOUT_MS);
+    // Inchange, et non negociable : un plafond plus genereux ne doit surtout
+    // pas s'accompagner d'un reessai, qui doublerait la facture d'une attente
+    // deja longue.
+    assert.equal(captures[0]?.options["maxRetries"], 0);
+  });
+
+  it("le plafond laisse passer une generation de plusieurs minutes", () => {
+    // Requirement 1 : un travail qui depasse l'ancienne echeance doit aboutir.
+    assert.equal(ARCHITECT_HARD_TIMEOUT_MS > 90_000, true);
+  });
+
+  it("transmet le signal d'abandon jusqu'au client", async () => {
+    // La garantie centrale : sans cela, `Arrêter` ne ferait que changer une
+    // ligne en base pendant que le fournisseur continue de travailler et de
+    // facturer.
+    const captures: Capture[] = [];
+    const controller = new AbortController();
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn({
+      ...INPUT,
+      signal: controller.signal,
+    });
+
+    assert.equal(captures[0]?.options["signal"], controller.signal);
+  });
+
+  it("n'envoie aucun signal quand la surface n'en fournit pas", async () => {
+    // Le rafraichissement de verification et l'analyse de review n'exposent
+    // aucun arret : leur requete ne doit pas porter un signal fantome.
+    const captures: Capture[] = [];
+    await provider({ id: "r", output_text: VALID_PROPOSAL }, captures).generateTaskTurn(INPUT);
+
+    assert.equal("signal" in (captures[0]?.options ?? {}), false);
+  });
+
+  it("un abandon se classe comme arret, jamais comme delai depasse", async () => {
+    // Une **vraie** instance du SDK : la classification repose sur
+    // `instanceof`, et un objet qui se contente d'en porter le nom ne prouverait
+    // rien de ce que le code fait en production.
+    const result = await provider(new APIUserAbortError()).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.code, ARCHITECT_ERROR.ARCHITECT_CANCELLED);
+      assert.notEqual(result.code, ARCHITECT_ERROR.ARCHITECT_TIMEOUT);
+      assert.notEqual(result.code, ARCHITECT_ERROR.ARCHITECT_PROVIDER_ERROR);
+      // Aucune reponse recue : rien a diagnostiquer, et rien a inventer.
+      assert.equal(result.diagnostic, undefined);
+    }
+  });
+
+  it("un plafond atteint reste un delai depasse, et non un arret", async () => {
+    // Requirement 2 : les deux causes se distinguent, et le SDK les distingue
+    // lui-meme. Les confondre ferait lire une panne comme une decision humaine.
+    const result = await provider(new APIConnectionTimeoutError({})).generateTaskTurn(INPUT);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.code, ARCHITECT_ERROR.ARCHITECT_TIMEOUT);
+      assert.notEqual(result.code, ARCHITECT_ERROR.ARCHITECT_CANCELLED);
+    }
+  });
+
+  it("les diagnostics de HOTFIX-003 restent inchanges", async () => {
+    // Requirement 18 : le plafond et l'arret n'ont rien reclasse.
+    const incomplete = await provider({
+      id: "r",
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output_text: "",
+    }).generateTaskTurn(INPUT);
+    assert.equal(incomplete.ok, false);
+    if (!incomplete.ok) {
+      assert.equal(incomplete.code, ARCHITECT_ERROR.ARCHITECT_RESPONSE_INCOMPLETE);
+    }
+
+    const malformed = await provider({ id: "r", output_text: "pas du json" }).generateTaskTurn(
+      INPUT,
+    );
+    assert.equal(malformed.ok, false);
+    if (!malformed.ok) {
+      assert.equal(malformed.code, ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
+    }
   });
 });

@@ -25,6 +25,7 @@ import {
   ARCHITECT_SESSION_STATUS,
 } from "@nox/shared";
 import {
+  cancelArchitectGeneration,
   createArchitectSession,
   ensureProjectArchitectSession,
   createDatabaseClient,
@@ -35,7 +36,14 @@ import {
   type DatabaseClient,
 } from "@nox/database";
 
-import { FakeArchitectProvider, type ArchitectProviderResult } from "./provider.ts";
+import { abortArchitectCall, activeArchitectCallCount } from "./cancellation.ts";
+import { ARCHITECT_HARD_TIMEOUT_MS } from "./config.ts";
+import {
+  FakeArchitectProvider,
+  type ArchitectProvider,
+  type ArchitectProviderInput,
+  type ArchitectProviderResult,
+} from "./provider.ts";
 import {
   fetchArchitectContext,
   reviewArchitectTurn,
@@ -239,7 +247,9 @@ async function review(sessionId: string, message: string, overrides: TurnOverrid
 /** Envoie le tour prepare : c'est `Send to Architect`. */
 async function send(
   sessionId: string,
-  provider: FakeArchitectProvider,
+  // Le contrat, et non une implementation : depuis HOTFIX-004, un test peut
+  // fournir un faux qui **attend**, pour observer l'etat pendant l'appel.
+  provider: ArchitectProvider,
   overrides: TurnOverrides = {},
 ) {
   const session = await getArchitectSession(db, sessionId);
@@ -1162,5 +1172,386 @@ describe("HOTFIX-003 — le brouillon survit a un echec", () => {
     assert.equal(session?.messages[0]?.content, "Ajuste le plan.");
     // Le brouillon disparait maintenant, et seulement maintenant.
     assert.equal(session?.pendingTurn, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOTFIX-004 — arreter un tour en vol
+// ---------------------------------------------------------------------------
+
+/**
+ * Un fournisseur qui attend, et qu'on peut interrompre.
+ *
+ * Il joue le role que tient le SDK en production : tant que personne ne repond
+ * ni n'abandonne, l'appel ne se termine pas. C'est la seule facon de tester
+ * l'etat du systeme **pendant** qu'une generation est en vol — et c'est
+ * precisement l'etat que le second pilote reel a subi deux fois sans pouvoir
+ * rien en faire.
+ *
+ * Aucun reseau, aucune horloge : le test decide quand la reponse arrive.
+ */
+class StoppableProvider implements ArchitectProvider {
+  readonly calls: ArchitectProviderInput[] = [];
+  /** Resolue des que l'appel est parti : le test sait alors qu'il peut arreter. */
+  readonly started: Promise<void>;
+
+  #announceStart!: () => void;
+  #respond: ((result: ArchitectProviderResult) => void) | null = null;
+
+  constructor() {
+    this.started = new Promise<void>((resolve) => {
+      this.#announceStart = resolve;
+    });
+  }
+
+  #call(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    this.calls.push(input);
+    return new Promise<ArchitectProviderResult>((resolve) => {
+      this.#respond = resolve;
+      // Ce que fait le SDK reel : un signal abandonne fait echouer la requete,
+      // et l'adaptateur la classe comme un arret.
+      input.signal?.addEventListener(
+        "abort",
+        () => {
+          resolve({ ok: false, code: ARCHITECT_ERROR.ARCHITECT_CANCELLED });
+        },
+        { once: true },
+      );
+      this.#announceStart();
+    });
+  }
+
+  generateTaskTurn(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+  analyzeRunReview(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+  generateBacklog(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+  refreshVerification(input: ArchitectProviderInput): Promise<ArchitectProviderResult> {
+    return this.#call(input);
+  }
+
+  /** Fait arriver la reponse, comme le ferait le fournisseur. */
+  respond(result: ArchitectProviderResult): void {
+    this.#respond?.(result);
+  }
+}
+
+/** Rejoue exactement ce que fait la route d'arret : la base, puis le reseau. */
+async function stop(sessionId: string): Promise<{ stopped: boolean; aborted: boolean }> {
+  const cancelled = await cancelArchitectGeneration(db, { sessionId });
+  if (!cancelled.ok) {
+    return { stopped: false, aborted: false };
+  }
+  return { stopped: true, aborted: abortArchitectCall(cancelled.generation.id) };
+}
+
+describe("HOTFIX-004 — arreter un tour d'Architecte", () => {
+  it("aucune echeance propre : NOX attend aussi longtemps que le fournisseur travaille", async () => {
+    // Requirement 1. Le seul plafond est celui transmis au SDK ; NOX n'en
+    // oppose aucun autre, et une generation longue aboutit normalement. La
+    // preuve tient a ce que rien ne se termine tant que le test ne repond pas.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un premier message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+
+    // Le tour est toujours en vol : aucune echeance ne l'a interrompu.
+    const during = await getArchitectSession(db, sessionId);
+    assert.equal(during?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.RUNNING);
+
+    provider.respond(success(CONTINUE_JSON));
+    const outcome = await pending;
+
+    assert.ok(outcome.ok);
+    // Et le plafond transmis est bien le plafond genereux.
+    assert.equal(provider.calls[0]?.timeoutMs, ARCHITECT_HARD_TIMEOUT_MS);
+  });
+
+  it("un arret conclut le tour en CANCELLED, jamais en FAILED", async () => {
+    // Requirement 4. Un arret n'est pas une panne : le ranger parmi les echecs
+    // ferait chercher un probleme qui n'existe pas.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message que je vais interrompre.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+
+    const result = await stop(sessionId);
+    const outcome = await pending;
+
+    assert.equal(result.stopped, true);
+    // Requirement 3 : la requete a reellement ete abandonnee, et pas seulement
+    // la ligne changee en base.
+    assert.equal(result.aborted, true);
+    assert.equal(provider.calls[0]?.signal?.aborted, true);
+
+    assert.equal(outcome.ok, false);
+    assert.equal("code" in outcome ? outcome.code : null, ARCHITECT_ERROR.ARCHITECT_CANCELLED);
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.CANCELLED);
+    assert.notEqual(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.FAILED);
+    assert.equal(session?.generations[0]?.errorCode, ARCHITECT_ERROR.ARCHITECT_CANCELLED);
+  });
+
+  it("un tour arrete rend le verrou de la session", async () => {
+    // Sans cela, la conversation resterait `GENERATING` pour toujours : c'est
+    // elle qui porte le verrou.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+    await stop(sessionId);
+    await pending;
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.notEqual(session?.status, ARCHITECT_SESSION_STATUS.GENERATING);
+    assert.notEqual(session?.status, ARCHITECT_SESSION_STATUS.FAILED);
+  });
+
+  it("un tour arrete conserve le message soumis", async () => {
+    // Requirement 5, et la continuite directe de HOTFIX-003 : un echec ne fait
+    // pas perdre le texte, et un arret non plus.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Le texte que je ne veux pas perdre.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+    await stop(sessionId);
+    await pending;
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.pendingTurn?.messageText, "Le texte que je ne veux pas perdre.");
+  });
+
+  it("un tour arrete n'ecrit aucun message dans la conversation", async () => {
+    // Ni le message de l'utilisateur, ni une fausse reponse d'architecte : le
+    // tour n'a pas eu lieu.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+    await stop(sessionId);
+    await pending;
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.messages.length, 0);
+  });
+
+  it("un resultat arrive apres l'arret n'est jamais accepte", async () => {
+    // Requirement 8, et la garantie centrale du correctif. L'arret conclut la
+    // ligne avant d'abandonner la requete : une reponse qui arrive ensuite
+    // trouve un tour deja conclu, et sa transaction entiere est refusee.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+
+    // On conclut la base **sans** abandonner la requete : la reponse arrive
+    // ensuite, exactement comme une reponse en vol au moment du clic.
+    const cancelled = await cancelArchitectGeneration(db, { sessionId });
+    assert.ok(cancelled.ok);
+    provider.respond(success(READY_JSON));
+
+    const outcome = await pending;
+
+    assert.equal(outcome.ok, false);
+    assert.equal("code" in outcome ? outcome.code : null, ARCHITECT_ERROR.ARCHITECT_CANCELLED);
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.CANCELLED);
+    // La proposition tardive n'existe nulle part : elle appartenait a la
+    // transaction refusee.
+    assert.equal(session?.generations[0]?.proposal, null);
+    assert.equal(session?.messages.length, 0);
+    assert.notEqual(session?.status, ARCHITECT_SESSION_STATUS.PROPOSAL_READY);
+  });
+
+  it("un arret apres la conclusion normale est sans effet", async () => {
+    // Un `Arrêter` arrive trop tard ne doit rien corrompre, et surtout pas
+    // reecrire un tour abouti.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+    provider.respond(success(CONTINUE_JSON));
+    const outcome = await pending;
+    assert.ok(outcome.ok);
+
+    const result = await stop(sessionId);
+
+    assert.equal(result.stopped, false, "il n'y a plus rien a arreter");
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.CONTINUE);
+    assert.equal(session?.messages.length, 2, "les deux messages du tour abouti restent");
+  });
+
+  it("un second arret est idempotent", async () => {
+    // Requirement 9.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+
+    const premier = await stop(sessionId);
+    const second = await stop(sessionId);
+    await pending;
+
+    assert.equal(premier.stopped, true);
+    assert.equal(second.stopped, false);
+    assert.equal(second.aborted, false);
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.CANCELLED);
+  });
+
+  it("le controleur est retire apres une reussite comme apres un arret", async () => {
+    // Requirements 10 et 13 : la liberation vit dans un `finally`, et couvre
+    // donc les deux issues sans que rien n'ait a y penser.
+    const avant = activeArchitectCallCount();
+
+    const abouti = await newSession();
+    const premier = new StoppableProvider();
+    await review(abouti.sessionId, "Un message.");
+    const aboutiPending = send(abouti.sessionId, premier);
+    await premier.started;
+    premier.respond(success(CONTINUE_JSON));
+    await aboutiPending;
+
+    assert.equal(activeArchitectCallCount(), avant, "rien ne reste apres une reussite");
+
+    const arrete = await newSession();
+    const second = new StoppableProvider();
+    await review(arrete.sessionId, "Un message.");
+    const arretePending = send(arrete.sessionId, second);
+    await second.started;
+    await stop(arrete.sessionId);
+    await arretePending;
+
+    assert.equal(activeArchitectCallCount(), avant, "rien ne reste apres un arret");
+  });
+
+  it("deux tours successifs ne partagent jamais un controleur", async () => {
+    // Requirement 14 : la cle est l'identifiant de la generation, attribue une
+    // seule fois. Arreter le second ne peut pas atteindre le premier.
+    const { sessionId } = await newSession();
+
+    const premier = new StoppableProvider();
+    await review(sessionId, "Premier message.");
+    const premierPending = send(sessionId, premier);
+    await premier.started;
+    premier.respond(success(CONTINUE_JSON));
+    await premierPending;
+
+    const second = new StoppableProvider();
+    await review(sessionId, "Second message.");
+    const secondPending = send(sessionId, second);
+    await second.started;
+    await stop(sessionId);
+    await secondPending;
+
+    assert.equal(premier.calls[0]?.signal?.aborted, false, "le tour abouti n'est pas touche");
+    assert.equal(second.calls[0]?.signal?.aborted, true);
+  });
+
+  it("une generation conclue enregistre sa duree", async () => {
+    // L'observabilite qui manquait : sans elle, le prochain reglage du plafond
+    // serait un second pari plutot qu'une mesure.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+    provider.respond(success(CONTINUE_JSON));
+    await pending;
+
+    const session = await getArchitectSession(db, sessionId);
+    const generation = session?.generations[0];
+
+    assert.notEqual(generation?.finishedAt, null);
+    assert.equal(typeof generation?.durationMs, "number");
+    assert.equal((generation?.durationMs ?? -1) >= 0, true);
+  });
+
+  it("un tour arrete enregistre aussi sa duree", async () => {
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+    await stop(sessionId);
+    await pending;
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(typeof session?.generations[0]?.durationMs, "number");
+  });
+
+  it("un tour en vol n'a pas de duree, et pas zero", async () => {
+    // « Pas encore terminee » et « zero milliseconde » sont deux affirmations
+    // differentes.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+
+    const during = await getArchitectSession(db, sessionId);
+    assert.equal(during?.generations[0]?.durationMs, null);
+    assert.equal(during?.generations[0]?.finishedAt, null);
+
+    provider.respond(success(CONTINUE_JSON));
+    await pending;
+  });
+});
+
+describe("HOTFIX-004 — un arret pendant la validation garde le dernier mot", () => {
+  it("une reponse refusee apres un arret se lit comme un arret", async () => {
+    // La course la plus fine : la reponse arrive, elle est invalide, et l'arret
+    // a conclu la ligne entre-temps. L'ecran ne doit pas annoncer un refus de
+    // contrat sur un tour que l'utilisateur a stoppe — la base dit `CANCELLED`,
+    // et la phrase doit dire la meme chose.
+    const { sessionId } = await newSession();
+    const provider = new StoppableProvider();
+    await review(sessionId, "Un message.");
+
+    const pending = send(sessionId, provider);
+    await provider.started;
+
+    const cancelled = await cancelArchitectGeneration(db, { sessionId });
+    assert.ok(cancelled.ok);
+    // Une reponse que `readArchitectTurn` refuse : issue de tour inconnue.
+    provider.respond(success({ ...CONTINUE_JSON, state: "N'IMPORTE QUOI" }));
+
+    const outcome = await pending;
+
+    assert.equal(outcome.ok, false);
+    assert.equal("code" in outcome ? outcome.code : null, ARCHITECT_ERROR.ARCHITECT_CANCELLED);
+
+    const session = await getArchitectSession(db, sessionId);
+    assert.equal(session?.generations[0]?.status, ARCHITECT_GENERATION_STATUS.CANCELLED);
+    // Aucun diagnostic de contrat n'a ete ecrit : la ligne etait deja conclue.
+    assert.equal(session?.generations[0]?.errorCode, ARCHITECT_ERROR.ARCHITECT_CANCELLED);
   });
 });
