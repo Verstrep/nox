@@ -11,8 +11,11 @@
  * ## Ce qui entre, et ce qui n'entre pas
  *
  * Entrent : le contrat gele, les criteres automatises en echec, leurs commandes
- * et leurs sorties bornees, la mutation du repository lorsqu'elle a eu lieu, et
- * le texte humain lorsqu'il y en a un. N'entrent pas : le compte rendu de Claude
+ * et leurs sorties bornees, la mutation du repository lorsqu'elle a eu lieu, le
+ * texte humain lorsqu'il y en a un, et — depuis HOTFIX-006 — le diagnostic de
+ * terminaison quand c'est le processus lui-meme qui a cede : sa categorie, la
+ * phrase que NOX a ecrite, son code de sortie, la queue de sa sortie d'erreur,
+ * et ses dernieres actions reconnues. N'entrent pas : le compte rendu de Claude
  * Code, le diff, le transcript, un chemin absolu, une variable d'environnement,
  * un secret. Ce ne sont pas des filtres — aucun de ces elements n'atteint ce
  * module.
@@ -37,6 +40,7 @@ import {
   type CorrectionEvidence,
   type CorrectionSource,
   type DevelopmentTaskDetail,
+  type ProcessFailureEvidence,
   type VerificationPlanCriterion,
 } from "@nox/shared";
 
@@ -114,6 +118,13 @@ export function buildCorrectionContext(input: {
   automatedAttempt: number;
   humanCriterionIds: readonly string[];
   humanFeedback: string | null;
+  /**
+   * Ce que NOX a observe de la terminaison, pour une reprise apres echec.
+   *
+   * Deja assemble par l'appelant, qui seul a lu les evenements en base. Ce
+   * module met en forme ; il ne va rien chercher.
+   */
+  processFailure?: ProcessFailureEvidence | null;
 }): CorrectionContextText {
   const failedCriteria = failedCriteriaOf(input.review);
 
@@ -133,6 +144,7 @@ export function buildCorrectionContext(input: {
     repositoryMutated: input.review.repositoryMutationObserved,
     mutatedFiles: input.review.batch?.mutatedFiles ?? [],
     humanFeedback: input.humanFeedback,
+    processFailure: input.processFailure ?? null,
   };
 
   const contract = renderFrozenContract(

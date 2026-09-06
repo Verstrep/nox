@@ -11,12 +11,14 @@ import {
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   automatedAttemptLabel,
+  correctionFailureUrl,
   correctionSourceLabel,
   correctionStageDetail,
   correctionStageLabel,
   requestChangesUrl,
   runProvenanceLabel,
 } from "@/lib/correction-display";
+import { STRANDED_RETRY_NOTICE } from "@/lib/run-failure-display";
 import type { CorrectionContext } from "@/lib/correction-cycle";
 
 /**
@@ -138,6 +140,32 @@ export function CorrectionPanel({
           <span className="text-xs text-zinc-600">
             NOX found these failures — vous n&apos;avez rien a recopier.
           </span>
+        </div>
+      ) : null}
+
+      {/*
+        La reprise apres echec. Elle et la correction humaine ne peuvent jamais
+        etre offertes ensemble : la premiere exige une tache en echec — ou le
+        `READY` d'un `Retry` avorte —, la seconde une tache en review.
+      */}
+      {context.processFailure.eligible ? (
+        <div className="flex flex-col gap-2">
+          {context.strandedRetry ? (
+            <p className="max-w-prose rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-200/90">
+              {STRANDED_RETRY_NOTICE}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href={correctionFailureUrl(projectId, context.task.id, run.id)}
+              className="rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-200 transition-colors hover:border-zinc-500 hover:text-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+            >
+              Correct failed run
+            </Link>
+            <span className="text-xs text-zinc-600">
+              Continue le travail partiel, dans la meme session — sans repartir de zero.
+            </span>
+          </div>
         </div>
       ) : null}
 

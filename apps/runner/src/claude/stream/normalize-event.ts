@@ -89,6 +89,17 @@ type PendingTool = {
    * maillon a cede, et l'issue reste inconnue.
    */
   soleCommand: boolean;
+  /**
+   * Ligne affichable de l'appel, quand NOX a su la lire.
+   *
+   * Conservee pour que le **resultat** puisse dire a quoi il repond. « Bash
+   * completed », seul, n'apprend rien : le second pilote reel s'est arrete sur
+   * exactement cette ligne, et personne n'a pu savoir quelle commande venait de
+   * rendre la main.
+   */
+  display: string | null;
+  /** Pourquoi la ligne n'est pas affichable, quand elle ne l'est pas. */
+  reason: BashCommandRefusal | null;
 };
 
 /**
@@ -305,6 +316,8 @@ export class ClaudeEventNormalizer {
         name,
         validationCommands: reading.validations,
         soleCommand: reading.commandCount === 1,
+        display: reading.display,
+        reason: reading.reason,
       });
     }
 
@@ -318,7 +331,7 @@ export class ClaudeEventNormalizer {
         display: reading.display,
         reason: reading.reason,
       })),
-      detail: null,
+      detail: describeToolAttempt(name, reading),
       toolName: name,
       isError: false,
     };
@@ -381,7 +394,10 @@ export class ClaudeEventNormalizer {
         drafts.push({
           kind: CLAUDE_RUN_EVENT_KIND.VALIDATION,
           label: VALIDATION_LABELS[outcome],
-          detail: null,
+          // C'est **la** ligne qui compte quand une execution echoue : quelle
+          // commande enregistree vient de rendre la main, et avec quel code.
+          // Elle etait muette, et le pilote reel s'est arrete juste apres.
+          detail: describeToolOutcome(pending, block),
           toolName,
           isError: outcome === "failed",
         });
@@ -392,7 +408,9 @@ export class ClaudeEventNormalizer {
         kind: failed ? CLAUDE_RUN_EVENT_KIND.ERROR : CLAUDE_RUN_EVENT_KIND.TOOL_COMPLETED,
         // Le contenu du resultat n'est jamais transmis : seule son issue l'est.
         label: failed ? `${toolName ?? "Tool"} failed` : `${toolName ?? "Tool"} completed`,
-        detail: null,
+        // Le detail ne porte pas davantage de contenu : il rappelle **a quoi**
+        // ce resultat repond, et dit si le protocole a expose un code de sortie.
+        detail: describeToolOutcome(pending, block),
         toolName,
         isError: failed,
       });
@@ -409,7 +427,9 @@ export class ClaudeEventNormalizer {
         label: isError ? "Finished with an error" : "Completed",
         // Le compte rendu complet a sa propre section sur la page ; le repeter
         // dans la timeline doublerait la donnee la plus volumineuse du run.
-        detail: null,
+        // Le sous-type, lui, tient en un mot et explique souvent tout : un
+        // `error_max_turns` n'appelle pas le meme geste qu'un echec de commande.
+        detail: describeResult(message, isError),
         toolName: null,
         isError,
       },
@@ -555,6 +575,105 @@ export function describeToolUse(
       // n'importe quoi, et NOX n'a aucune regle pour la lire sans risque.
       return `Using ${name}`;
   }
+}
+
+/**
+ * Forme acceptee pour un identifiant venu du fournisseur.
+ *
+ * Meme regle que les diagnostics de l'Architecte : rien venu du reseau n'entre
+ * tel quel. Un `subtype` qui ressemble a un identifiant de protocole est
+ * recopie ; tout le reste devient `unknown`, parce qu'un champ libre du reseau
+ * n'a pas a atteindre un ecran.
+ */
+const PROTOCOL_IDENTIFIER = /^[a-z0-9_]{1,40}$/u;
+
+function readProtocolIdentifier(value: unknown): string | null {
+  return typeof value === "string" && PROTOCOL_IDENTIFIER.test(value) ? value : null;
+}
+
+/**
+ * Ce que NOX a compris de la tentative, au-dela du libelle.
+ *
+ * Le libelle est court par construction — il vit dans une liste — et se fait
+ * couper a deux cents caracteres. Une ligne `cd … && npm run typecheck && npm
+ * test` y perd donc exactement sa fin, c'est-a-dire ce qui a echoue. Le detail
+ * porte la ligne entiere, dans la meme forme deja validee segment par segment.
+ *
+ * `null` pour tout ce qui n'est pas une commande : le libelle d'une lecture ou
+ * d'une ecriture dit deja tout ce que NOX acceptera de reveler.
+ */
+function describeToolAttempt(
+  name: string,
+  reading: { display: string | null; reason: BashCommandRefusal | null; commandCount: number },
+): string | null {
+  if (name !== "Bash") {
+    return null;
+  }
+
+  if (reading.display !== null) {
+    const count =
+      reading.commandCount <= 1
+        ? ""
+        : ` (${String(reading.commandCount)} commandes enchainees sur la ligne)`;
+    return `Ligne executee : ${reading.display}${count}`;
+  }
+
+  // Ne pas afficher est une decision, et elle merite d'etre expliquee : sans
+  // cela, « Running an allowed command » ressemble a une lacune de NOX plutot
+  // qu'a une regle qu'il applique.
+  return reading.reason === "unreadable"
+    ? "NOX n'affiche pas cette ligne : sa construction sort de ce qu'il sait lire surement. " +
+        "Il ne peut donc rien conclure de son resultat."
+    : "NOX n'affiche pas cette ligne : elle contient au moins un segment qu'il ne reconnait pas.";
+}
+
+/**
+ * Ce que le resultat d'un outil apprend, sans jamais porter son contenu.
+ *
+ * Deux faits, et deux seulement : a quoi ce resultat repond, et si le protocole
+ * a expose un code de sortie. Le second point est le plus important — quand
+ * Claude Code n'en expose pas, NOX le **dit**, plutot que de laisser croire que
+ * personne n'a regarde.
+ */
+function describeToolOutcome(
+  pending: PendingTool | undefined,
+  block: Record<string, unknown>,
+): string | null {
+  const parts: string[] = [];
+
+  if (pending?.name === "Bash") {
+    parts.push(
+      pending.display !== null
+        ? `En reponse a : ${pending.display}`
+        : "En reponse a une ligne que NOX n'affiche pas.",
+    );
+  }
+
+  const exitCode = readNumber(block, "exit_code") ?? readNumber(block, "exitCode");
+  parts.push(
+    exitCode === null
+      ? "Code de sortie : non expose par le protocole de Claude Code."
+      : `Code de sortie : ${String(exitCode)}.`,
+  );
+
+  return parts.length === 0 ? null : parts.join(" ");
+}
+
+/**
+ * Ce que le message final apprend, au-dela de « termine » ou « en erreur ».
+ *
+ * Le sous-type est le seul champ du protocole qui distingue « le modele a
+ * atteint la limite de tours » d'« une commande a echoue ». Il ne coute qu'un
+ * mot, et c'est souvent le mot qui manque.
+ */
+function describeResult(message: ClaudeStreamMessage, isError: boolean): string | null {
+  const subtype = readProtocolIdentifier(message["subtype"]);
+  if (subtype === null) {
+    return isError
+      ? "Claude Code s'est declare en erreur sans exposer de sous-type lisible."
+      : null;
+  }
+  return `Sous-type rapporte par Claude Code : ${subtype}.`;
 }
 
 /**

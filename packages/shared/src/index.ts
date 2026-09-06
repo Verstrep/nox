@@ -137,9 +137,11 @@ export {
   RUN_EVENT_LIMITS,
   TRUNCATION_EVENT_DETAIL,
   TRUNCATION_EVENT_LABEL,
+  describeActivityEvent,
   isClaudeRunEvent,
   isClaudeRunEventKind,
   isEssentialEventKind,
+  lastRecognizedActivity,
 } from "./claude-events.js";
 
 export type {
@@ -239,6 +241,8 @@ export {
   attemptHoldsPlace,
   checkAutomaticCorrection,
   checkHumanCorrection,
+  checkProcessFailureCorrection,
+  isCorrectionRefusalCode,
   deriveCorrectionCycle,
   isCorrectionAttemptStatus,
   isCorrectionSource,
@@ -335,6 +339,7 @@ export type {
   CorrectionCommandEvidence,
   CorrectionCriterionEvidence,
   CorrectionEvidence,
+  ProcessFailureEvidence,
 } from "./correction-evidence.js";
 
 export {
@@ -347,6 +352,7 @@ export {
   checkReviewFeedback,
   isRunKind,
   isRunWorkspaceFingerprint,
+  isStrandedRetry,
   normalizeReviewFeedback,
 } from "./corrections.js";
 
@@ -357,6 +363,31 @@ export type {
   RunKind,
   RunWorkspaceFingerprint,
 } from "./corrections.js";
+
+export {
+  RUN_FAILURE_CATEGORIES,
+  RUN_FAILURE_CATEGORY,
+  RUN_FAILURE_LIMITS,
+  boundFailureDetail,
+  categoryMayLeavePartialWork,
+  deriveRunFailureCategory,
+  isRunFailureCategory,
+  readRunFailureCategory,
+} from "./run-failure.js";
+
+export type { RunFailureCategory, RunFailureFacts } from "./run-failure.js";
+
+export {
+  WORKSPACE_ENTRY_LIMITS,
+  describeWorkspaceDivergence,
+  diffWorkspaceEntries,
+  divergenceIsEmpty,
+  parseWorkspaceEntries,
+  serializeWorkspaceEntries,
+  workspaceDivergenceMessage,
+} from "./workspace-entries.js";
+
+export type { WorkspaceDivergence, WorkspaceEntryDigest } from "./workspace-entries.js";
 
 export {
   isClaudeCorrectionPreflightSuccess,

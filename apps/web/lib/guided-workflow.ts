@@ -50,11 +50,14 @@ import {
   ACTIVE_RUN_STATUSES,
   RUN_KIND,
   RUNNER_ERROR,
+  RUN_STATUS,
   TASK_STATUS,
+  categoryMayLeavePartialWork,
   checkResumeCandidate,
   deriveGuidedWorkflowState,
   isQueueBarrier,
   isRunKind,
+  readRunFailureCategory,
   selectGuidedCurrentRun,
   summarizeTaskDependencies,
   type DevelopmentTaskDetail,
@@ -119,6 +122,7 @@ function toRunFact(
     runStatus: row.status,
     taskStatus,
     errorCode: row.errorCode,
+    exitCode: row.exitCode,
     // Seule l'existence de la session compte : sa valeur ne quitte pas la base.
     claudeSessionId: row.hasSession ? "present" : null,
     hasReview: row.hasReview,
@@ -126,6 +130,21 @@ function toRunFact(
     hasActiveRun,
     hasCorrection: row.hasCorrection,
   });
+
+  // Le guide ne rejoue aucune decision : il combine deux verdicts deja rendus.
+  // `checkResumeCandidate` dit si l'etat relu est reprenable ;
+  // `checkProcessFailureCorrection` dit si l'echec laisse quelque chose a
+  // reprendre. Une troisieme implementation finirait par proposer un bouton que
+  // la Server Action refuse.
+  const failureCategory = readRunFailureCategory(row.failureCategory, {
+    status: row.status,
+    errorCode: row.errorCode,
+    exitCode: row.exitCode,
+  });
+  const canCorrectFailure =
+    refusal === null &&
+    row.status === RUN_STATUS.FAILED &&
+    categoryMayLeavePartialWork(failureCategory);
 
   return {
     id: row.id,
@@ -137,6 +156,8 @@ function toRunFact(
     hasReview: row.hasReview,
     canRequestChanges: refusal === null,
     requestChangesDetail: refusal === null ? null : resumeRefusalMessage(refusal),
+    canCorrectFailure,
+    hasPartialWork: row.hasPartialWork,
   };
 }
 
@@ -339,6 +360,7 @@ async function probeCorrection(
     runStatus: context.status,
     taskStatus: task.status,
     errorCode: context.errorCode,
+    exitCode: context.exitCode,
     claudeSessionId: context.claudeSessionId,
     hasReview: context.hasReview,
     hasFingerprint: context.workspaceFingerprint !== null,

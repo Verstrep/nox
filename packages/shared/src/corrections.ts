@@ -32,6 +32,8 @@
  * run initial.
  */
 
+import { categoryMayLeavePartialWork, deriveRunFailureCategory } from "./run-failure.js";
+
 /** Nature d'une execution. Liste fermee, comme tous les statuts de NOX. */
 export const RUN_KIND = {
   /** Premiere execution d'une tache, sur un repository propre. */
@@ -126,6 +128,19 @@ export type RunWorkspaceFingerprint = {
   value: string | null;
   version: string;
   errorCode: string | null;
+  /**
+   * Empreintes par entree, serialisees, ou `null`.
+   *
+   * Facultatives, et elles doivent le rester. Elles ne decident de rien : c'est
+   * `value` qui accorde ou refuse une reprise. Elles servent a **nommer** les
+   * chemins d'une divergence, parce qu'un refus qu'on ne peut pas diagnostiquer
+   * finit par etre contourne — en general en detruisant le travail qu'il
+   * protegeait. Voir `workspace-entries.ts`.
+   *
+   * `null` quand la liste depasse ses bornes, ou pour toute execution anterieure
+   * a HOTFIX-006. Le refus tient alors, sans nommer de chemin.
+   */
+  entries?: string | null;
 };
 
 export function isRunWorkspaceFingerprint(value: unknown): value is RunWorkspaceFingerprint {
@@ -133,10 +148,14 @@ export function isRunWorkspaceFingerprint(value: unknown): value is RunWorkspace
     return false;
   }
   const record = value as Record<string, unknown>;
+  const entries: unknown = record["entries"];
   return (
     (record["value"] === null || typeof record["value"] === "string") &&
     typeof record["version"] === "string" &&
-    (record["errorCode"] === null || typeof record["errorCode"] === "string")
+    (record["errorCode"] === null || typeof record["errorCode"] === "string") &&
+    // Absentes est valide : une capture d'avant HOTFIX-006 n'en porte aucune, et
+    // exiger le champ ferait tomber la lecture d'une review parfaitement bonne.
+    (entries === undefined || entries === null || typeof entries === "string")
   );
 }
 
@@ -147,10 +166,18 @@ export function isRunWorkspaceFingerprint(value: unknown): value is RunWorkspace
  * rencontree, celle qui est la plus proche de ce que l'utilisateur peut changer.
  */
 export const RESUME_REFUSAL = {
-  /** L'execution n'est pas `COMPLETED`. */
+  /** L'execution n'a pas atteint un etat qui laisse un travail a reprendre. */
   RUN_NOT_COMPLETED: "RUN_NOT_COMPLETED",
-  /** La tache n'est pas en review. */
+  /** La tache n'est ni en review, ni en echec. */
   TASK_NOT_IN_REVIEW: "TASK_NOT_IN_REVIEW",
+  /**
+   * L'execution a echoue avant d'avoir rien produit.
+   *
+   * Un processus qui n'a jamais demarre, ou une limite d'utilisation atteinte
+   * avant tout travail, ne laissent aucun dossier de travail a reprendre.
+   * Proposer une correction y serait proposer de continuer le vide.
+   */
+  NO_PARTIAL_WORK: "NO_PARTIAL_WORK",
   /** L'execution a viole les regles Git : son etat de depart est ambigu. */
   GIT_POLICY_VIOLATION: "GIT_POLICY_VIOLATION",
   /** Claude Code n'a pas rapporte d'identifiant de session. */
@@ -177,7 +204,98 @@ export type ResumeCandidate = {
   hasFingerprint: boolean;
   hasActiveRun: boolean;
   hasCorrection: boolean;
+  /**
+   * Code de sortie du processus, quand il y en a un.
+   *
+   * Sert uniquement a nommer ce qui a cede, via `deriveRunFailureCategory`.
+   * Facultatif : une execution `COMPLETED` n'en a pas besoin, et une base
+   * anterieure peut ne pas le porter.
+   */
+  exitCode?: number | null;
+  /**
+   * Cette execution est-elle encore la plus recente de sa tache ?
+   *
+   * Sert au seul cas `READY` accepte ci-dessous. Absent, il vaut `false` : le
+   * defaut sur refuse, et une surface qui oublierait de le calculer n'ouvre
+   * rien par megarde.
+   */
+  isLatestRun?: boolean;
 };
+
+/**
+ * Une tache `READY` qui n'a jamais quitte son echec.
+ *
+ * ## Le cas que cette fonction reconnait
+ *
+ * Avant HOTFIX-006, une execution en echec n'offrait qu'un geste : `Retry`,
+ * c'est-a-dire `FAILED → READY`. Ce geste ne lance rien — le lancement est une
+ * seconde action — et il ne verifiait rien. Le pilote reel l'a donc clique, la
+ * tache est passee `READY`, et le lancement a ensuite ete refuse : le
+ * repository portait le travail partiel de l'echec, et un lancement initial
+ * exige un repository propre.
+ *
+ * Resultat : la tache annonce `READY`, aucune execution n'a demarre, et l'echec
+ * reste le dernier fait de son histoire. Sans cette reconnaissance, la reprise
+ * serait refusee sur un detail de statut alors que **tout** ce qu'elle protege
+ * est intact.
+ *
+ * ## Pourquoi elle est aussi etroite
+ *
+ * Parce qu'une tache `READY` est normalement une tache qui attend un lancement
+ * neuf, et reprendre une vieille session dessus serait faux. Les trois
+ * conditions ci-dessous ne se rencontrent ensemble que dans le cas decrit :
+ *
+ * - l'execution visee a **echoue** ;
+ * - elle est encore la **plus recente** de la tache — un `Retry` qui aurait
+ *   reellement demarre en aurait produit une autre ;
+ * - aucune correction n'en est deja nee.
+ *
+ * Elle ne remplace aucun controle : branche, `HEAD` et empreinte du dossier de
+ * travail restent verifies par le runner, juste avant le lancement.
+ */
+export function isStrandedRetry(candidate: {
+  runStatus: string;
+  taskStatus: string;
+  isLatestRun?: boolean;
+  hasCorrection: boolean;
+}): boolean {
+  return (
+    candidate.taskStatus === "READY" &&
+    candidate.runStatus === "FAILED" &&
+    candidate.isLatestRun === true &&
+    !candidate.hasCorrection
+  );
+}
+
+/**
+ * Statuts d'execution qui peuvent laisser un travail partiel exploitable.
+ *
+ * `COMPLETED` y figure depuis TASK-011 : le travail est fini, mais la review
+ * demande des changements. `FAILED` s'y ajoute depuis HOTFIX-006, et c'est tout
+ * le sujet de ce correctif — le second pilote reel a produit vingt-quatre
+ * fichiers et quatre mille lignes avant de sortir en code 1, et NOX ne savait
+ * proposer que de tout recommencer depuis un dossier propre.
+ *
+ * `BLOCKED` et `CANCELLED` n'y sont **pas**, et c'est delibere. Une limite
+ * d'utilisation atteinte se resout en attendant ; une annulation est une
+ * decision humaine de ne pas continuer, et la reprendre automatiquement
+ * contredirait le geste. Les deux laissent un dossier de travail que NOX
+ * n'efface pas — il reste relisible, simplement pas repris d'un clic.
+ */
+const RESUMABLE_RUN_STATUSES: readonly string[] = ["COMPLETED", "FAILED"];
+
+/**
+ * Statuts de tache qui autorisent une correction, sans condition.
+ *
+ * `REVIEW` est le cas historique : un humain relit et demande des changements.
+ * `FAILED` est le cas de HOTFIX-006 : personne n'a rien a decider, l'execution
+ * a cede toute seule, et le travail partiel est la.
+ *
+ * `READY` n'y figure pas, et ne doit jamais y figurer : une tache prete attend
+ * normalement un lancement **neuf**, et y reprendre une ancienne session serait
+ * faux. Le seul `READY` accepte l'est sous conditions, par `isStrandedRetry`.
+ */
+const RESUMABLE_TASK_STATUSES: readonly string[] = ["REVIEW", "FAILED"];
 
 /**
  * Dit si une execution peut recevoir une correction, et sinon pourquoi.
@@ -187,14 +305,29 @@ export type ResumeCandidate = {
  * finiraient par diverger, et c'est l'interface qui aurait raison a tort.
  */
 export function checkResumeCandidate(candidate: ResumeCandidate): ResumeRefusal | null {
-  if (candidate.runStatus !== "COMPLETED") {
+  if (!RESUMABLE_RUN_STATUSES.includes(candidate.runStatus)) {
     return RESUME_REFUSAL.RUN_NOT_COMPLETED;
   }
   if (candidate.errorCode === "GIT_POLICY_VIOLATION") {
     return RESUME_REFUSAL.GIT_POLICY_VIOLATION;
   }
-  if (candidate.taskStatus !== "REVIEW") {
+  if (!RESUMABLE_TASK_STATUSES.includes(candidate.taskStatus) && !isStrandedRetry(candidate)) {
     return RESUME_REFUSAL.TASK_NOT_IN_REVIEW;
+  }
+  // Un echec sans travail derriere lui n'a rien a reprendre. Le controle est
+  // separe du precedent parce que la reponse a donner l'est aussi : ici la
+  // tache est bien en echec, c'est le contenu de l'echec qui ne s'y prete pas.
+  if (
+    candidate.runStatus === "FAILED" &&
+    !categoryMayLeavePartialWork(
+      deriveRunFailureCategory({
+        status: candidate.runStatus,
+        errorCode: candidate.errorCode,
+        exitCode: candidate.exitCode ?? null,
+      }),
+    )
+  ) {
+    return RESUME_REFUSAL.NO_PARTIAL_WORK;
   }
   if (candidate.claudeSessionId === null || candidate.claudeSessionId.trim() === "") {
     return RESUME_REFUSAL.SESSION_MISSING;

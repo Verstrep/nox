@@ -29,7 +29,9 @@ import {
   formatRunCode,
   isTaskStatus,
   normalizeReviewFeedback,
+  RUN_STATUS,
   type ReviewFeedbackRefusal,
+  type TaskStatus,
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
@@ -175,9 +177,23 @@ export type RunResumeContext = {
   runCode: string;
   status: string;
   errorCode: string | null;
+  /** Code de sortie, pour nommer ce qui a cede sur une execution en echec. */
+  exitCode: number | null;
+  /** Categorie enregistree, ou `null` avant HOTFIX-006. */
+  failureCategory: string | null;
   claudeSessionId: string | null;
   workspaceFingerprint: string | null;
   workspaceFingerprintVersion: string | null;
+  /**
+   * Empreintes par entree, serialisees.
+   *
+   * Contrairement a `workspaceFingerprint`, elles ne sont pas un secret : ce
+   * sont des chemins relatifs et des HMAC tronques. Elles restent malgre tout
+   * hors des rendus, pour une raison plus simple — rien, a l'ecran, n'en a
+   * besoin. Seul le preflight du runner les recoit, et seulement pour formuler
+   * un refus deja pris.
+   */
+  workspaceEntries: string | null;
   gitBranch: string | null;
   gitHeadAfter: string | null;
   hasReview: boolean;
@@ -197,9 +213,12 @@ export async function getRunResumeContext(
       sequence: true,
       status: true,
       errorCode: true,
+      exitCode: true,
+      failureCategory: true,
       claudeSessionId: true,
       workspaceFingerprint: true,
       workspaceFingerprintVersion: true,
+      workspaceEntries: true,
       gitBranch: true,
       gitHeadAfter: true,
       reviewCapturedAt: true,
@@ -220,9 +239,12 @@ export async function getRunResumeContext(
     runCode: formatRunCode(row.sequence),
     status: row.status,
     errorCode: row.errorCode,
+    exitCode: row.exitCode,
+    failureCategory: row.failureCategory,
     claudeSessionId: row.claudeSessionId,
     workspaceFingerprint: row.workspaceFingerprint,
     workspaceFingerprintVersion: row.workspaceFingerprintVersion,
+    workspaceEntries: row.workspaceEntries,
     gitBranch: row.gitBranch,
     gitHeadAfter: row.gitHeadAfter,
     hasReview: row.reviewCapturedAt !== null,
@@ -231,7 +253,29 @@ export async function getRunResumeContext(
 }
 
 /**
- * Fait passer une tache de `REVIEW` a `RUNNING` pour une correction.
+ * Statuts depuis lesquels une correction demarre sans condition.
+ *
+ * `REVIEW` est le cas de TASK-011 : un humain a relu et demande des changements.
+ * `FAILED` s'y ajoute depuis HOTFIX-006. Personne n'a rien relu dans ce cas —
+ * l'execution a cede toute seule — mais le travail partiel est bien la, et
+ * l'obliger a repartir d'un dossier propre revenait a le jeter.
+ *
+ * `READY` n'y figure **pas**, et ne doit pas y figurer : il est accepte
+ * conditionnellement, plus bas, et seulement pour un `Retry` qui n'a jamais
+ * demarre. L'ajouter ici rendrait reprenable n'importe quelle tache prete.
+ *
+ * La bascule reste **etroite** pour la meme raison qu'avant : ces transitions
+ * n'existent ni dans les transitions manuelles, ni dans les transitions
+ * automatisees generiques. Les ouvrir la-bas les rendrait atteignables depuis
+ * n'importe quel bouton.
+ */
+const CORRECTABLE_TASK_STATUSES: readonly TaskStatus[] = [
+  TASK_STATUS.REVIEW,
+  TASK_STATUS.FAILED,
+];
+
+/**
+ * Fait passer une tache de `REVIEW` ou `FAILED` a `RUNNING` pour une correction.
  *
  * Volontairement separee de `startTaskExecution`, et volontairement etroite :
  * `REVIEW → RUNNING` n'existe ni dans les transitions manuelles, ni dans les
@@ -242,28 +286,89 @@ export async function getRunResumeContext(
 export async function startTaskCorrection(
   db: DatabaseClient,
   taskId: string,
+  /**
+   * Execution dont la correction repart.
+   *
+   * Facultative pour les deux cas historiques, qui se decident sur le seul
+   * statut. Indispensable au cas `READY` : c'est elle qui prouve qu'un `Retry`
+   * n'a jamais demarre, et la preuve est refaite **ici**, dans la transaction
+   * qui ecrit. Un appelant qui aurait raison il y a trois secondes n'est pas une
+   * garantie ; relire l'est.
+   */
+  sourceRunId?: string,
 ): Promise<boolean> {
   return db.$transaction(async (tx) => {
     const task = await tx.task.findUnique({ where: { id: taskId }, select: { status: true } });
-    if (task === null || !isTaskStatus(task.status) || task.status !== TASK_STATUS.REVIEW) {
+    if (task === null || !isTaskStatus(task.status)) {
       return false;
     }
+
+    if (!CORRECTABLE_TASK_STATUSES.includes(task.status)) {
+      // Le seul autre statut accepte est `READY`, et uniquement quand l'echec
+      // vise est encore le dernier fait de la tache. Une tache prete dont une
+      // execution plus recente existe attend un lancement neuf, pas la reprise
+      // d'une session ancienne.
+      if (task.status !== TASK_STATUS.READY || sourceRunId === undefined) {
+        return false;
+      }
+
+      const source = await tx.run.findFirst({
+        where: { id: sourceRunId, taskId },
+        select: { id: true, status: true },
+      });
+      if (source === null || source.status !== RUN_STATUS.FAILED) {
+        return false;
+      }
+
+      // Meme question que `isLatestRunForTask`, et meme filtre : la correction
+      // qu'on est en train de lancer descend de cette execution, et vient d'etre
+      // creee. La compter ferait echouer la bascule a chaque fois.
+      const latest = await tx.run.findFirst({
+        where: {
+          taskId,
+          OR: [{ parentRunId: null }, { parentRunId: { not: sourceRunId } }],
+        },
+        orderBy: { sequence: "desc" },
+        select: { id: true },
+      });
+      if (latest === null || latest.id !== sourceRunId) {
+        return false;
+      }
+    }
+
     await tx.task.update({ where: { id: taskId }, data: { status: TASK_STATUS.RUNNING } });
     return true;
   });
 }
 
 /**
- * Ramene une tache a `REVIEW` apres une correction refusee avant demarrage.
+ * Rend a une tache le statut d'ou la correction l'avait tiree.
  *
  * Le pendant de `cancelTaskExecution` pour une reprise : sans elle, un refus du
  * runner laisserait la tache en `RUNNING` pour un processus qui n'a jamais
  * existe — et l'utilisateur ne pourrait plus relire la review qu'il venait de
  * quitter.
+ *
+ * Depuis HOTFIX-006, le statut de retour est **transmis** plutot que suppose.
+ * Une correction peut desormais partir d'une tache en echec, et la ramener a
+ * `REVIEW` lui ferait annoncer un travail a relire que personne n'a produit.
+ * `REVIEW` reste le defaut : c'est le seul cas qui existait avant, et un
+ * appelant qui ne dit rien decrit ce cas-la.
  */
-export async function cancelTaskCorrection(db: DatabaseClient, taskId: string): Promise<void> {
+export async function cancelTaskCorrection(
+  db: DatabaseClient,
+  taskId: string,
+  previousStatus: TaskStatus = TASK_STATUS.REVIEW,
+): Promise<void> {
+  // Un statut de retour hors de la liste correctable serait une erreur
+  // d'appelant, pas une donnee : la tache retombe alors sur `REVIEW`, qui ne
+  // ment sur rien de plus que ce que faisait la version precedente.
+  const target = CORRECTABLE_TASK_STATUSES.includes(previousStatus)
+    ? previousStatus
+    : TASK_STATUS.REVIEW;
+
   const task = await db.task.findUnique({ where: { id: taskId }, select: { status: true } });
   if (task !== null && task.status === TASK_STATUS.RUNNING) {
-    await db.task.update({ where: { id: taskId }, data: { status: TASK_STATUS.REVIEW } });
+    await db.task.update({ where: { id: taskId }, data: { status: target } });
   }
 }

@@ -2563,7 +2563,43 @@ describe("POST /claude/runs/start — correction ciblee", () => {
     });
 
     assert.equal(response.status, 202);
-    assert.deepEqual(receivedStartCalls[0]?.correction, CORRECTION);
+    // Les entrees attendues s'ajoutent au bloc depuis HOTFIX-006. Absentes du
+    // corps, elles valent `null` : le controle d'empreinte est inchange, seul
+    // le diagnostic d'un refus eventuel sera moins bavard.
+    assert.deepEqual(receivedStartCalls[0]?.correction, {
+      ...CORRECTION,
+      expectedWorkspaceEntries: null,
+    });
+  });
+
+  it("transporte les entrees attendues quand le web les fournit", async () => {
+    receivedStartCalls.length = 0;
+    const entries = JSON.stringify([{ path: "a.ts", code: " M", digest: "abc" }]);
+
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: JSON.stringify({
+        ...BASE,
+        correction: { ...CORRECTION, expectedWorkspaceEntries: entries },
+      }),
+    });
+
+    assert.equal(response.status, 202);
+    assert.equal(receivedStartCalls[0]?.correction?.expectedWorkspaceEntries, entries);
+  });
+
+  it("refuse des entrees attendues qui ne sont pas une chaine", async () => {
+    // Elles n'accordent rien, mais un corps mal forme reste un corps mal forme :
+    // NOX ne devine pas ce qu'un appelant a voulu dire.
+    const response = await call("/claude/runs/start", {
+      ...authorized,
+      body: JSON.stringify({
+        ...BASE,
+        correction: { ...CORRECTION, expectedWorkspaceEntries: 42 },
+      }),
+    });
+
+    assert.equal(response.status, 400);
   });
 
   it("laisse un run initial sans bloc de correction", async () => {

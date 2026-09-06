@@ -26,13 +26,17 @@
 import {
   CLAUDE_RUN_EVENT_KIND,
   RUNNER_ERROR,
+  RUN_FAILURE_CATEGORY,
   RUN_STATUS,
   WORKSPACE_FINGERPRINT_VERSION,
+  boundFailureDetail,
   buildClaudeToolPolicy,
   isRunnerRunId,
   repositoryLockKey,
   RUN_LIMITS,
+  serializeWorkspaceEntries,
   type DeliveryPolicy,
+  type RunFailureCategory,
   type RunStatus,
   type RunWorkspaceFingerprint,
   type RunnerErrorCode,
@@ -75,12 +79,19 @@ export type StartRunRequest = {
     sessionId: string;
     expectedBranch: string;
     expectedWorkspaceFingerprint: string;
+    /** Entrees de l'etat relu, serialisees ; sert uniquement au diagnostic. */
+    expectedWorkspaceEntries?: string | null;
   };
 };
 
 export type StartRunResult =
   | { ok: true; startedAt: Date }
-  | { ok: false; code: RunnerErrorCode };
+  | {
+      ok: false;
+      code: RunnerErrorCode;
+      /** Nomme les chemins divergents, quand le refus vient de l'empreinte. */
+      detail?: string;
+    };
 
 export type StartRunOptions = PreflightOptions &
   GitStateOptions & {
@@ -205,6 +216,7 @@ export async function startClaudeRun(
             expectedGitHead: request.expectedGitHead,
             expectedBranch: correction.expectedBranch,
             expectedWorkspaceFingerprint: correction.expectedWorkspaceFingerprint,
+            expectedWorkspaceEntries: correction.expectedWorkspaceEntries ?? null,
           },
           claude,
           { ...options, fingerprintKey },
@@ -407,6 +419,11 @@ async function finishRun(
       update: Parameters<typeof registry.finish>[2],
       unreliable = false,
     ): Promise<void> => {
+      // La categorie est ecrite **ici**, au moment ou NOX observe la
+      // terminaison, et jamais recalculee ensuite. Le pilote reel n'avait qu'un
+      // `CLAUDE_PROCESS_FAILED` : un code qui melangeait « le systeme a rendu 1 »
+      // et « l'agent s'est declare en echec », deux incidents qui n'appellent
+      // pas le meme geste.
       const captured = await captureReview(repositoryRoot, headBefore, options);
       // L'empreinte est prise **au meme instant** que la review, et pour la meme
       // raison : les deux decrivent l'etat que l'utilisateur va relire. Un echec
@@ -455,6 +472,12 @@ async function finishRun(
       await conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         errorCode: RUNNER_ERROR.CLAUDE_START_FAILED,
+        ...failure(
+          RUN_FAILURE_CATEGORY.SPAWN_FAILED,
+          // `spawnError` est deja le seul code systeme, ecrit par le lanceur —
+          // jamais le message de Node, qui porterait le chemin absolu du binaire.
+          `Le processus Claude Code n'a pas pu etre lance (${outcome.spawnError}).`,
+        ),
         stderrTail: outcome.stderrTail,
         exitCode: null,
       });
@@ -465,6 +488,11 @@ async function finishRun(
       await conclude(RUN_STATUS.BLOCKED, {
         ...gitUpdate,
         errorCode: RUNNER_ERROR.CLAUDE_TIMEOUT,
+        ...failure(
+          RUN_FAILURE_CATEGORY.TIMEOUT,
+          "NOX a atteint son plafond de duree et a arrete le processus. " +
+            "Le travail deja ecrit dans le dossier de travail est intact.",
+        ),
         stderrTail: outcome.stderrTail,
         exitCode: outcome.exitCode,
       });
@@ -495,6 +523,10 @@ async function finishRun(
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_LIMIT_REACHED,
+        ...failure(
+          RUN_FAILURE_CATEGORY.USAGE_LIMIT,
+          "Une limite d'utilisation Claude a ete reconnue. Le geste qui s'applique est d'attendre.",
+        ),
       });
       return;
     }
@@ -517,6 +549,11 @@ async function finishRun(
           ...gitUpdate,
           ...claudeFields,
           errorCode: RUNNER_ERROR.GIT_POLICY_VIOLATION,
+          ...failure(
+            RUN_FAILURE_CATEGORY.GIT_POLICY_VIOLATION,
+            "L'execution a modifie l'etat Git alors qu'elle n'en avait pas le droit. " +
+              "NOX n'a rien restaure.",
+          ),
         },
         // Le detail est capture quand meme — il reste la meilleure trace de ce
         // qui s'est passe — mais il est marque comme non fiable : compare a
@@ -537,8 +574,14 @@ async function finishRun(
         ...gitUpdate,
         ...claudeFields,
         // Aucun code d'erreur : une annulation demandee et obtenue n'est pas un
-        // incident. Ce qu'il faut regarder, c'est l'etat du repository.
+        // incident. Ce qu'il faut regarder, c'est l'etat du repository. La
+        // categorie, elle, est renseignee : « pourquoi cela s'est-il arrete ? »
+        // a une reponse, meme quand « qu'est-ce qui a echoue ? » n'en a pas.
         errorCode: null,
+        ...failure(
+          RUN_FAILURE_CATEGORY.CANCELLED,
+          "Un humain a demande l'arret, et le processus s'est arrete.",
+        ),
       });
       return;
     }
@@ -548,15 +591,62 @@ async function finishRun(
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_OUTPUT_INVALID,
+        ...failure(
+          RUN_FAILURE_CATEGORY.STREAM_UNREADABLE,
+          "Le processus a parle, mais NOX n'a pas retrouve la ligne de resultat attendue " +
+            "dans son flux.",
+        ),
       });
       return;
     }
 
-    if (outcome.exitCode !== 0 || report?.isError === true) {
+    // Ces deux issues partagent `CLAUDE_PROCESS_FAILED` — le code du contrat ne
+    // bouge pas, et les executions deja enregistrees restent lisibles — mais
+    // elles ne disent pas la meme chose. Un code de sortie non nul est le
+    // systeme qui tranche ; un `is_error` sur une sortie nulle est l'agent qui
+    // renonce. Le second pilote reel etait le premier cas, et l'ecran ne
+    // permettait pas de le savoir.
+    if (outcome.exitCode !== null && outcome.exitCode !== 0) {
       await conclude(RUN_STATUS.FAILED, {
         ...gitUpdate,
         ...claudeFields,
         errorCode: RUNNER_ERROR.CLAUDE_PROCESS_FAILED,
+        ...failure(
+          RUN_FAILURE_CATEGORY.PROCESS_EXIT_NONZERO,
+          `Le processus Claude Code s'est termine avec le code ${String(outcome.exitCode)}. ` +
+            "Ce qu'il avait deja ecrit reste dans le dossier de travail.",
+        ),
+      });
+      return;
+    }
+
+    // Un processus tue par un signal ne rend aucun code. NOX sait qu'il est mort,
+    // pas pourquoi : ni le systeme ni l'agent n'ont tranche, et personne ne l'a
+    // demande — le delai et l'annulation ont deja ete traites plus haut.
+    if (outcome.exitCode === null) {
+      await conclude(RUN_STATUS.FAILED, {
+        ...gitUpdate,
+        ...claudeFields,
+        errorCode: RUNNER_ERROR.CLAUDE_PROCESS_FAILED,
+        ...failure(
+          RUN_FAILURE_CATEGORY.UNKNOWN,
+          "Le processus a ete termine par un signal, sans rendre de code de sortie. " +
+            "NOX ne sait pas ce qui l'a tue.",
+        ),
+      });
+      return;
+    }
+
+    if (report?.isError === true) {
+      await conclude(RUN_STATUS.FAILED, {
+        ...gitUpdate,
+        ...claudeFields,
+        errorCode: RUNNER_ERROR.CLAUDE_PROCESS_FAILED,
+        ...failure(
+          RUN_FAILURE_CATEGORY.AGENT_REPORTED_ERROR,
+          "Claude Code s'est declare en erreur dans son compte rendu final, " +
+            "alors que son code de sortie etait nul.",
+        ),
       });
       return;
     }
@@ -571,8 +661,30 @@ async function finishRun(
     // portent deja ce qu'il faut.
     registry.finish(request.runId, RUN_STATUS.FAILED, {
       errorCode: RUNNER_ERROR.CLAUDE_PROCESS_FAILED,
+      failureCategory: RUN_FAILURE_CATEGORY.UNKNOWN,
+      failureDetail:
+        "La finalisation de l'execution a echoue dans le runner. NOX ne peut rien " +
+        "affirmer de ce que le processus a laisse derriere lui.",
     });
   }
+}
+
+/**
+ * Compose les deux champs de diagnostic d'une issue.
+ *
+ * Un helper plutot que deux lignes recopiees huit fois : c'est ce qui garantit
+ * qu'aucune issue ne nomme sa categorie sans expliquer pourquoi, et que la
+ * phrase passe toujours par la meme borne.
+ *
+ * Toutes les phrases sont ecrites par NOX. Aucune ne provient du systeme, du
+ * processus, ni du reseau — c'est la seule facon de garantir qu'un chemin absolu
+ * ou un fragment d'environnement ne puisse pas y entrer.
+ */
+function failure(
+  category: RunFailureCategory,
+  detail: string,
+): { failureCategory: string; failureDetail: string | null } {
+  return { failureCategory: category, failureDetail: boundFailureDetail(detail) };
 }
 
 /**
@@ -621,7 +733,14 @@ async function captureFingerprint(
       runGit: options.runGit,
     });
     return result.ok
-      ? { value: result.value, version: WORKSPACE_FINGERPRINT_VERSION, errorCode: null }
+      ? {
+          value: result.value,
+          version: WORKSPACE_FINGERPRINT_VERSION,
+          errorCode: null,
+          // `null` quand la liste depasse ses bornes : la reprise reste
+          // possible, son refus eventuel sera simplement moins bavard.
+          entries: serializeWorkspaceEntries(result.entries),
+        }
       : { value: null, version: WORKSPACE_FINGERPRINT_VERSION, errorCode: result.code };
   } catch {
     return {

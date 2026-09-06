@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
 import type { ClaudeConfig } from "../config.ts";
+import { buildSpawnPlan } from "./executable.ts";
 import { buildClaudeArguments, launchClaude } from "./launcher.ts";
 
 /**
@@ -480,5 +481,82 @@ describe("launchClaude — arguments reellement recus", () => {
     await handle.completed;
     const received = await readReport();
     assert.equal(received.argv.includes("--resume"), false);
+  });
+});
+
+
+describe("HOTFIX-006 ne touche pas au lancement du processus", () => {
+  /**
+   * Le correctif porte sur ce que NOX **conserve** d'une terminaison et sur ce
+   * qu'il propose ensuite. Le chemin qui cree le processus, lui, n'a aucune
+   * raison de bouger — et sous Windows, c'est le plus fragile de tous : `npm`
+   * y est un `.cmd`, Node refuse de le lancer autrement, et `shell: true`
+   * demanderait a Node de composer une ligne que NOX ne verrait pas.
+   *
+   * Ces tests figent ce comportement pour que le prochain correctif de
+   * diagnostic ne l'emporte pas avec lui.
+   */
+
+  it("passe par cmd.exe pour un .cmd, avec une ligne que NOX ecrit", () => {
+    const plan = buildSpawnPlan(
+      "C:\\Program Files\\nodejs\\claude.cmd",
+      ["-p", "--output-format", "stream-json"],
+      { ComSpec: "C:\\WINDOWS\\system32\\cmd.exe" },
+      "win32",
+    );
+
+    assert.ok(plan !== null);
+    assert.equal(plan.command, "C:\\WINDOWS\\system32\\cmd.exe");
+    assert.deepEqual(plan.args.slice(0, 3), ["/d", "/s", "/c"]);
+    // `windowsVerbatimArguments` est ce qui empeche Node de re-echapper la
+    // ligne que NOX vient de citer lui-meme.
+    assert.equal(plan.windowsVerbatimArguments, true);
+  });
+
+  it("refuse de construire une ligne qu'il ne saurait pas citer", () => {
+    // Un jeton porteur d'un guillemet, d'un `%` ou d'un antislash final rend la
+    // citation ambigue. NOX renonce plutot que de produire une ligne dont il ne
+    // maitrise pas l'interpretation.
+    const plan = buildSpawnPlan(
+      "C:\\bin\\claude.cmd",
+      ["--flag", "%PATH%"],
+      { ComSpec: "cmd.exe" },
+      "win32",
+    );
+    assert.equal(plan, null);
+  });
+
+  it("lance directement un executable qui n'est pas un script Windows", () => {
+    const plan = buildSpawnPlan("/usr/local/bin/claude", ["-p"], {}, "linux");
+
+    assert.ok(plan !== null);
+    assert.equal(plan.command, "/usr/local/bin/claude");
+    assert.deepEqual(plan.args, ["-p"]);
+    assert.equal(plan.windowsVerbatimArguments, false);
+  });
+
+  it("ne passe jamais par un interprete de commandes", async () => {
+    // Ni `shell: true`, ni `bash -c`, ni `powershell -Command`. Une commande
+    // validee est une suite de jetons, et c'est ce decoupage qui part au
+    // systeme.
+    const text = await readFile(new URL("./launcher.ts", import.meta.url), "utf8");
+    for (const forbidden of ["shell: true", "bash -c", "sh -c", "powershell"]) {
+      assert.equal(text.includes(forbidden), false, forbidden);
+    }
+  });
+
+  it("ne passe toujours pas --dangerously-skip-permissions", () => {
+    // La garantie la plus importante du lanceur, revalidee ici parce que
+    // HOTFIX-006 a touche a `runs.ts`, juste a cote.
+    const args = buildClaudeArguments({
+      allowedTools: ["Read"],
+      disallowedTools: [],
+      maxTurns: 20,
+      resumeSessionId: "3f2a6b1c-4d5e-4f60-9a71-8b2c3d4e5f60",
+    });
+    assert.equal(args.includes("--dangerously-skip-permissions"), false);
+    assert.equal(args.includes("--continue"), false);
+    // Une reprise passe bien par `--resume`, avec la valeur en argument suivant.
+    assert.equal(args[args.indexOf("--resume") + 1], "3f2a6b1c-4d5e-4f60-9a71-8b2c3d4e5f60");
   });
 });

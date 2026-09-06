@@ -29,6 +29,7 @@ import {
 } from "@nox/database";
 import {
   RUNNER_ERROR,
+  RUN_FAILURE_CATEGORY,
   RUN_STATUS,
   isFinalRunStatus,
   type ClaudePreflightSuccess,
@@ -153,6 +154,13 @@ export async function reconcileRun(run: DevelopmentRunDetail): Promise<Developme
     const blocked = await blockRun(db, run.id, {
       errorCode: RUNNER_ERROR.CLAUDE_RUN_NOT_FOUND,
       errorMessage: LOST_TRACKING_MESSAGE,
+      // Le seul endroit ou la categorie est ecrite par le web plutot que par le
+      // runner, parce que c'est le seul incident que le runner ne peut pas
+      // rapporter : il ne connait plus l'execution.
+      failureCategory: RUN_FAILURE_CATEGORY.TRANSPORT_FAILED,
+      failureDetail:
+        "Le runner ne connait plus cette execution — il a probablement redemarre. " +
+        "NOX ne sait pas si le processus a fini, ni ce qu'il a laisse : verifiez le repository.",
     });
     return blocked ?? run;
   }

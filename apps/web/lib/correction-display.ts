@@ -58,9 +58,11 @@ export function correctionUrl(
  */
 const REFUSAL_MESSAGES: Record<ResumeRefusal, string> = {
   [RESUME_REFUSAL.RUN_NOT_COMPLETED]:
-    "Seule une execution terminee avec succes peut etre reprise. Une execution echouee, bloquee ou annulee a laisse un etat que NOX ne sait pas rattacher a une session : relancez une nouvelle execution depuis un repository propre.",
+    "Cette execution ne laisse rien a reprendre. Seule une execution terminee — avec succes, ou en echec apres avoir travaille — porte un dossier de travail que NOX sait rattacher a sa session. Une execution bloquee ou annulee demande un regard avant toute suite.",
   [RESUME_REFUSAL.TASK_NOT_IN_REVIEW]:
-    "Cette tache n'est plus en review. Seule une tache en attente de decision peut recevoir une demande de correction.",
+    "Cette tache n'attend ni decision, ni reprise. Seule une tache en review ou en echec peut recevoir une correction.",
+  [RESUME_REFUSAL.NO_PARTIAL_WORK]:
+    "Cette execution a echoue sans rien produire : le processus n'a pas demarre, ou une limite d'utilisation a ete atteinte avant tout travail. Il n'y a pas de travail partiel a continuer — relancez la tache, ou attendez selon le cas.",
   [RESUME_REFUSAL.GIT_POLICY_VIOLATION]:
     "Cette execution a modifie l'etat Git alors que c'etait interdit. Son point de depart n'est plus identifiable, et une correction produirait un resultat ininterpretable. Verifiez le repository avant toute suite.",
   [RESUME_REFUSAL.SESSION_MISSING]:
@@ -106,10 +108,26 @@ export function buildPreconditions(input: {
   gitUnchanged: boolean;
   claudeAvailable: boolean;
   workspaceDetail: string | null;
+  /**
+   * La reprise part-elle d'un echec plutot que d'une review ?
+   *
+   * Change deux libelles, et rien d'autre. « Task is in Review » affiche devant
+   * une tache en echec ferait lire une precondition tenue comme une anomalie.
+   */
+  fromFailedRun?: boolean;
 }): Precondition[] {
+  const fromFailure = input.fromFailedRun === true;
   return [
-    { label: "Task is in Review", state: input.taskInReview ? "met" : "unmet", detail: null },
-    { label: "Source run completed", state: input.runCompleted ? "met" : "unmet", detail: null },
+    {
+      label: fromFailure ? "Task is in Failed" : "Task is in Review",
+      state: input.taskInReview ? "met" : "unmet",
+      detail: null,
+    },
+    {
+      label: fromFailure ? "Source run left partial work" : "Source run completed",
+      state: input.runCompleted ? "met" : "unmet",
+      detail: null,
+    },
     {
       label: "Claude session available",
       state: input.sessionAvailable ? "met" : "unmet",
@@ -204,6 +222,8 @@ const CORRECTION_REFUSAL_MESSAGES: Record<CorrectionRefusalCode, string> = {
     "Une correction est deja engagee sur cette execution. Rechargez la page pour voir ou elle en est.",
   [CORRECTION_REFUSAL.REPOSITORY_RUN_ACTIVE]:
     "Une execution Claude Code travaille deja sur ce repository. La correction reste prete : elle partira quand ce repository sera libre. Les autres projets ne sont pas concernes.",
+  [CORRECTION_REFUSAL.NO_PARTIAL_WORK]:
+    "Cette execution a echoue sans rien produire. Il n'y a pas de travail partiel a continuer : relancez la tache depuis un repository propre, ou attendez si une limite d'utilisation a ete atteinte.",
 };
 
 export function correctionRefusalMessage(code: CorrectionRefusalCode): string {
@@ -212,9 +232,14 @@ export function correctionRefusalMessage(code: CorrectionRefusalCode): string {
 
 /** Libelle de la source d'une correction, tel que la review l'affiche. */
 export function correctionSourceLabel(source: CorrectionSource): string {
-  return source === CORRECTION_SOURCE.AUTOMATED_VALIDATION
-    ? "Automatic validation"
-    : "Human feedback";
+  switch (source) {
+    case CORRECTION_SOURCE.AUTOMATED_VALIDATION:
+      return "Automatic validation";
+    case CORRECTION_SOURCE.PROCESS_FAILURE:
+      return "Failed run";
+    case CORRECTION_SOURCE.HUMAN_FEEDBACK:
+      return "Human feedback";
+  }
 }
 
 /** Provenance d'une execution, telle que sa page l'annonce. */
@@ -309,4 +334,20 @@ export function correctionEvidenceUrl(
   runId: string,
 ): string {
   return `/projects/${projectId}/tasks/${taskId}/runs/${runId}/corrections/evidence`;
+}
+
+/**
+ * Page de reprise d'une execution qui a echoue.
+ *
+ * Distincte de `correctionEvidenceUrl`, et pas seulement par son URL : celle-la
+ * part d'une review qui a constate des preuves en echec, celle-ci d'un processus
+ * qui s'est arrete avant d'avoir fini. Les melanger ferait afficher « voici ce
+ * que NOX a prouve » devant un travail que personne n'a mesure.
+ */
+export function correctionFailureUrl(
+  projectId: string,
+  taskId: string,
+  runId: string,
+): string {
+  return `/projects/${projectId}/tasks/${taskId}/runs/${runId}/corrections/failure`;
 }

@@ -253,12 +253,25 @@ describe("ClaudeEventNormalizer — resultats d'outils", () => {
   });
 
   it("ne transmet jamais la sortie de l'outil", () => {
+    // Le detail n'est plus nul depuis HOTFIX-006 — il dit a quoi le resultat
+    // repond et si un code de sortie a ete expose — mais la garantie qui compte
+    // n'a pas bouge d'un pouce : le **contenu** ne sort toujours pas.
     const instance = normalizer();
     instance.next(toolUse("t1", "Read", { file_path: "a.md" }));
 
     const drafts = instance.next(toolResult("t1"));
-    assert.equal(drafts[0]?.detail, null);
     assert.equal(JSON.stringify(drafts).includes("SORTIE_ENTIERE"), false);
+  });
+
+  it("dit qu'aucun code de sortie n'a ete expose, plutot que de se taire", () => {
+    // Le pilote reel s'est arrete sur « Bash completed », sans que personne ne
+    // puisse savoir si NOX avait vu un code de retour ou non. « Non expose »
+    // est une reponse ; le silence n'en etait pas une.
+    const instance = normalizer();
+    instance.next(toolUse("t1", "Read", { file_path: "a.md" }));
+
+    const drafts = instance.next(toolResult("t1"));
+    assert.match(drafts[0]?.detail ?? "", /non expose par le protocole/iu);
   });
 
   it("signale un resultat en erreur", () => {
@@ -494,10 +507,13 @@ describe("ClaudeEventNormalizer — correlation des validations", () => {
     instance.next(bashUse("t1", "npm run test"));
     const drafts = instance.next(result("t1", { content: "SORTIE_DE_VALIDATION", is_error: true }));
 
-    // La sortie n'existe que dans la review ; la timeline garde son verdict seul.
+    // La sortie n'existe que dans la review. Depuis HOTFIX-006, la timeline
+    // porte en plus la commande concernee et son code de sortie — deux faits
+    // que NOX possede deja — mais toujours **rien** de ce que la commande a
+    // ecrit : c'est la garantie que ce test protege, et elle n'a pas bouge.
     assert.equal(drafts[0]?.kind, CLAUDE_RUN_EVENT_KIND.VALIDATION);
-    assert.equal(drafts[0]?.detail, null);
     assert.equal(JSON.stringify(drafts).includes("SORTIE_DE_VALIDATION"), false);
+    assert.match(drafts[0]?.detail ?? "", /npm run test/u);
   });
 });
 
@@ -808,5 +824,133 @@ describe("ClaudeEventNormalizer — forme reelle de Claude Code 2.1.223", () => 
       }),
       [],
     );
+  });
+});
+
+
+describe("HOTFIX-006 — une activite qu'on peut interroger", () => {
+  /**
+   * Le pilote reel s'est arrete sur trois lignes muettes :
+   *
+   * ```text
+   * Running an allowed command
+   * Bash completed
+   * Finished with an error
+   * ```
+   *
+   * Aucune ne disait ce qui avait ete tente, ni ce que NOX avait observe. Ces
+   * tests protegent les details ajoutes, **et** la limite qui les encadre :
+   * jamais un contenu, jamais une deduction.
+   */
+
+  function toolUse(id: string, name: string, input: Record<string, unknown>) {
+    return assistant([{ type: "tool_use", id, name, input }]);
+  }
+
+  function result(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, ...extra }] },
+    };
+  }
+
+  it("porte la ligne entiere quand chaque segment est autorise", () => {
+    // Le libelle est borne a deux cents caracteres : sur un enchainement, c'est
+    // exactement sa fin — celle qui a echoue — qui disparaissait.
+    const instance = normalizer();
+    const drafts = instance.next(
+      toolUse("t1", "Bash", { command: "npm run test && npm run lint" }),
+    );
+
+    assert.equal(drafts[0]?.kind, CLAUDE_RUN_EVENT_KIND.TOOL_STARTED);
+    const detail = drafts[0]?.detail ?? "";
+    assert.match(detail, /npm run test/u);
+    assert.match(detail, /npm run lint/u);
+    assert.match(detail, /2 commandes enchainees/u);
+  });
+
+  it("explique pourquoi une ligne n'est pas affichee", () => {
+    // « Running an allowed command » ressemblait a une lacune de NOX. C'est une
+    // regle qu'il applique, et le detail le dit.
+    const instance = normalizer();
+    const drafts = instance.next(
+      toolUse("t1", "Bash", { command: "npm run test -- --grep MOT_DE_PASSE" }),
+    );
+
+    const detail = drafts[0]?.detail ?? "";
+    assert.match(detail, /n'affiche pas cette ligne/u);
+    assert.equal(detail.includes("MOT_DE_PASSE"), false, "jamais le contenu refuse");
+  });
+
+  it("expose le code de sortie quand le protocole le donne", () => {
+    // Le cas B : Claude Code expose parfois `exit_code` sur un `tool_result`.
+    // Quand il le fait, NOX le montre.
+    const instance = normalizer();
+    instance.next(toolUse("t1", "Bash", { command: "npm run test" }));
+    const drafts = instance.next(result("t1", { content: "sortie", is_error: true, exit_code: 2 }));
+
+    const detail = drafts[0]?.detail ?? "";
+    assert.match(detail, /Code de sortie : 2/u);
+  });
+
+  it("dit « non expose » quand le protocole ne le donne pas", () => {
+    // Le cas C. NOX n'invente ni code, ni commande : il nomme ce qui manque.
+    const instance = normalizer();
+    instance.next(toolUse("t1", "Bash", { command: "npm run lint" }));
+    const drafts = instance.next(result("t1", { content: "sortie", is_error: true }));
+
+    const detail = drafts[0]?.detail ?? "";
+    assert.match(detail, /non expose par le protocole/u);
+    assert.equal(/Code de sortie : \d/u.test(detail), false, "aucun code invente");
+  });
+
+  it("rappelle a quelle commande un resultat repond", () => {
+    // « Bash completed » ne disait pas laquelle. Sur une execution de quatre-
+    // vingt-un tours, c'etait la question centrale.
+    const instance = normalizer();
+    instance.next(toolUse("t1", "Bash", { command: "npm run test" }));
+    const drafts = instance.next(result("t1", { content: "ok", is_error: false }));
+
+    assert.match(drafts[0]?.detail ?? "", /En reponse a : npm run test/u);
+  });
+
+  it("ne recopie jamais la sortie d'un outil dans le detail", () => {
+    const instance = normalizer();
+    instance.next(toolUse("t1", "Read", { file_path: "a.md" }));
+    const drafts = instance.next(result("t1", { content: "CONTENU_DU_FICHIER", is_error: false }));
+
+    assert.equal(JSON.stringify(drafts).includes("CONTENU_DU_FICHIER"), false);
+  });
+
+  it("expose le sous-type du resultat final", () => {
+    // `error_max_turns` et « une commande a echoue » n'appellent pas le meme
+    // geste, et c'est le seul champ du protocole qui les separe.
+    const drafts = normalizer().next({
+      type: "result",
+      subtype: "error_max_turns",
+      is_error: true,
+    });
+
+    assert.match(drafts[0]?.detail ?? "", /error_max_turns/u);
+  });
+
+  it("refuse un sous-type qui n'a pas la forme d'un identifiant", () => {
+    // Rien venu du reseau n'entre tel quel dans un diagnostic : la meme regle
+    // que pour les motifs d'echec de l'Architecte.
+    const drafts = normalizer().next({
+      type: "result",
+      subtype: "<script>alert(1)</script>",
+      is_error: true,
+    });
+
+    const detail = drafts[0]?.detail ?? "";
+    assert.equal(detail.includes("script"), false);
+    assert.match(detail, /sans exposer de sous-type lisible/u);
+  });
+
+  it("ne met aucun detail sur une lecture ou une ecriture", () => {
+    // Le libelle dit deja tout ce que NOX acceptera de reveler d'un chemin.
+    const drafts = normalizer().next(toolUse("t1", "Write", { file_path: "a.md", content: "x" }));
+    assert.equal(drafts[0]?.detail, null);
   });
 });

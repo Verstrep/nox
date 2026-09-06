@@ -114,6 +114,16 @@ export const GUIDED_ACTION = {
   BACK_TO_DRAFT: "BACK_TO_DRAFT",
   /** `FAILED → READY`. */
   RETRY: "RETRY",
+  /**
+   * Reprendre le travail partiel laisse par une execution en echec.
+   *
+   * Distincte de `RETRY`, et l'opposee en un point : `RETRY` repart d'un
+   * repository **propre**, celle-ci exige que le dossier de travail soit
+   * **exactement** celui que l'echec a laisse. Les melanger reviendrait a
+   * proposer un geste qui detruit le travail sous le nom de celui qui le
+   * continue.
+   */
+  CORRECT_FAILED_RUN: "CORRECT_FAILED_RUN",
   /** Preparer une execution de Claude Code. */
   RUN_CLAUDE: "RUN_CLAUDE",
   /** Ouvrir la file d'execution du projet. */
@@ -295,6 +305,17 @@ export type GuidedRunFact = {
   canRequestChanges: boolean;
   /** Message du refus de TASK-012, lorsqu'il y en a un. */
   requestChangesDetail: string | null;
+  /**
+   * Une reprise sur le travail partiel est possible.
+   *
+   * Renseigne par l'appelant a partir de `checkProcessFailureCorrection` **et**
+   * de `checkResumeCandidate` : le guide ne rejoue aucune de ces decisions, il
+   * les traduit. Une seconde implementation finirait par proposer un bouton que
+   * la Server Action refuse.
+   */
+  canCorrectFailure?: boolean;
+  /** Le dossier de travail porte des changements laisses par cette execution. */
+  hasPartialWork?: boolean;
 };
 
 /** Derniere analyse **terminee** de l'execution courante. */
@@ -695,21 +716,48 @@ function blockedState(run: GuidedRunFact | null, facts: GuidedWorkflowFacts): Pa
 // --- 4. Tache echouee --------------------------------------------------------
 
 function failedState(run: GuidedRunFact | null): PartialState {
+  const canCorrect = run !== null && run.canCorrectFailure === true;
+  const partial = run !== null && run.hasPartialWork === true;
+
+  // Quand du travail partiel existe et qu'il est reprenable, c'est **lui** que
+  // NOX conseille. Le pilote reel n'avait que `Retry`, qui commence par exiger
+  // un repository propre : le seul chemin propose passait donc par la
+  // destruction de onze minutes de travail.
+  const recommended =
+    run === null
+      ? null
+      : canCorrect
+        ? action(GUIDED_ACTION.CORRECT_FAILED_RUN, { runId: run.id })
+        : run.hasReview
+          ? action(GUIDED_ACTION.OPEN_REVIEW, { runId: run.id })
+          : action(GUIDED_ACTION.OPEN_RUN, { runId: run.id });
+
+  const alternatives: GuidedAction[] = [];
+  if (run !== null && !canCorrect) {
+    // L'execution reste le premier endroit ou aller comprendre, meme lorsque la
+    // reprise n'est pas possible : c'est la que vit le diagnostic.
+    alternatives.push(action(GUIDED_ACTION.OPEN_RUN, { runId: run.id }));
+  } else if (run !== null && run.hasReview) {
+    alternatives.push(action(GUIDED_ACTION.OPEN_REVIEW, { runId: run.id }));
+  }
+  alternatives.push(action(GUIDED_ACTION.RETRY), action(GUIDED_ACTION.BACK_TO_DRAFT));
+
   return {
     stage: GUIDED_STAGE.RUN_FAILED,
     summary: run === null ? "La derniere execution a echoue." : `${run.code} a echoue.`,
-    reason:
-      run !== null && run.hasReview
-        ? "Les changements affiches peuvent etre partiels : NOX n'a rien restaure. Relisez-les avant " +
-          "de relancer la tache."
-        : "Ouvrez l'execution pour lire le compte rendu et la sortie d'erreur avant de la remettre en file.",
-    recommendedAction:
-      run === null
-        ? null
-        : run.hasReview
-          ? action(GUIDED_ACTION.OPEN_REVIEW, { runId: run.id })
-          : action(GUIDED_ACTION.OPEN_RUN, { runId: run.id }),
-    alternativeActions: [action(GUIDED_ACTION.RETRY), action(GUIDED_ACTION.BACK_TO_DRAFT)],
+    reason: canCorrect
+      ? "Cette execution a laisse du travail dans le repository, et NOX n'y a rien touche. " +
+        "Une reprise repart de cet etat exact, dans la meme session Claude ; " +
+        "« Retry » repartirait de zero et exigerait un repository propre."
+      : partial
+        ? "Cette execution a laisse des changements dans le repository, et NOX n'a rien restaure. " +
+          "Ouvrez-la pour lire ce qui a cede avant de decider."
+        : run !== null && run.hasReview
+          ? "Les changements affiches peuvent etre partiels : NOX n'a rien restaure. Relisez-les avant " +
+            "de relancer la tache."
+          : "Ouvrez l'execution pour lire le compte rendu et la sortie d'erreur avant de la remettre en file.",
+    recommendedAction: recommended,
+    alternativeActions: alternatives,
     blockers: [],
     architectBlockers: [],
   };

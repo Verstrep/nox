@@ -1,11 +1,19 @@
 import {
   getDatabaseClient,
   getDeliveryForRun,
+  listRunEvents,
   listRunsByTask,
   readCorrectionChain,
   readProjectDeliveryPolicy,
 } from "@nox/database";
-import { isDeliveryStatus, isDeliveryTrigger } from "@nox/shared";
+import {
+  describeActivityEvent,
+  isDeliveryStatus,
+  isDeliveryTrigger,
+  isRunFailureCategory,
+  lastRecognizedActivity,
+  readRunFailureCategory,
+} from "@nox/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -27,6 +35,12 @@ import {
   shortSha,
 } from "@/lib/run-display";
 import {
+  PROTOCOL_LIMITS_NOTICE,
+  runFailureCategoryLabel,
+  runFailureCategoryMeaning,
+  hasFailureDiagnostics,
+} from "@/lib/run-failure-display";
+import {
   CLAUDE_OBSERVATION_NOTICE,
   DELIVERY_INDEPENDENCE_NOTICE,
   UNRECORDED,
@@ -35,6 +49,7 @@ import {
   claudeObservations,
   deliveryFacts,
   executionFacts,
+  failureFacts,
   inspectAttempts,
   inspectChain,
   type InspectFact,
@@ -106,13 +121,14 @@ export default async function RunInspectPage({
   // Cinq lectures explicites, aucune par ligne affichee. Inspect a le droit de
   // charger davantage qu'une page ordinaire — c'est une surface de diagnostic —
   // mais « davantage » ne veut pas dire « une requete par tentative ».
-  const [verification, review, delivery, policy, siblings, chainIds] = await Promise.all([
+  const [verification, review, delivery, policy, siblings, chainIds, events] = await Promise.all([
     loadVerificationReview(db, { runId: run.id, taskId: task.id }),
     loadRunReview(run.id),
     getDeliveryForRun(db, task.id, run.id),
     readProjectDeliveryPolicy(db, project.id),
     listRunsByTask(db, task.id),
     readCorrectionChain(db, run.id),
+    listRunEvents(db, run.id),
   ]);
 
   const facts = executionFacts(
@@ -145,6 +161,29 @@ export default async function RunInspectPage({
       dateTime: formatIsoDateTime,
     },
   );
+
+  // Le diagnostic n'est calcule que pour les executions qui en ont un : une
+  // execution reussie n'a rien a diagnostiquer, et la section n'existe pas.
+  const showsFailure = hasFailureDiagnostics(run.status);
+  const failureCategory = readRunFailureCategory(run.failureCategory, {
+    status: run.status,
+    errorCode: run.errorCode,
+    exitCode: run.claude.exitCode,
+  });
+  const failureRows = showsFailure
+    ? failureFacts({
+        categoryLabel: runFailureCategoryLabel(failureCategory),
+        detail: run.failureDetail,
+        errorCode: run.errorCode,
+        exitCode: run.claude.exitCode,
+        categoryPersisted: isRunFailureCategory(run.failureCategory),
+        changedFiles: run.git.changedFiles.length,
+        hasStderr: run.stderrTail !== null && run.stderrTail.trim() !== "",
+      })
+    : [];
+  const lastActivity = showsFailure
+    ? lastRecognizedActivity(events).map(describeActivityEvent)
+    : [];
 
   const attempts = inspectAttempts(verification.batch, verification.previousBatches);
   const observations = claudeObservations(review?.validations ?? []);
@@ -210,6 +249,53 @@ export default async function RunInspectPage({
         >
           <FactList facts={facts} />
         </SectionCard>
+
+        {showsFailure ? (
+          <SectionCard
+            title="Failure diagnostics"
+            description="Ce qui a cédé, et ce que NOX a vu juste avant."
+          >
+            <FactList facts={failureRows} />
+
+            <p className="mt-4 max-w-prose text-sm leading-relaxed text-zinc-400">
+              {runFailureCategoryMeaning(failureCategory)}
+            </p>
+
+            <div className="mt-6">
+              <p className="text-xs uppercase tracking-wide text-zinc-600">
+                Dernières actions reconnues
+              </p>
+              {lastActivity.length === 0 ? (
+                <p className="mt-2 text-sm leading-relaxed text-zinc-500">
+                  Aucune action n&apos;a été reconnue avant l&apos;arrêt.
+                </p>
+              ) : (
+                <ol className="mt-2 flex flex-col gap-1 text-xs leading-relaxed text-zinc-400">
+                  {lastActivity.map((entry, index) => (
+                    <li key={`${String(index)}-${entry}`} className="font-mono">
+                      {entry}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+
+            {run.stderrTail === null || run.stderrTail.trim() === "" ? null : (
+              <div className="mt-6">
+                <p className="text-xs uppercase tracking-wide text-zinc-600">
+                  Fin de la sortie d&apos;erreur
+                </p>
+                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs leading-relaxed text-zinc-400">
+                  {run.stderrTail}
+                </pre>
+              </div>
+            )}
+
+            <p className="mt-6 max-w-prose text-xs leading-relaxed text-zinc-600">
+              {PROTOCOL_LIMITS_NOTICE}
+            </p>
+          </SectionCard>
+        ) : null}
 
         <SectionCard
           title="Validation attempts"

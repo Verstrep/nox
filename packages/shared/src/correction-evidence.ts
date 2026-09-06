@@ -56,6 +56,33 @@ export type CorrectionCriterionEvidence = {
   commands: readonly CorrectionCommandEvidence[];
 };
 
+/**
+ * Ce que NOX a observe de la terminaison, quand c'est elle qui motive la reprise.
+ *
+ * Rien de plus que ce que la base porte : une categorie, une phrase ecrite par
+ * NOX, un code de sortie, la queue de la sortie d'erreur, et la derniere action
+ * reconnue. Aucun de ces champs ne vient d'une interpretation — c'est
+ * exactement ce que l'ecran affiche, transmis a l'agent qui doit reprendre.
+ */
+export type ProcessFailureEvidence = {
+  /** Valeur de `RunFailureCategory`, deja resolue par l'appelant. */
+  category: string;
+  /** Phrase ecrite par NOX. `null` pour une execution anterieure a HOTFIX-006. */
+  detail: string | null;
+  exitCode: number | null;
+  /** Queue de la sortie d'erreur, deja bornee a la capture. */
+  stderrTail: string | null;
+  /**
+   * Dernieres actions reconnues avant l'arret, de la plus ancienne a la plus
+   * recente.
+   *
+   * Derivees des evenements deja enregistres, jamais d'un champ denormalise :
+   * un compteur de « derniere action » finirait par diverger des lignes qu'il
+   * pretend resumer.
+   */
+  lastActivity: readonly string[];
+};
+
 /** Tout ce qu'une correction recoit, deja relu en base. */
 export type CorrectionEvidence = {
   source: CorrectionSource;
@@ -72,6 +99,13 @@ export type CorrectionEvidence = {
   mutatedFiles: readonly string[];
   /** Texte ecrit par l'utilisateur, ou `null` lorsqu'il n'en a pas ecrit. */
   humanFeedback: string | null;
+  /**
+   * Diagnostic de la terminaison, pour une reprise apres echec du processus.
+   *
+   * `null` pour les deux autres origines : rien n'a cede, l'execution s'est
+   * terminee normalement et c'est son **resultat** qui est en cause.
+   */
+  processFailure?: ProcessFailureEvidence | null;
 };
 
 /** Ramene une valeur a une seule ligne, sans marges. */
@@ -160,6 +194,16 @@ export function renderCorrectionEvidence(evidence: CorrectionEvidence): string {
           "commandes que NOX a executees lui-meme, apres ton travail, qui ont echoue.",
       ].join("\n"),
     );
+  } else if (evidence.source === "PROCESS_FAILURE") {
+    blocks.push(
+      [
+        "Origine de cette correction :",
+        "l'execution precedente s'est arretee avant d'avoir fini. Personne n'a relu ton " +
+          "travail, et rien ne lui est reproche : il est inacheve. Le dossier de travail " +
+          "porte encore exactement ce que tu y avais ecrit — NOX n'a rien commite, rien " +
+          "restaure, rien supprime.",
+      ].join("\n"),
+    );
   } else {
     blocks.push(
       [
@@ -170,6 +214,35 @@ export function renderCorrectionEvidence(evidence: CorrectionEvidence): string {
             : ""),
       ].join("\n"),
     );
+  }
+
+  const failure = evidence.processFailure ?? null;
+  if (failure !== null) {
+    const parts: string[] = ["Ce que NOX a observe de l'arret :"];
+    parts.push(`categorie : ${failure.category}`);
+    if (failure.detail !== null && line(failure.detail) !== "") {
+      parts.push(`constat : ${line(failure.detail)}`);
+    }
+    parts.push(
+      failure.exitCode === null
+        ? "code de sortie : aucun (processus termine par un signal)."
+        : `code de sortie : ${String(failure.exitCode)}`,
+    );
+    if (failure.lastActivity.length > 0) {
+      parts.push("dernieres actions reconnues par NOX, dans l'ordre :");
+      for (const entry of failure.lastActivity) {
+        parts.push(`- ${line(entry)}`);
+      }
+    }
+    parts.push(
+      ...stream("sortie d'erreur du processus", failure.stderrTail, false, CORRECTION_EVIDENCE_LIMITS.perStream),
+    );
+    parts.push(
+      "NOX ne sait pas toujours quelle commande a echoue : le protocole de Claude Code " +
+        "n'expose pas systematiquement la ligne ni son code de retour. Commence par relire " +
+        "l'etat reel du dossier de travail plutot que par croire ce resume.",
+    );
+    blocks.push(parts.join("\n"));
   }
 
   if (evidence.failedCriteria.length > 0) {

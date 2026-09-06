@@ -1358,3 +1358,84 @@ doit le dire explicitement et la justifier.
   tour, quatre Kio par contenu, quarante-huit Kio actifs. Les bornes sont annoncees au fournisseur
   **et** appliquees par le validateur, depuis la meme constante ; un depassement refuse la mise a
   jour entiere, et rien n'est tronque.
+
+
+### 8.27 Diagnostic et reprise d'une execution qui a echoue
+
+- **Le code du contrat runner et la cause observee sont deux champs.** `errorCode` reste stable,
+  ferme, et porte par les executions deja enregistrees ; il dit **laquelle** des erreurs connues.
+  `failureCategory` dit **ce qui a cede** — un processus jamais demarre, un processus sorti en code
+  non nul, un agent qui se declare en erreur, un processus tue par un signal. `CLAUDE_PROCESS_FAILED`
+  couvrait les trois derniers a lui seul, et un seul appelle une reprise.
+- **Une categorie se derive de faits enregistres, jamais d'un message.** Un code de contrat, un code
+  de sortie, un drapeau d'annulation. Quand aucun ne tranche, la reponse est `UNKNOWN` — et c'est une
+  reponse, pas un trou. Un code que ce web ne connait pas y tombe aussi : le ranger dans une
+  categorie plausible serait une invention.
+- **Une ligne historique n'est jamais reecrite pour lui donner une categorie.** Les executions
+  anterieures portent `NULL`, et la categorie est derivee **a la lecture**, par la meme table que
+  celle du runner. Une execution ancienne et une execution recente se lisent donc pareil, sans que
+  le passe se mette a dire ce qu'il ne disait pas.
+- **Le constat est ecrit par NOX, a partir du seul code systeme.** Jamais le message d'origine de
+  Node, qui porterait le chemin absolu de l'executable. Ni environnement, ni trace, ni jeton. Il est
+  borne a l'ecriture, comme tout ce qui vient de l'exterieur.
+- **`Retry` et `Correct failed run` exigent l'inverse l'un de l'autre**, et l'ecran doit le dire
+  avant le clic. Le premier repart d'un repository **propre** ; le second exige que le dossier de
+  travail soit **exactement** celui que l'echec a laisse. Les confondre reviendrait a proposer le
+  geste qui detruit le travail sous le nom de celui qui le continue.
+- **Une correction apres echec n'est jamais automatique.** Un processus mort ne prouve rien sur le
+  code : seule une preuve obtenue par NOX lui-meme declenche une reprise sans geste humain, et c'est
+  toujours `AUTOMATED_VALIDATION`. `PROCESS_FAILURE` nomme un point de depart, pas un declencheur.
+- **Un amorcage se corrige a la main, et pas tout seul.** La boucle automatique le refuse ; la porte
+  humaine ne l'a jamais refuse, et celle-ci non plus. Une correction d'amorcage garde les permissions
+  d'un amorcage, comme n'importe quelle autre correction garde celles de sa tache.
+- **`BLOCKED` et `CANCELLED` ne se reprennent pas d'un clic.** Une limite d'utilisation se resout en
+  attendant ; une annulation est une decision humaine de ne pas continuer. Leur dossier de travail
+  reste intact et relisible — NOX n'y touche jamais — mais aucun bouton ne le reprend.
+- **Un echec qui n'a rien produit ne se reprend pas non plus.** Un processus jamais demarre, une
+  limite atteinte avant tout travail : proposer de « continuer » y serait proposer de continuer le
+  vide. Le refus est nomme, et l'action reste affichee avec sa raison.
+- **L'empreinte du dossier de travail reste seule autorite pour accorder une reprise.** Les
+  empreintes par entree qui l'accompagnent ne decident de rien : elles sont comparees **apres** un
+  refus, uniquement pour nommer les chemins concernes. Liste identique et empreinte differente : le
+  refus tient, et le message ne laisse jamais croire que rien n'a change.
+- **Une entree ne porte qu'un chemin relatif, un statut Git et un HMAC tronque.** Jamais un octet de
+  fichier. Son digest couvre le **contenu** et non l'etat d'index : les melanger ferait lire un
+  `git add` comme une edition. Absentes — execution anterieure, liste hors bornes — le refus tient et
+  reconnait qu'il ne peut pas nommer de chemin.
+- **Un refus indiagnostiquable finit par etre contourne**, et le contournement detruit le travail que
+  le refus protegeait. C'est la raison d'etre de tout ce paragraphe.
+- **Ce que le protocole n'expose pas est dit, jamais deduit.** Claude Code ne donne pas toujours la
+  commande fautive ni son code de retour. « Non expose par le protocole » et « non enregistre » sont
+  deux reponses differentes, et l'ecran les distingue — le silence, lui, se lit comme une lacune de
+  NOX et envoie chercher au mauvais endroit.
+- **La derniere activite se derive des evenements, elle ne se stocke pas.** Un champ « derniere
+  action » serait un compteur denormalise de plus, et divergerait des lignes qu'il pretend resumer.
+- **Aucune option de forcage n'existe sur une reprise**, et il ne doit pas en exister. Ni `force`, ni
+  `ignoreFingerprint`, ni « continuer quand meme » : c'est cette garantie qui rend la review suivante
+  interpretable.
+- **`Retry` ne change un statut que s'il pourrait reellement partir.** `FAILED → READY` est precede
+  d'un controle en lecture — repository libre, preflight satisfait —, et un refus n'ecrit rien. Le
+  geste ne lance pas lui-meme : le lancement est une seconde action, et sans ce controle la tache
+  quittait l'echec pour une execution qui ne partirait jamais.
+- **Ce controle ne concerne que cette transition.** Toutes les autres restent des ecritures SQLite,
+  et les pages continuent de fonctionner runner arrete. Les dependances non satisfaites n'y entrent
+  pas non plus : une tache prete qui attend **reste prete**, et la dependance refuse un lancement,
+  jamais un statut.
+- **Un refus de `Retry` dit ce qui n'a pas bouge.** « Aucune execution n'a demarre, la tache reste en
+  echec » repond a la question que l'utilisateur se pose vraiment devant un refus. Sans elle, il
+  suppose le pire et va verifier en base.
+- **Une reprise s'ancre a l'execution, jamais au statut de la tache.** Le seul `READY` accepte est
+  celui d'un `Retry` qui n'a jamais demarre : execution en echec, rien d'autre depuis, aucune
+  correction deja nee. Les trois conditions sont cumulatives, et rejouees **dans** la transaction qui
+  ecrit — un appelant qui avait raison il y a trois secondes n'est pas une garantie.
+- **Les corrections nees d'une execution ne la rendent pas obsolete.** Elles en descendent : les
+  compter comme « quelque chose s'est passe depuis » ferait echouer toute reprise. La question posee
+  est « autre chose a-t-il eu lieu ? », et elle s'ecrit en `OR` explicite — un `NOT` sur une colonne
+  nullable ecarterait silencieusement toutes les executions initiales.
+- **Reconnaitre un `Retry` avorte ouvre une porte, jamais une exception.** Branche, `HEAD` et
+  empreinte restent verifies par le runner avant le lancement, et un refus laisse la tache ou elle
+  etait.
+- **Une execution sans empreintes par entree se reprend exactement comme une autre.** L'empreinte
+  globale decide ; seule la localisation d'un refus manque, et l'ecran le dit. Affaiblir l'egalite
+  parce que le diagnostic est absent serait confondre « je ne peux pas nommer » et « je ne peux pas
+  verifier ».

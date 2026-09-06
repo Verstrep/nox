@@ -43,6 +43,8 @@ import {
   getRunResumeContext,
   getCorrectionAttempt,
   hasActiveRun,
+  isLatestRunForTask,
+  listRunEvents,
   listTaskDependencies,
   markRunRunning,
   readProjectDeliveryPolicy,
@@ -57,8 +59,12 @@ import {
   RUNNER_ERROR,
   buildClaudeToolPolicy,
   checkResumeCandidate,
+  describeActivityEvent,
+  lastRecognizedActivity,
+  readRunFailureCategory,
   summarizeTaskDependencies,
   type CorrectionRefusalCode,
+  type ProcessFailureEvidence,
 } from "@nox/shared";
 import { randomUUID } from "node:crypto";
 
@@ -67,7 +73,7 @@ import { correctionRefusalMessage, resumeRefusalMessage } from "./correction-dis
 import { buildCorrectionContext } from "./correction-evidence.ts";
 import { buildCorrectionPrompt } from "./run-prompt.ts";
 import { claudeCorrectionPreflight, startClaudeRun } from "./runner/client.ts";
-import { describeRunnerFailure } from "./runner/errors.ts";
+import { describeInfrastructureFailure, describeRunnerFailure } from "./runner/errors.ts";
 import { unresolvedDependenciesMessage } from "./task-dependencies.ts";
 
 const UNKNOWN_MESSAGE =
@@ -144,7 +150,9 @@ export async function launchCorrection(
   const decision =
     attempt.source === CORRECTION_SOURCE.AUTOMATED_VALIDATION
       ? context.automatic
-      : context.human;
+      : attempt.source === CORRECTION_SOURCE.PROCESS_FAILURE
+        ? context.processFailure
+        : context.human;
   if (
     !decision.eligible &&
     decision.code !== CORRECTION_REFUSAL.ALREADY_RESERVED
@@ -175,6 +183,12 @@ export async function launchCorrection(
     hasFingerprint: resume.workspaceFingerprint !== null,
     hasActiveRun: await hasActiveRun(db, input.taskId),
     hasCorrection: resume.hasCorrection,
+    // Sert a distinguer un echec qui a laisse du travail d'un echec qui n'a
+    // rien produit. Sans lui, une panne de lancement paraitrait reprenable.
+    exitCode: resume.exitCode,
+    // Autorise le seul `READY` acceptable : celui d'un `Retry` qui n'a jamais
+    // demarre. La transaction d'ecriture le reverifiera elle-meme.
+    isLatestRun: await isLatestRunForTask(db, input.taskId, input.sourceRunId),
   });
   if (refusal !== null) {
     return await release(
@@ -230,13 +244,22 @@ export async function launchCorrection(
     expectedGitHead: head,
     expectedBranch: branch,
     expectedWorkspaceFingerprint: fingerprint,
+    // Elles n'accordent rien : le refus se decide sur l'empreinte seule. Elles
+    // permettent au refus de **nommer** les chemins qui ont diverge, ce qui est
+    // la difference entre « quelque chose a change » et « tu as touche a
+    // README.md ».
+    expectedWorkspaceEntries: resume.workspaceEntries,
   });
   if (!preflight.ok) {
+    // `describeInfrastructureFailure` plutot que `describeRunnerFailure` : la
+    // premiere **conserve** le detail du runner. C'est lui qui nomme les chemins
+    // ayant diverge, et le perdre ici rendrait le refus aussi muet qu'avant —
+    // « le repository a change », sans dire ou.
     return await release(
       db,
       input.attemptId,
       CORRECTION_REFUSAL.RUN_NOT_COMPLETED,
-      describeRunnerFailure(preflight.failure),
+      describeInfrastructureFailure(preflight.failure).message,
     );
   }
 
@@ -249,6 +272,10 @@ export async function launchCorrection(
     automatedAttempt: attempt.automatedAttempt ?? 0,
     humanCriterionIds: readableHumanIds(context.review, input.humanCriterionIds ?? []),
     humanFeedback: input.humanFeedback ?? null,
+    processFailure:
+      attempt.source === CORRECTION_SOURCE.PROCESS_FAILURE
+        ? await readProcessFailureEvidence(db, context.run)
+        : null,
   });
 
   const { prompt, sha256 } = buildCorrectionPrompt({
@@ -316,6 +343,7 @@ export async function launchCorrection(
       sessionId,
       expectedBranch: branch,
       expectedWorkspaceFingerprint: fingerprint,
+      expectedWorkspaceEntries: resume.workspaceEntries,
     },
   });
 
@@ -331,16 +359,56 @@ export async function launchCorrection(
       errorMessage: describeRunnerFailure(started.failure),
       finishedAt: new Date(),
     });
-    await cancelTaskCorrection(db, input.taskId);
+    // Le statut d'ou la correction serait partie, transmis plutot que suppose :
+    // une reprise apres echec ramene la tache en `FAILED`, jamais en `REVIEW`.
+    await cancelTaskCorrection(db, input.taskId, context.task.status);
     return refuse("RUNNER", describeRunnerFailure(started.failure));
   }
 
   await markRunRunning(db, created.run.id, new Date(started.value.startedAt));
   // `REVIEW → RUNNING` : une transition reservee aux corrections, et
   // atteignable par ce seul chemin.
-  await startTaskCorrection(db, input.taskId);
+  await startTaskCorrection(db, input.taskId, input.sourceRunId);
 
   return { ok: true, runId: created.run.id };
+}
+
+/**
+ * Ce que NOX a observe de la terminaison, relu en base.
+ *
+ * Trois sources, toutes deja persistees : les colonnes de l'execution, et les
+ * evenements de sa timeline. Rien n'est recalcule, rien n'est interprete — la
+ * categorie est celle qu'a ecrite le runner, ou celle que la table derive pour
+ * une execution anterieure a HOTFIX-006.
+ *
+ * Les dernieres actions sont **derivees** des evenements plutot que lues dans
+ * une colonne : une « derniere action » stockee serait un compteur denormalise,
+ * et finirait par ne plus decrire les lignes qu'elle resume.
+ */
+async function readProcessFailureEvidence(
+  db: DatabaseClient,
+  run: {
+    id: string;
+    status: string;
+    errorCode: string | null;
+    failureCategory: string | null;
+    failureDetail: string | null;
+    stderrTail: string | null;
+    claude: { exitCode: number | null };
+  },
+): Promise<ProcessFailureEvidence> {
+  const events = await listRunEvents(db, run.id);
+  return {
+    category: readRunFailureCategory(run.failureCategory, {
+      status: run.status,
+      errorCode: run.errorCode,
+      exitCode: run.claude.exitCode,
+    }),
+    detail: run.failureDetail,
+    exitCode: run.claude.exitCode,
+    stderrTail: run.stderrTail,
+    lastActivity: lastRecognizedActivity(events).map(describeActivityEvent),
+  };
 }
 
 /**

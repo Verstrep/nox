@@ -62,7 +62,13 @@ import { createHmac, timingSafeEqual, type Hmac } from "node:crypto";
 import { lstat, open, readlink } from "node:fs/promises";
 import path from "node:path";
 
-import { RUNNER_ERROR, WORKSPACE_FINGERPRINT_VERSION, type RunnerErrorCode } from "@nox/shared";
+import {
+  RUNNER_ERROR,
+  WORKSPACE_ENTRY_LIMITS,
+  WORKSPACE_FINGERPRINT_VERSION,
+  type RunnerErrorCode,
+  type WorkspaceEntryDigest,
+} from "@nox/shared";
 
 import { runGitCommand, type GitCommandRunner } from "./git-state.ts";
 
@@ -89,7 +95,20 @@ export const FINGERPRINT_LIMITS = {
 const KEY_DOMAIN = `nox-workspace-fingerprint-${WORKSPACE_FINGERPRINT_VERSION}`;
 
 export type FingerprintResult =
-  | { ok: true; value: string; branch: string; head: string }
+  | {
+      ok: true;
+      value: string;
+      branch: string;
+      head: string;
+      /**
+       * Une empreinte par entree changee, calculee sur les memes octets.
+       *
+       * Elle ne decide de rien : `value` reste la seule autorite. Elle permet a
+       * un refus de **nommer** les chemins qui ont diverge, ce qu'un HMAC unique
+       * ne saura jamais faire. Voir `workspace-entries.ts` dans `@nox/shared`.
+       */
+      entries: readonly WorkspaceEntryDigest[];
+    }
   | { ok: false; code: RunnerErrorCode };
 
 export type FingerprintOptions = {
@@ -158,7 +177,20 @@ export function parseStatusEntries(stdout: string): StatusEntry[] {
   return entries;
 }
 
-/** Ecrit un champ dans le HMAC, longueur d'abord. */
+/**
+ * Ecrit un champ dans un ou plusieurs HMAC, longueur d'abord.
+ *
+ * Depuis HOTFIX-006, deux HMAC avancent en parallele : celui du dossier de
+ * travail entier, et celui de l'entree en cours. Les alimenter par la **meme**
+ * fonction est ce qui garantit qu'ils voient exactement les memes octets — deux
+ * chemins d'ecriture finiraient par diverger, et l'un des deux se mettrait a
+ * accepter ce que l'autre refuse.
+ *
+ * L'empreinte globale n'a pas change d'un octet : elle recoit la meme suite
+ * d'appels qu'avant, dans le meme ordre. C'etait la contrainte a tenir — la
+ * modifier aurait rendu inverifiables toutes les empreintes deja enregistrees,
+ * donc irreprenables toutes les executions deja relues.
+ */
 function field(hmac: Hmac, value: string): void {
   // La longueur precede la valeur : sans elle, « ab » + « c » et « a » + « bc »
   // produiraient la meme empreinte, et deux etats differents deviendraient
@@ -221,10 +253,28 @@ export async function computeWorkspaceFingerprint(
   field(hmac, String(entries.length));
 
   let totalBytes = 0;
+  const digests: WorkspaceEntryDigest[] = [];
 
   for (const entry of entries) {
+    // L'empreinte de l'entree est independante des autres : elle ne recoit ni la
+    // branche, ni `HEAD`, ni le rang de l'entree. C'est ce qui la rend
+    // comparable d'une capture a l'autre — sans quoi ajouter un fichier ferait
+    // « changer » tous les suivants, et la divergence nommerait n'importe quoi.
+    const local = createHmac("sha256", key);
+    field(local, KEY_DOMAIN);
+
+    const both = (value: string): void => {
+      field(hmac, value);
+      field(local, value);
+    };
+
+    // Les deux lettres d'etat entrent dans l'empreinte **globale** — elles font
+    // partie de l'etat relu — mais pas dans celle de l'entree. Celle-ci doit
+    // identifier un **contenu** : les melanger ferait lire un simple `git add`
+    // comme une modification du fichier, et le diagnostic designerait une
+    // edition qui n'a pas eu lieu.
     field(hmac, entry.code);
-    field(hmac, entry.path);
+    both(entry.path);
 
     const absolute = path.join(root, entry.path);
     let stats;
@@ -233,7 +283,8 @@ export async function computeWorkspaceFingerprint(
     } catch {
       // Le fichier n'existe plus : c'est le cas normal d'une suppression, et
       // « absent » est un etat parfaitement descriptible.
-      field(hmac, "ABSENT");
+      both("ABSENT");
+      digests.push({ path: entry.path, code: entry.code, digest: shorten(local) });
       continue;
     }
 
@@ -241,11 +292,12 @@ export async function computeWorkspaceFingerprint(
       // La cible est lue comme du **texte**, jamais suivie : un lien vers un
       // fichier exterieur ne doit pas faire lire ce fichier.
       try {
-        field(hmac, "SYMLINK");
-        field(hmac, (await readlink(absolute)).replaceAll("\\", "/"));
+        both("SYMLINK");
+        both((await readlink(absolute)).replaceAll("\\", "/"));
       } catch {
         return unavailable;
       }
+      digests.push({ path: entry.path, code: entry.code, digest: shorten(local) });
       continue;
     }
 
@@ -263,8 +315,8 @@ export async function computeWorkspaceFingerprint(
       return unavailable;
     }
 
-    field(hmac, "FILE");
-    field(hmac, String(stats.size));
+    both("FILE");
+    both(String(stats.size));
 
     try {
       const handle = await open(absolute, "r");
@@ -276,7 +328,9 @@ export async function computeWorkspaceFingerprint(
           if (bytesRead === 0) {
             break;
           }
-          hmac.update(buffer.subarray(0, bytesRead));
+          const chunk = buffer.subarray(0, bytesRead);
+          hmac.update(chunk);
+          local.update(chunk);
           position += bytesRead;
         }
       } finally {
@@ -287,7 +341,20 @@ export async function computeWorkspaceFingerprint(
     }
 
     hmac.update("\0", "utf8");
+    local.update("\0", "utf8");
+    digests.push({ path: entry.path, code: entry.code, digest: shorten(local) });
   }
 
-  return { ok: true, value: hmac.digest("hex"), branch, head };
+  return { ok: true, value: hmac.digest("hex"), branch, head, entries: digests };
+}
+
+/**
+ * Reduit un HMAC d'entree a sa longueur conservee.
+ *
+ * Trente-deux caracteres hexadecimaux, soit seize octets. La valeur ne protege
+ * rien — l'empreinte globale s'en charge — et la raccourcir divise par deux le
+ * volume d'une colonne qui peut porter cinq cents entrees.
+ */
+function shorten(hmac: Hmac): string {
+  return hmac.digest("hex").slice(0, WORKSPACE_ENTRY_LIMITS.digestLength);
 }

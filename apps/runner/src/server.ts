@@ -891,7 +891,9 @@ export function createRunnerServer(
         const result = await correctionPreflight(parsed);
         if (!result.ok) {
           logRefusal(requestId, CLAUDE_CORRECTION_PREFLIGHT_ROUTE, result.code);
-          sendRunnerError(response, result.code, requestId);
+          // Le detail nomme des chemins relatifs du repository, deja bornes et
+          // nettoyes par `sendRunnerError`. Aucun chemin absolu, aucun contenu.
+          sendRunnerError(response, result.code, requestId, result.detail);
           return;
         }
 

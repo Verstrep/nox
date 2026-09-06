@@ -26,6 +26,13 @@
  * branche », « tu as commite » —, alors que l'empreinte ne peut dire que
  * « quelque chose a change ». Autant nommer d'abord ce qui est nommable.
  *
+ * ## Un refus qui se diagnostique
+ *
+ * Depuis HOTFIX-006, un refus d'empreinte nomme les chemins qui ont diverge —
+ * apparus, disparus, modifies, reindexes. La comparaison a lieu **apres** le
+ * refus et ne peut donc pas l'influencer : l'empreinte reste seule autorite, et
+ * une liste identique assortie d'une empreinte differente refuse quand meme.
+ *
  * ## Aucun forcage
  *
  * Il n'existe pas d'option pour passer outre, et il ne doit pas en exister. Un
@@ -33,7 +40,13 @@
  * et c'est exactement la garantie qui rend la review suivante interpretable.
  */
 
-import { RUNNER_ERROR, type RunnerErrorCode } from "@nox/shared";
+import {
+  RUNNER_ERROR,
+  diffWorkspaceEntries,
+  parseWorkspaceEntries,
+  workspaceDivergenceMessage,
+  type RunnerErrorCode,
+} from "@nox/shared";
 
 import type { ClaudeConfig } from "../config.ts";
 import { resolveRepositoryRoot } from "../repositories/documents/repository-root.ts";
@@ -54,6 +67,8 @@ export type CorrectionPreflightRequest = {
   expectedGitHead: string;
   expectedBranch: string;
   expectedWorkspaceFingerprint: string;
+  /** Entrees de l'etat relu, serialisees ; sert uniquement au diagnostic. */
+  expectedWorkspaceEntries?: string | null;
 };
 
 export type CorrectionPreflightResult =
@@ -62,7 +77,19 @@ export type CorrectionPreflightResult =
       claudeVersion: string;
       git: { branch: string; head: string; upstream: string };
     }
-  | { ok: false; code: RunnerErrorCode };
+  | {
+      ok: false;
+      code: RunnerErrorCode;
+      /**
+       * Phrase qui nomme les chemins ayant diverge, quand NOX peut les nommer.
+       *
+       * Elle n'entre dans aucune decision : le refus est deja pris quand elle
+       * est calculee. Elle existe parce qu'un refus indiagnostiquable finit par
+       * etre contourne, et que le contournement detruit le travail que le refus
+       * protegeait.
+       */
+      detail?: string;
+    };
 
 export type CorrectionPreflightOptions = GitStateOptions &
   FingerprintOptions & {
@@ -118,7 +145,18 @@ export async function runCorrectionPreflight(
     // origines : une modification reelle, ou un jeton de runner different depuis
     // la capture. Le message affiche mentionne les deux, parce que NOX ne peut
     // pas les distinguer et ne doit pas faire semblant.
-    return { ok: false, code: RUNNER_ERROR.REVIEW_WORKTREE_CHANGED };
+    //
+    // Le refus est **deja pris** a ce point. Ce qui suit ne fait que le
+    // formuler : comparer les entrees ne peut ni le lever, ni l'attenuer, et
+    // c'est pour cela que la comparaison arrive apres et non avant.
+    const expected = parseWorkspaceEntries(request.expectedWorkspaceEntries ?? null);
+    const divergence =
+      expected === null ? null : diffWorkspaceEntries(expected, fingerprint.entries);
+    return {
+      ok: false,
+      code: RUNNER_ERROR.REVIEW_WORKTREE_CHANGED,
+      detail: workspaceDivergenceMessage(divergence),
+    };
   }
 
   const probe = options.probeVersion ?? probeClaudeVersion;

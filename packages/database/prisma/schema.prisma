@@ -835,6 +835,28 @@ model Run {
   errorCode    String?
   errorMessage String?
 
+  /// Ce qui a cede, nomme au moment de la conclusion. Valeur de `RunFailureCategory`.
+  ///
+  /// `errorCode` reste l'autorite du contrat runner : stable, ferme, jamais
+  /// reecrit. Cette colonne repond a une autre question. `CLAUDE_PROCESS_FAILED`
+  /// couvrait a lui seul un processus sorti en code non nul, un agent qui se
+  /// declare en erreur avec un code nul, et un processus tue par un signal —
+  /// trois incidents dont un seul laisse un travail reprenable.
+  ///
+  /// `null` pour toute execution anterieure a HOTFIX-006. La categorie est alors
+  /// **derivee** a la lecture, a partir du code et du code de sortie deja
+  /// enregistres. Une derivation, pas une reconstruction : elle ne rend jamais
+  /// plus precis que ce que la ligne portait deja.
+  failureCategory String?
+
+  /// Phrase de diagnostic ecrite par NOX, bornee.
+  ///
+  /// Jamais un message venu du systeme ou du processus. Le diagnostic conserve
+  /// est compose par NOX a partir du seul code systeme, exactement comme celui
+  /// d'une panne de validation : un message de Node porterait le chemin absolu
+  /// de l'executable.
+  failureDetail String?
+
   durationMs      Int?
   durationApiMs   Int?
   numTurns        Int?
@@ -912,6 +934,18 @@ model Run {
 
   /// Version de l'algorithme d'empreinte, pour qu'un changement soit detectable.
   workspaceFingerprintVersion String?
+
+  /// Empreintes par entree du dossier de travail, serialisees en JSON.
+  ///
+  /// Elles ne decident **rien**. `workspaceFingerprint` reste seul a accorder ou
+  /// refuser une reprise ; ces entrees servent a nommer les chemins d'un refus —
+  /// apparus, disparus, modifies, reindexes. Un refus qu'on ne peut pas
+  /// diagnostiquer finit par etre contourne, et le contournement detruit le
+  /// travail que le refus protegeait.
+  ///
+  /// `null` quand la liste depasse ses bornes, et pour toute execution
+  /// anterieure a HOTFIX-006. Le refus tient alors, sans nommer de chemin.
+  workspaceEntries String?
 
   /// Code d'erreur du calcul d'empreinte, lorsqu'il a echoue.
   ///

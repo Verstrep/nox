@@ -96,6 +96,78 @@ export type ExecutionFactsInput = {
 };
 
 /**
+ * Le diagnostic de terminaison, ligne a ligne.
+ *
+ * ## Pourquoi il ne se melange pas au resume d'execution
+ *
+ * Parce qu'il ne repond pas a la meme question. Le resume dit « ce que
+ * l'execution a rapporte » ; celui-ci dit « ce qui a cede ». Les fondre ferait
+ * disparaitre le second dans le premier, ce qui est exactement le probleme que
+ * le pilote reel a rencontre : `errorCode` etait bien affiche, au milieu de
+ * dix-sept autres lignes, et il ne disait rien d'actionnable.
+ *
+ * ## Rien n'y est deduit
+ *
+ * Chaque valeur est soit enregistree, soit derivee de valeurs enregistrees par
+ * une table explicite. Quand une information n'a pas ete observee, la ligne le
+ * **dit** — « non expose par le protocole » n'est pas la meme reponse que « non
+ * enregistre », et un utilisateur qui cherche une commande fautive doit pouvoir
+ * les distinguer.
+ */
+export type FailureFactsInput = {
+  /** Libelle deja traduit de la categorie. */
+  categoryLabel: string;
+  /** Phrase ecrite par NOX, ou `null` pour une execution anterieure. */
+  detail: string | null;
+  errorCode: string | null;
+  exitCode: number | null;
+  /** Vrai lorsque la categorie a ete lue en base plutot que derivee. */
+  categoryPersisted: boolean;
+  /** Nombre de fichiers que la review a vus changer. */
+  changedFiles: number;
+  /** Une queue de sortie d'erreur a-t-elle ete conservee ? */
+  hasStderr: boolean;
+};
+
+/** Valeur affichee quand le protocole de Claude Code n'expose pas la donnee. */
+export const NOT_EXPOSED = "Non exposé par le protocole";
+
+/**
+ * Le diagnostic d'un echec, tel qu'Inspect l'affiche.
+ *
+ * Enumerer les champs ici **est** la liste blanche, comme pour le resume
+ * d'execution : rien n'apparait sur cette page sans avoir ete nomme dans cette
+ * fonction.
+ */
+export function failureFacts(input: FailureFactsInput): InspectFact[] {
+  return [
+    fact("Cause observée", input.categoryLabel),
+    fact("Constat de NOX", input.detail),
+    fact("Code du contrat runner", input.errorCode, true),
+    // `null` et `0` ne disent pas la meme chose : un processus tue par un signal
+    // ne rend aucun code, et l'afficher comme « 0 » en ferait une reussite.
+    fact(
+      "Code de sortie du processus",
+      input.exitCode === null ? "Aucun — terminé par un signal" : String(input.exitCode),
+      true,
+    ),
+    // Une execution d'avant HOTFIX-006 n'a pas de categorie en base. Le dire
+    // evite de faire croire que le runner de l'epoque l'avait observee.
+    fact(
+      "Origine de la cause",
+      input.categoryPersisted
+        ? "Enregistrée par le runner à la conclusion"
+        : "Dérivée du code d'erreur et du code de sortie enregistrés",
+    ),
+    fact("Fichiers laissés modifiés", String(input.changedFiles)),
+    fact(
+      "Sortie d'erreur conservée",
+      input.hasStderr ? "Oui, fin de flux uniquement" : "Aucune",
+    ),
+  ];
+}
+
+/**
  * Le resume d'execution, ligne a ligne.
  *
  * Les formats sont injectes parce qu'ils vivent deja dans `run-display.ts` :

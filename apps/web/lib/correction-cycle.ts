@@ -29,6 +29,7 @@ import {
   getProjectById,
   getRunById,
   getTaskById,
+  isLatestRunForTask,
   listCorrectionAttempts,
   readCorrectionChain,
   type CorrectionAttemptRow,
@@ -40,12 +41,16 @@ import {
   attemptHoldsPlace,
   checkAutomaticCorrection,
   checkHumanCorrection,
+  checkProcessFailureCorrection,
   deriveCorrectionCycle,
+  isStrandedRetry,
+  readRunFailureCategory,
   selectGuidedCurrentRun,
   type AutomaticCorrectionDecision,
   type CorrectionAttemptFacts,
   type CorrectionCycleState,
   type DevelopmentRunDetail,
+  type RunFailureCategory,
   type DevelopmentTaskDetail,
 } from "@nox/shared";
 
@@ -71,6 +76,25 @@ export type CorrectionContext = {
   held: CorrectionAttemptRow | null;
   automatic: AutomaticCorrectionDecision;
   human: AutomaticCorrectionDecision;
+  /**
+   * Une correction peut-elle repartir de l'echec de cette execution ?
+   *
+   * Distincte de `human` : celle-ci part d'une review qui demande des
+   * changements, celle-la d'un processus qui s'est arrete tout seul. Les deux
+   * ne peuvent jamais etre eligibles en meme temps — la premiere exige
+   * `REVIEW`, la seconde `FAILED`.
+   */
+  processFailure: AutomaticCorrectionDecision;
+  /** Ce qui a cede : valeur enregistree, ou derivee pour une execution ancienne. */
+  failureCategory: RunFailureCategory;
+  /**
+   * La tache est `READY` uniquement parce qu'un `Retry` n'a jamais demarre.
+   *
+   * Sert a **expliquer** la reprise sur une surface ou l'utilisateur lit
+   * « Prete » : sans cette phrase, un bouton de reprise devant une tache prete
+   * ressemble a une incoherence de NOX.
+   */
+  strandedRetry: boolean;
   cycle: CorrectionCycleState;
 };
 
@@ -105,10 +129,13 @@ export async function loadCorrectionContext(
     return null;
   }
 
-  const [review, chain, allAttempts] = await Promise.all([
+  const [review, chain, allAttempts, isLatestRun] = await Promise.all([
     loadVerificationReview(db, input),
     readCorrectionChain(db, input.runId),
     listCorrectionAttempts(db, input.taskId),
+    // Ce que le statut de la tache ne dit pas : un `Retry` qui n'a jamais
+    // demarre laisse `READY` derriere lui sans produire d'execution.
+    isLatestRunForTask(db, input.taskId, input.runId),
   ]);
 
   const inChain = new Set(chain);
@@ -147,6 +174,33 @@ export async function loadCorrectionContext(
   });
   const human = checkHumanCorrection(shared);
 
+  // La categorie est **relue** quand la base la porte, et derivee sinon. Une
+  // execution d'avant HOTFIX-006 se lit donc exactement comme une execution
+  // recente, sans qu'aucune ligne historique n'ait ete reecrite.
+  const failureCategory = readRunFailureCategory(run.failureCategory, {
+    status: run.status,
+    errorCode: run.errorCode,
+    exitCode: run.claude.exitCode,
+  });
+  // Une correction deja nee de cette execution interdit la reconnaissance du
+  // `Retry` avorte : la tache serait alors passee par une reprise, et son
+  // `READY` ne viendrait plus de la.
+  const hasCorrection = attempts.some(
+    (attempt) => attempt.sourceRunId === input.runId && attempt.correctionRunId !== null,
+  );
+  const processFailure = checkProcessFailureCorrection({
+    ...shared,
+    failureCategory,
+    isLatestRun,
+    hasCorrection,
+  });
+  const strandedRetry = isStrandedRetry({
+    runStatus: run.status,
+    taskStatus: task.status,
+    isLatestRun,
+    hasCorrection,
+  });
+
   // Une execution du cycle qui tourne encore : la correction en cours, ou la
   // reprise que quelqu'un vient de lancer depuis un autre onglet.
   const running = run.status === RUN_STATUS.RUNNING || run.status === RUN_STATUS.QUEUED;
@@ -163,10 +217,17 @@ export async function loadCorrectionContext(
     held,
     automatic,
     human,
+    processFailure,
+    failureCategory,
+    strandedRetry,
     cycle: deriveCorrectionCycle({
       attempts: attempts.map(toFacts),
       running,
-      correctionAvailable: human.eligible,
+      // Les deux portes menent au meme geste — reprendre la session sur le
+      // travail deja produit — et l'ecran doit annoncer « une correction est
+      // possible » dans les deux cas. Elles ne peuvent pas etre vraies
+      // ensemble : l'une exige `REVIEW`, l'autre `FAILED`.
+      correctionAvailable: human.eligible || processFailure.eligible,
       automatic,
     }),
   };

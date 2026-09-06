@@ -7,7 +7,7 @@
  * une date illisible doivent etre absorbes sans faire tomber une page.
  */
 
-import { isRunnerErrorCode, type ClaudeRunSnapshot } from "@nox/shared";
+import { isRunFailureCategory, isRunnerErrorCode, type ClaudeRunSnapshot } from "@nox/shared";
 import type { RunnerRunReport } from "@nox/database";
 
 import { describeRunnerFailure } from "./runner/errors.ts";
@@ -42,6 +42,15 @@ export function toRunnerReport(snapshot: ClaudeRunSnapshot): RunnerRunReport {
       errorCode === null
         ? null
         : describeRunnerFailure({ kind: "runner_error", code: errorCode }),
+    // La categorie est **validee** contre la liste fermee avant d'etre ecrite :
+    // un runner plus recent pourrait en envoyer une que ce web ne connait pas,
+    // et une valeur inconnue en base rendrait la lecture ambigue. Absente, elle
+    // vaut `null`, et la lecture la derivera des faits deja enregistres.
+    failureCategory: isRunFailureCategory(snapshot.failureCategory)
+      ? snapshot.failureCategory
+      : null,
+    // Le detail est deja borne par le runner ; il l'est de nouveau a l'ecriture.
+    failureDetail: snapshot.failureDetail ?? null,
     stderrTail: snapshot.stderrTail,
     resultText: snapshot.resultText,
     claudeSessionId: snapshot.claudeSessionId,

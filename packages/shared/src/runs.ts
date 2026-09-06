@@ -93,6 +93,8 @@ export const RUN_LIMITS = {
   stderrTail: 8_000,
   /** Message d'erreur affiche a l'utilisateur. */
   errorMessage: 2_000,
+  /** Empreintes par entree du dossier de travail, serialisees. */
+  workspaceEntries: 262_144,
   /** Prompt envoye au processus. */
   prompt: 200_000,
   /** Sortie standard conservee en memoire par le runner. */
@@ -200,6 +202,17 @@ export type DevelopmentRunDetail = DevelopmentRunSummary & {
   errorCode: string | null;
   /** Message deja destine a l'utilisateur, sans detail systeme. */
   errorMessage: string | null;
+  /**
+   * Ce qui a cede, tel que le runner l'a nomme. Valeur de `RunFailureCategory`.
+   *
+   * `null` pour une execution anterieure a HOTFIX-006 : la categorie se derive
+   * alors du code et du code de sortie, a la lecture, par
+   * `readRunFailureCategory`. Le champ dit donc « ce que la base porte », pas
+   * « ce qu'on peut en conclure » — les deux ne doivent pas se confondre.
+   */
+  failureCategory: string | null;
+  /** Phrase de diagnostic ecrite par NOX, bornee. Jamais un message systeme. */
+  failureDetail: string | null;
   /** Queue de la sortie d'erreur, bornee. */
   stderrTail: string | null;
   /** Date ISO de la demande d'annulation, si un humain en a formule une. */

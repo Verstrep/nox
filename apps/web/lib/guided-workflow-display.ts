@@ -29,7 +29,11 @@ import {
 } from "@nox/shared";
 
 import { architectAnalysisUrl, architectReviewUrl } from "./architect/review-display.ts";
-import { correctionUrl, requestChangesUrl } from "./correction-display.ts";
+import {
+  correctionFailureUrl,
+  correctionUrl,
+  requestChangesUrl,
+} from "./correction-display.ts";
 import { reviewUrl } from "./review-display.ts";
 import { newRunUrl, runUrl } from "./run-display.ts";
 import { queueUrl } from "./queue-display.ts";
@@ -86,6 +90,9 @@ export function guidedActionHref(
 
     case GUIDED_ACTION.OPEN_RUN:
       return withRun((runId) => runUrl(projectId, taskId, runId));
+
+    case GUIDED_ACTION.CORRECT_FAILED_RUN:
+      return withRun((runId) => correctionFailureUrl(projectId, taskId, runId));
 
     case GUIDED_ACTION.OPEN_REVIEW:
     case GUIDED_ACTION.REVIEW_MANUALLY:

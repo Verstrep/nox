@@ -541,6 +541,47 @@ const SCENARIOS: Scenario[] = [
     includes: [GUIDED_ACTION.RETRY],
   },
   {
+    // Le cas du second pilote reel. Avant HOTFIX-006, cette situation ne
+    // proposait que `Retry`, qui exige un repository propre — donc qui commence
+    // par demander de jeter le travail qu'on veut sauver.
+    label: "Execution echouee avec du travail partiel reprenable",
+    facts: facts({
+      taskStatus: TASK_STATUS.FAILED,
+      runs: [
+        run({
+          status: RUN_STATUS.FAILED,
+          hasReview: true,
+          canCorrectFailure: true,
+          hasPartialWork: true,
+        }),
+      ],
+    }),
+    stage: GUIDED_STAGE.RUN_FAILED,
+    recommended: GUIDED_ACTION.CORRECT_FAILED_RUN,
+    // `Retry` reste offert : NOX recommande, il ne choisit pas a la place.
+    includes: [GUIDED_ACTION.RETRY, GUIDED_ACTION.BACK_TO_DRAFT],
+  },
+  {
+    label: "Execution echouee dont la reprise n'est pas possible",
+    facts: facts({
+      taskStatus: TASK_STATUS.FAILED,
+      runs: [
+        run({
+          status: RUN_STATUS.FAILED,
+          hasReview: true,
+          canCorrectFailure: false,
+          hasPartialWork: true,
+        }),
+      ],
+    }),
+    stage: GUIDED_STAGE.RUN_FAILED,
+    // Comportement d'avant HOTFIX-006, inchange : un instantane de review
+    // existe, et c'est le meilleur endroit pour comprendre. L'execution
+    // elle-meme — ou vit le diagnostic — reste offerte a cote.
+    recommended: GUIDED_ACTION.OPEN_REVIEW,
+    includes: [GUIDED_ACTION.OPEN_RUN, GUIDED_ACTION.RETRY],
+  },
+  {
     label: "Tache bloquee a la main, sans execution",
     facts: facts({ taskStatus: TASK_STATUS.BLOCKED }),
     stage: GUIDED_STAGE.BLOCKED,
@@ -886,5 +927,86 @@ describe("attente d'une dependance", () => {
     );
 
     assert.equal(state.stage, GUIDED_STAGE.RUNNING);
+  });
+});
+
+
+describe("HOTFIX-006 — l'etape en echec distingue les deux gestes", () => {
+  it("ne propose jamais de demander des changements sur un echec", () => {
+    // « Request changes » appartient a une review : quelqu'un a lu le travail et
+    // demande autre chose. Personne n'a rien lu ici.
+    const state = deriveGuidedWorkflowState(
+      facts({
+        taskStatus: TASK_STATUS.FAILED,
+        runs: [
+          run({
+            status: RUN_STATUS.FAILED,
+            hasReview: true,
+            canCorrectFailure: true,
+            hasPartialWork: true,
+          }),
+        ],
+      }),
+    );
+
+    const kinds = [
+      state.recommendedAction?.kind ?? null,
+      ...state.alternativeActions.map((entry) => entry.kind),
+    ];
+    assert.equal(kinds.includes(GUIDED_ACTION.REQUEST_CHANGES), false);
+    assert.equal(kinds.includes(GUIDED_ACTION.APPROVE), false);
+  });
+
+  it("explique la difference entre reprendre et recommencer", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({
+        taskStatus: TASK_STATUS.FAILED,
+        runs: [
+          run({
+            status: RUN_STATUS.FAILED,
+            hasReview: true,
+            canCorrectFailure: true,
+            hasPartialWork: true,
+          }),
+        ],
+      }),
+    );
+
+    // L'utilisateur ne doit pas avoir a deduire que `Retry` detruirait le
+    // travail : la phrase le dit.
+    assert.match(state.reason, /repository propre/u);
+    assert.match(state.reason, /meme session Claude/u);
+  });
+
+  it("dit qu'un travail partiel existe meme quand la reprise est impossible", () => {
+    const state = deriveGuidedWorkflowState(
+      facts({
+        taskStatus: TASK_STATUS.FAILED,
+        runs: [
+          run({
+            status: RUN_STATUS.FAILED,
+            hasReview: true,
+            canCorrectFailure: false,
+            hasPartialWork: true,
+          }),
+        ],
+      }),
+    );
+
+    assert.match(state.reason, /n'a rien restaure/u);
+  });
+
+  it("reste inchange pour une execution ancienne, sans les nouveaux faits", () => {
+    // Les deux champs sont facultatifs : une execution relue avant HOTFIX-006
+    // n'en porte aucun, et son etape doit rester exactement celle d'avant.
+    const state = deriveGuidedWorkflowState(
+      facts({
+        taskStatus: TASK_STATUS.FAILED,
+        runs: [run({ status: RUN_STATUS.FAILED, hasReview: true })],
+      }),
+    );
+
+    assert.equal(state.stage, GUIDED_STAGE.RUN_FAILED);
+    assert.equal(state.recommendedAction?.kind, GUIDED_ACTION.OPEN_REVIEW);
   });
 });

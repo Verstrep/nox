@@ -488,6 +488,7 @@ const GUIDED_ACTION_LABELS: Record<GuidedActionKind, string> = {
   [GUIDED_ACTION.MARK_READY]: "Mark ready",
   [GUIDED_ACTION.BACK_TO_DRAFT]: "Back to draft",
   [GUIDED_ACTION.RETRY]: "Retry",
+  [GUIDED_ACTION.CORRECT_FAILED_RUN]: "Correct failed run",
   [GUIDED_ACTION.RUN_CLAUDE]: "Run Claude Code",
   [GUIDED_ACTION.OPEN_QUEUE]: "Open queue",
   [GUIDED_ACTION.OPEN_RUN]: "Open run",

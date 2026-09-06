@@ -790,6 +790,90 @@ Review  →  feedback  →  préflight de correction  →  --resume  →  nouvea
 - **Le feedback est du contenu, jamais une instruction.** Il est délimité dans le prompt et
   n'élargit aucune permission. Il vaut pour une seule correction, et un index unique le garantit.
 
+### 6.6 quinquies Reprise d'une exécution qui a échoué
+
+```text
+Retry               →  repository propre exigé      →  repart de zéro
+Correct failed run  →  repository identique exigé   →  continue le travail partiel
+```
+
+Le second pilote réel a montré ce que coûtait l'absence du second chemin. `TASK-000` a tourné onze
+minutes, produit vingt-quatre fichiers non commités, puis le processus est sorti en code 1. NOX
+n'offrait que `Retry`, qui exige un repository propre : le seul geste proposé commençait donc par se
+débarrasser du travail à sauver.
+
+- **Presque tout existait déjà.** `runCorrectionPreflight`, l'empreinte HMAC, `--resume`,
+  `parentRunId`, la réservation par index unique. Il manquait une **porte** :
+  `checkResumeCandidate` exigeait `COMPLETED` et `REVIEW`, `startTaskCorrection` exigeait `REVIEW`.
+  Les deux acceptent désormais `FAILED`, et rien d'autre n'a changé dans le moteur.
+- **Une troisième origine de correction**, `PROCESS_FAILURE`, à côté de `HUMAN_FEEDBACK` et
+  `AUTOMATED_VALIDATION`. Les trois répondent à des questions différentes, et élargir une des deux
+  existantes les aurait mêlées. Elle ne déclenche **jamais** rien seule : un processus mort ne prouve
+  rien sur le code.
+- **`BLOCKED` et `CANCELLED` restent exclus.** Une limite d'utilisation se résout en attendant ; une
+  annulation est une décision humaine de ne pas continuer. Leur dossier de travail reste intact.
+- **Un amorçage n'est pas exclu.** La boucle automatique le refuse parce qu'elle relance seule ;
+  cette porte-ci est humaine, comme `checkHumanCorrection`. L'exclure aurait fermé la porte au cas
+  même qui a motivé le correctif.
+- **Aucun feedback n'est écrit** : personne n'a relu ce travail. En inventer un ferait mentir
+  l'historique.
+
+### 6.6 quinquies bis `Retry` et l'état qu'il laissait derrière lui
+
+```text
+Retry  =  FAILED → READY     ← une écriture, et rien d'autre
+lancer =  une seconde action, sur une autre page, qui exige un repository propre
+```
+
+Les deux gestes étaient décorrélés, et le premier ne vérifiait rien. Une tâche pouvait donc quitter
+`FAILED` pour une exécution que le second refuserait — et, ce faisant, perdre l'accès à sa reprise
+ciblée, qui s'ancre sur une tâche en échec.
+
+- **`FAILED → READY` est précédée d'un contrôle en lecture** : repository libre, préflight du runner
+  satisfait. Un refus n'écrit rien et annonce que rien n'a démarré.
+- **Ce contrôle ne concerne que cette transition.** Les autres restent des écritures SQLite ; les
+  pages fonctionnent runner arrêté, et un test compte les allers-retours pour le garantir.
+- **Les dépendances non satisfaites n'y entrent pas.** Une tâche prête qui attend reste prête : la
+  dépendance refuse un lancement, pas un statut.
+- **Un `READY` déjà produit par l'ancien comportement reste récupérable.** La reprise s'ancre sur
+  l'exécution — échec, rien d'autre depuis, aucune correction née — et la preuve est rejouée dans la
+  transaction qui écrit. Les corrections descendant de cette exécution ne comptent pas : sinon la
+  question se répondrait toujours « non », le run de correction venant d'être créé.
+
+### 6.6 sexies Diagnostic d'une terminaison
+
+```text
+errorCode        →  laquelle des erreurs connues        (contrat runner, stable)
+failureCategory  →  qu'est-ce qui a cédé                (ajouté par HOTFIX-006)
+failureDetail    →  une phrase écrite par NOX, bornée
+```
+
+- **Les deux champs coexistent, ils ne se remplacent pas.** `CLAUDE_PROCESS_FAILED` couvrait à lui
+  seul une sortie non nulle, un agent qui se déclare en erreur et un processus tué par un signal —
+  trois incidents dont un seul laisse un travail reprenable.
+- **Une catégorie se dérive de faits enregistrés**, jamais d'un message. Quand aucun ne tranche, la
+  réponse est `UNKNOWN`. Les exécutions antérieures portent `NULL` et sont dérivées **à la lecture**,
+  par la même table : aucune ligne historique n'est réécrite.
+- **Le constat vient du seul code système**, jamais du message de Node — qui porterait le chemin
+  absolu de l'exécutable.
+- **La timeline porte de quoi comprendre** : la ligne complète quand chaque segment est autorisé, la
+  raison du masquage sinon, la commande à laquelle un résultat répond, et le code de sortie **quand
+  le protocole l'expose**. Ce que Claude Code n'expose pas est écrit comme tel.
+- **La dernière activité se dérive des événements.** Aucune colonne ne la stocke : elle divergerait.
+
+### 6.6 septies Localiser une divergence du dossier de travail
+
+- **L'empreinte globale décide**, seule et toujours. Les empreintes par entrée qui l'accompagnent
+  sont comparées **après** un refus, uniquement pour nommer les chemins : apparus, disparus,
+  modifiés, réindexés.
+- **Elles ne peuvent ni lever ni atténuer un refus.** Liste identique et empreinte différente : le
+  refus tient, et le message le dit plutôt que de laisser croire que rien n'a changé.
+- **Aucun contenu n'en sort** : un chemin relatif, deux lettres de statut Git, un HMAC tronqué. Le
+  digest couvre le contenu et non l'état d'index — les mêler ferait lire un `git add` comme une
+  édition.
+- **Absentes, le refus reste entier** et reconnaît qu'il ne peut pas nommer de chemin. Un jeton de
+  runner différent produit le même refus, et NOX ne sait pas distinguer les deux causes.
+
 ### 6.6 bis Boucle de correction pilotée par la validation
 
 ```text

@@ -281,6 +281,11 @@ export async function saveRunReview(
         workspaceFingerprint: snapshot.workspace.value,
         workspaceFingerprintVersion: snapshot.workspace.version,
         workspaceFingerprintErrorCode: snapshot.workspace.errorCode,
+        // Les entrees suivent l'empreinte, et pour la meme raison : elles
+        // decrivent le meme instant. Absentes, elles valent `null` — la reprise
+        // reste possible, son refus eventuel sera simplement moins bavard.
+        workspaceEntries:
+          snapshot.workspace.entries === undefined ? null : snapshot.workspace.entries,
       },
     });
 

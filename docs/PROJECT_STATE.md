@@ -1056,9 +1056,9 @@ Les limites propres à une capacité sont dans sa section. Celles-ci n'appartien
 
 - Aucun commit, aucun push, aucun `git add` effectué par Claude Code.
 - Historique Git non modifié.
-- Commit de départ de `HOTFIX-003` : `1f1cf30`
-  (`feat: improve operator visibility and observability`), contenant `TASK-034`.
-- `HOTFIX-003` reste **local**, non indexé et non commité.
+- Commit de départ de `HOTFIX-006` : `c3393bc`
+  (`fix: preserve durable architect decisions in planning`), contenant `HOTFIX-005`.
+- `HOTFIX-006` reste **local**, non indexé et non commité.
 
 ---
 
@@ -1447,3 +1447,95 @@ disait être, et le prompt disait quoi poser sans jamais dire par où.
 
 Le tour 12 est conservé tel quel comme preuve historique : `architect/9`, `CONTINUE`,
 `projectUpdate: null`, aucune ligne `ArchitectProjectUpdate`. Voir [D-417](DECISIONS.md).
+
+
+## 15. HOTFIX-006 — diagnostiquer un échec, et reprendre le travail qu'il laisse
+
+Le second pilote est passé de l'Architecte à l'exécution. `TASK-000` de TicketPulse a tourné
+**11 min 24 s** sur **81 tours**, produit **24 fichiers non commités** (+4 101 lignes), puis :
+
+```text
+Now the final end-to-end verification run.
+Running an allowed command
+Bash completed
+Finished with an error
+Status: Failed
+```
+
+### Ce que NOX affichait
+
+`CLAUDE_PROCESS_FAILED`, `exit 1`, un `HEAD` inchangé, et la review du travail partiel. Rien sur ce
+qui avait cédé, rien sur la commande tentée, rien sur ce que NOX avait observé juste avant.
+
+Et **une seule action** : `Retry`. Or `Retry` exige un repository propre. Le seul geste proposé
+commençait donc par se débarrasser des onze minutes de travail qu'il fallait sauver — en commitant
+un travail raté, en le mettant de côté, en le réinitialisant, ou en déboguant à la main. C'est-à-dire
+exactement ce que NOX existe pour éviter.
+
+### Deux défauts, une seule cause
+
+| Symptôme | Cause réelle |
+| --- | --- |
+| Un code opaque | `CLAUDE_PROCESS_FAILED` couvrait trois incidents distincts |
+| Une timeline muette | le `detail` des événements d'outil était toujours `null` |
+| Aucune reprise possible | `checkResumeCandidate` exigeait `COMPLETED` **et** `REVIEW` |
+
+Le troisième est le plus frappant : **la machinerie de reprise existait déjà en entier**.
+`runCorrectionPreflight` acceptait déjà un dossier de travail sale, l'empreinte HMAC de TASK-012
+vérifiait déjà que c'était le bon, `--resume` reprenait déjà la session, `parentRunId` enregistrait
+déjà la filiation. Il manquait une **porte** : deux conditions de statut, et rien d'autre.
+
+### Ce qui a changé
+
+**Une exécution nomme ce qui a cédé.** `Run.failureCategory` répond à « qu'est-ce qui a cédé »
+pendant qu'`errorCode` continue de répondre à « laquelle des erreurs connues ». Un processus jamais
+démarré, un processus sorti en code non nul, un agent qui se déclare en erreur et un processus tué
+par un signal cessent de se confondre — et un seul des quatre laisse un travail reprenable. Les
+exécutions antérieures gardent `NULL` et sont dérivées à la lecture : aucune ligne n'est réécrite.
+
+**`Correct failed run` rejoint `Retry`, et dit en quoi il en diffère.** Le premier continue le
+travail partiel dans la même session Claude ; le second repart de zéro. La page d'une exécution en
+échec affiche les deux, avec `Mark blocked`, et recommande — sans choisir.
+
+**Un refus de reprise nomme les chemins.** Les empreintes par entrée permettent de dire « README.md
+a été modifié depuis » au lieu de « le dossier de travail a changé ». L'empreinte globale reste seule
+autorité : la comparaison a lieu après le refus, et ne peut jamais le lever.
+
+**La timeline se laisse interroger.** La ligne complète quand chaque segment est autorisé, la raison
+du masquage sinon, la commande à laquelle un résultat répond, le code de sortie **quand le protocole
+l'expose** — et « non exposé par le protocole » quand il ne l'expose pas.
+
+### Ce que la première passe ne rattrapait pas, et que la reprise corrige
+
+`TASK-000` était repassée en `READY` — l'utilisateur avait cliqué `Retry`, le seul geste que NOX lui
+proposait alors — et une reprise part par définition d'une tâche en échec. Le travail partiel était
+resté sur le disque, mais plus aucun écran n'y menait.
+
+La suite du correctif s'est attaquée à la cause de cet état, puis à l'état lui-même.
+
+**`Retry` ne changeait un statut sans jamais vérifier qu'il pouvait partir.** Le geste ne lance
+rien : le lancement est une seconde action, sur une autre page, et c'est elle qui exige un
+repository propre. Entre les deux, rien ne vérifiait quoi que ce soit.
+
+```text
+RUN-001 échoue, 24 fichiers non commités restent
+clic sur Retry           →  TASK-000 passe FAILED → READY
+tentative de lancement   →  refusée : repository sale
+état final               →  READY, aucune exécution, échec inatteignable
+```
+
+`FAILED → READY` est désormais précédée d'un contrôle en lecture — repository libre, préflight
+satisfait. Un refus n'écrit rien, et le dit : « aucune exécution n'a démarré, la tâche reste en
+échec ». Les autres transitions restent des écritures SQLite, runner arrêté compris.
+
+**Une reprise s'ancre à l'exécution, jamais au statut.** Le seul `READY` accepté est celui d'un
+`Retry` qui n'a jamais démarré : exécution en échec, rien d'autre depuis, aucune correction déjà
+née. Rien n'est assoupli — branche, `HEAD` et empreinte restent vérifiés par le runner.
+
+### Ce que le prochain pilote devrait regarder
+
+Que la reprise aboutisse réellement sur un dossier de travail sale, avec un vrai binaire. Tout le
+reste est vérifié par des tests déterministes ; celle-ci demande un processus réel.
+
+Voir [D-420](DECISIONS.md), [D-421](DECISIONS.md), [D-422](DECISIONS.md), [D-423](DECISIONS.md),
+[D-424](DECISIONS.md), [D-425](DECISIONS.md).

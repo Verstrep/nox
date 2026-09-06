@@ -93,6 +93,16 @@ type RegistryEntry = {
   cancellationRequestedAt: Date | null;
   exitCode: number | null;
   errorCode: string | null;
+  /**
+   * Ce qui a cede, nomme a la conclusion. Valeur de `RunFailureCategory`.
+   *
+   * Ecrite en meme temps que le statut final, jamais recalculee ensuite : c'est
+   * ce que NOX a observe **a ce moment-la**, et une derivation ulterieure
+   * decrirait le present en pretendant decrire le passe.
+   */
+  failureCategory: string | null;
+  /** Phrase de diagnostic ecrite par NOX, bornee. Jamais un message systeme. */
+  failureDetail: string | null;
   stderrTail: string | null;
   resultText: string | null;
   claudeSessionId: string | null;
@@ -180,6 +190,8 @@ function emptyEntry(runId: string, repositoryKey: string): RegistryEntry {
     cancellationRequestedAt: null,
     exitCode: null,
     errorCode: null,
+    failureCategory: null,
+    failureDetail: null,
     stderrTail: null,
     resultText: null,
     claudeSessionId: null,
@@ -609,6 +621,8 @@ export class ClaudeRunRegistry {
       eventsTruncated: entry.eventsTruncated,
       exitCode: entry.exitCode,
       errorCode: entry.errorCode,
+      failureCategory: entry.failureCategory,
+      failureDetail: entry.failureDetail,
       stderrTail: entry.stderrTail,
       resultText: entry.resultText,
       claudeSessionId: entry.claudeSessionId,

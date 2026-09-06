@@ -178,3 +178,60 @@ export const ESSENTIAL_EVENT_KINDS: readonly ClaudeRunEventKind[] = [
 export function isEssentialEventKind(kind: ClaudeRunEventKind): boolean {
   return ESSENTIAL_EVENT_KINDS.includes(kind);
 }
+
+/**
+ * Types d'evenements qui racontent une **action** de l'agent.
+ *
+ * `STATUS` en est exclu : « Execution demarree » ne dit rien de ce que Claude
+ * tentait. `ASSISTANT_MESSAGE` aussi, et pour une autre raison — c'est du texte
+ * libre, parfois long, et la question posee ici est « qu'a-t-il fait ? », pas
+ * « qu'a-t-il dit ? ».
+ */
+const ACTIVITY_EVENT_KINDS: readonly ClaudeRunEventKind[] = [
+  CLAUDE_RUN_EVENT_KIND.TOOL_STARTED,
+  CLAUDE_RUN_EVENT_KIND.TOOL_COMPLETED,
+  CLAUDE_RUN_EVENT_KIND.VALIDATION,
+  CLAUDE_RUN_EVENT_KIND.ERROR,
+  CLAUDE_RUN_EVENT_KIND.RESULT,
+];
+
+/**
+ * Les dernieres actions reconnues avant l'arret, dans l'ordre chronologique.
+ *
+ * ## Pourquoi c'est derive et non stocke
+ *
+ * Parce qu'une colonne « derniere action » serait un compteur denormalise de
+ * plus, et qu'elle finirait par diverger des lignes qu'elle pretend resumer —
+ * exactement l'argument qui a fait renoncer a `lastEventSequence` sur `Run`.
+ * Les evenements sont deja persistes, deja bornes, deja nettoyes : les relire
+ * coute une requete et ne peut pas mentir.
+ *
+ * ## Ce que ce n'est pas
+ *
+ * Pas un transcript. La borne est petite — quelques lignes — et l'appelant
+ * n'est pas cense l'augmenter : la question a laquelle ce resume repond est
+ * « qu'est-ce qui se passait au moment ou ca s'est arrete ? », et dix lignes y
+ * suffisent. La timeline complete existe deja, sur la page de l'execution.
+ */
+export function lastRecognizedActivity(
+  events: readonly ClaudeRunEvent[],
+  limit = 5,
+): ClaudeRunEvent[] {
+  if (limit <= 0) {
+    return [];
+  }
+  const activity = events.filter((event) => ACTIVITY_EVENT_KINDS.includes(event.kind));
+  return activity.slice(Math.max(0, activity.length - limit));
+}
+
+/**
+ * Une action en une ligne : son libelle, et son detail quand il en a un.
+ *
+ * Le detail est deja borne et nettoye par le runner — c'est le meme champ que
+ * la timeline affiche. Rien n'est reformate ici : deux mises en forme du meme
+ * evenement finiraient par ne plus dire la meme chose.
+ */
+export function describeActivityEvent(event: ClaudeRunEvent): string {
+  const detail = event.detail?.trim() ?? "";
+  return detail === "" ? event.label : `${event.label} — ${detail}`;
+}

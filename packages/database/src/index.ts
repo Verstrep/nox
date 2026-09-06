@@ -161,6 +161,7 @@ export {
   failRun,
   getRunById,
   hasActiveRun,
+  isLatestRunForTask,
   listRunsByTask,
   listTaskRunFacts,
   markRunCancelling,

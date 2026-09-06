@@ -18,7 +18,11 @@
  */
 
 import {
+  countActiveRepositoryRuns,
   getDatabaseClient,
+  getProjectById,
+  getTaskById,
+  readProjectDeliveryPolicy,
   updateTaskStatus,
   type DatabaseClient,
   type ReviewDecisionInput,
@@ -28,6 +32,8 @@ import { TASK_STATUS, type TaskStatus } from "@nox/shared";
 
 import { advanceQueue, type AdvanceQueueResult } from "./queue.ts";
 import { maybeDeliver, type MaybeDeliverResult } from "./git-delivery.ts";
+import { claudePreflight } from "./runner/client.ts";
+import { describeRunnerFailure } from "./runner/errors.ts";
 import type { MaybeRefreshResult } from "./verification-refresh/service.ts";
 
 export const UNKNOWN_TASK_MESSAGE =
@@ -36,6 +42,43 @@ export const UNKNOWN_TASK_MESSAGE =
 export const FORBIDDEN_TRANSITION_MESSAGE =
   "Ce changement de statut n'est pas autorise depuis l'etat actuel de la tache. " +
   "Rechargez la page pour voir les transitions possibles.";
+
+/**
+ * Ce qu'un `Retry` refuse dit, et ce qu'il promet.
+ *
+ * Les deux moities comptent autant l'une que l'autre. La premiere nomme
+ * l'obstacle ; la seconde repond a la question que l'utilisateur se pose
+ * vraiment devant un refus — « qu'est-ce que je viens de casser ? ». La reponse
+ * est « rien », et il faut l'ecrire : le second pilote reel a vu son `Retry`
+ * echouer et sa tache changer de statut quand meme.
+ */
+export const RETRY_BLOCKED_PREFIX =
+  "Cette tache ne peut pas repartir d'une execution neuve pour le moment.";
+
+export const RETRY_PRESERVED_SUFFIX =
+  "Aucune execution n'a demarre, et la tache reste en echec — son travail partiel " +
+  "et sa reprise ciblee sont intacts.";
+
+export const RETRY_REPOSITORY_BUSY_MESSAGE =
+  "Une execution Claude Code travaille deja sur ce repository. " + RETRY_PRESERVED_SUFFIX;
+
+/** Assemble le refus d'un `Retry` : l'obstacle, puis ce qui n'a pas bouge. */
+export function retryBlockedMessage(reason: string): string {
+  return `${RETRY_BLOCKED_PREFIX} ${reason} ${RETRY_PRESERVED_SUFFIX}`;
+}
+
+/**
+ * Acces au runner ; remplace par une doublure dans les tests.
+ *
+ * Une seule entree, et c'est voulu : ce service ne parle au runner que pour la
+ * sonde de `Retry`. Toutes les autres transitions restent des ecritures SQLite,
+ * et doivent continuer de fonctionner runner arrete.
+ */
+export type TaskTransitionPorts = {
+  preflight: typeof claudePreflight;
+};
+
+const RUNNER_PORTS: TaskTransitionPorts = { preflight: claudePreflight };
 
 export type TaskTransitionOutcome =
   | {
@@ -86,7 +129,25 @@ export async function applyTaskTransition(
      */
     decision?: ReviewDecisionInput;
   },
+  ports: TaskTransitionPorts = RUNNER_PORTS,
 ): Promise<TaskTransitionOutcome> {
+  // ## Le seul controle prealable de ce service, et pourquoi il est ici
+  //
+  // `FAILED → READY` est le geste `Retry`, et il ne lance rien : le lancement
+  // est une seconde action, sur une autre page. Rien ne verifiait donc qu'un
+  // lancement etait seulement possible, et le second pilote reel a paye
+  // exactement cela — le clic a fait passer la tache en `READY`, le lancement a
+  // ensuite ete refuse parce que le repository portait le travail de l'echec, et
+  // la tache est restee prete pour une execution qui ne partira jamais.
+  //
+  // Le controle est **strictement** limite a cette transition. Les autres
+  // continuent de fonctionner runner arrete : mettre un brouillon en attente ou
+  // accepter un travail n'a aucune raison de dependre d'une machine.
+  const blocked = await retryBlockedReason(db, input, ports);
+  if (blocked !== null) {
+    return { ok: false, message: blocked };
+  }
+
   const result = await updateTaskStatus(db, input.taskId, input.projectId, input.status, {
     decision: input.decision,
   });
@@ -132,6 +193,73 @@ export async function applyTaskTransition(
   const dispatch = await advanceQueue(db, input.projectId);
 
   return { ok: true, dequeued: result.dequeued, dispatch, delivery, refresh };
+}
+
+/**
+ * Ce qui empeche un `Retry` de partir, ou `null` quand rien ne l'empeche.
+ *
+ * ## Ce qu'elle ne fait pas
+ *
+ * Elle n'ecrit rien, et c'est le point : elle est appelee **avant** la
+ * transition, pour que le refus laisse la tache exactement ou elle etait. Le
+ * pilote reel a decouvert l'ordre inverse.
+ *
+ * ## Ce qu'elle ne verifie pas non plus
+ *
+ * Les dependances non satisfaites. Une tache prete qui attend une autre tache
+ * **reste prete** — c'est un invariant de TASK-025 : la dependance refuse un
+ * lancement, elle ne bloque pas un statut. La refuser ici transformerait un
+ * refus de lancement en refus de statut, ce qui n'est pas la meme chose.
+ *
+ * ## Ce qu'un refus signifie
+ *
+ * Que NOX ne peut pas prouver, maintenant, qu'une execution neuve pourrait
+ * demarrer. C'est une raison suffisante pour ne pas quitter `FAILED` : tant que
+ * la tache y reste, sa reprise ciblee — celle qui repart du travail partiel —
+ * reste offerte. Sortir de `FAILED` sans pouvoir lancer perd les deux gestes a
+ * la fois.
+ */
+async function retryBlockedReason(
+  db: DatabaseClient,
+  input: { projectId: string; taskId: string; status: TaskStatus },
+  ports: TaskTransitionPorts,
+): Promise<string | null> {
+  if (input.status !== TASK_STATUS.READY) {
+    return null;
+  }
+
+  const task = await getTaskById(db, input.taskId);
+  // Une tache introuvable, ou qui n'est pas en echec, n'est pas un `Retry` :
+  // `updateTaskStatus` reste seul juge de sa transition.
+  if (task === null || task.projectId !== input.projectId || task.status !== TASK_STATUS.FAILED) {
+    return null;
+  }
+
+  const project = await getProjectById(db, input.projectId);
+  if (project === null) {
+    return null;
+  }
+
+  // Le repository, pas la tache : deux projets peuvent travailler en meme temps,
+  // un meme repository jamais. `countActiveRepositoryRuns` remonte aux projets
+  // qui partagent le dossier, exactement comme le verrou du lancement.
+  if ((await countActiveRepositoryRuns(db, input.projectId)) > 0) {
+    return RETRY_REPOSITORY_BUSY_MESSAGE;
+  }
+
+  // La politique de livraison est relue en base : la sonde doit constater
+  // exactement ce que le lancement constatera, sinon elle refuserait un `Retry`
+  // que le lancement aurait accepte.
+  const policy = await readProjectDeliveryPolicy(db, input.projectId);
+  const preflight = await ports.preflight(project.repositoryPath, policy);
+  if (preflight.ok) {
+    return null;
+  }
+
+  // Dossier de travail sale, branche inattendue, `HEAD` decale, runner arrete,
+  // Claude Code absent : tous passent par le meme message du runner, deja
+  // formule et sans chemin absolu.
+  return retryBlockedMessage(describeRunnerFailure(preflight.failure));
 }
 
 /**

@@ -6824,3 +6824,206 @@ verifie.
 `readBoundedProposedText` reutilise exactement la normalisation et les bornes de
 `readProposedText` : c'est la meme lecture, qui rend simplement sa raison. Deux implementations
 finiraient par accepter l'une ce que l'autre refuse.
+
+
+### D-420 — `CLAUDE_PROCESS_FAILED` melangeait des incidents qui n'appellent pas le meme geste
+
+**Decision.** Une execution enregistre desormais, en plus de son `errorCode`, une **categorie** de
+terminaison (`Run.failureCategory`) et une phrase de constat ecrite par NOX (`Run.failureDetail`).
+Le code du contrat runner ne bouge pas.
+
+**Justification.** Le second pilote reel a produit un ecran qui disait, en tout et pour tout,
+`CLAUDE_PROCESS_FAILED` et `exit 1`. Onze minutes de travail, vingt-quatre fichiers, et rien
+d'actionnable.
+
+Or NOX savait davantage. Ce seul code couvrait :
+
+```text
+le processus est sorti en code non nul        →  du travail existe, reprenable
+l'agent s'est declare en erreur, code nul     →  lire son compte rendu
+le processus a ete tue par un signal          →  NOX ne sait pas
+```
+
+Trois incidents, trois gestes. `errorCode` repond a « laquelle des erreurs connues » ;
+`failureCategory` repond a « qu'est-ce qui a cede ». Les fondre aurait oblige a casser un code que
+des executions portent deja.
+
+**Rien n'est invente.** La categorie se derive de faits que NOX a lui-meme enregistres — un code de
+contrat, un code de sortie, un drapeau d'annulation. Quand aucun ne tranche, la reponse est
+`UNKNOWN`, et c'est une reponse. Les executions anterieures a HOTFIX-006 portent `NULL` : la
+categorie est alors derivee **a la lecture**, par la meme table que celle du runner. Aucune ligne
+historique n'est reecrite — lui donner aujourd'hui une valeur qu'elle n'avait pas ferait dire au
+passe ce qu'il ne disait pas.
+
+**Le constat est ecrit par NOX**, a partir du seul code systeme, jamais du message d'origine de
+Node — qui porterait le chemin absolu de l'executable. Meme regle que le diagnostic de panne de
+validation de TASK-027.
+
+### D-421 — `Retry` et `Correct failed run` demandent l'inverse l'un de l'autre
+
+**Decision.** Une execution `FAILED` qui a laisse du travail peut recevoir une **correction**, qui
+repart du dossier de travail sale. `Retry` conserve exactement son sens : une nouvelle tentative,
+depuis un repository propre.
+
+**Justification.** Le pilote reel n'avait que `Retry`. Or `Retry` exige un repository propre : le
+seul chemin propose commencait donc par se debarrasser du travail qu'il fallait sauver. L'utilisateur
+avait le choix entre commiter un travail rate, le mettre de cote, le reinitialiser, ou deboguer a la
+main — c'est-a-dire exactement ce que NOX existe pour eviter.
+
+```text
+Retry               →  repository propre exige      →  repart de zero
+Correct failed run  →  repository identique exige   →  continue le travail
+```
+
+**Presque tout existait deja.** `runCorrectionPreflight`, l'empreinte HMAC du dossier de travail,
+`--resume`, `parentRunId`, la reservation par index unique : TASK-011, TASK-012 et TASK-028 avaient
+tout construit. Il manquait une **porte** : `checkResumeCandidate` exigeait `COMPLETED` et `REVIEW`,
+et `startTaskCorrection` exigeait `REVIEW`. Le correctif ouvre ces deux conditions a `FAILED`, et
+rien d'autre.
+
+**`BLOCKED` et `CANCELLED` restent exclus**, deliberement. Une limite d'utilisation se resout en
+attendant ; une annulation est une decision humaine de ne pas continuer, et la reprendre d'un clic
+contredirait le geste. Leur dossier de travail reste relisible — NOX n'y touche jamais.
+
+**Un amorcage, lui, n'est pas exclu.** `checkAutomaticCorrection` le refuse parce qu'il relance
+seul ; cette porte-ci est humaine, comme `checkHumanCorrection`, qui ne l'a jamais refuse. L'exclure
+aurait ferme la porte au cas meme qui a motive ce correctif — le pilote a echoue sur `TASK-000`.
+
+**Une troisieme origine, pas un assouplissement des deux autres.** `PROCESS_FAILURE` rejoint
+`HUMAN_FEEDBACK` et `AUTOMATED_VALIDATION`. Les trois repondent a des questions differentes — « un
+humain a-t-il relu ? », « NOX a-t-il une preuve ? », « le processus a-t-il laisse quelque chose ? » —
+et elargir l'une des existantes les aurait melees. Une correction apres echec n'est **jamais**
+automatique : un processus mort ne prouve rien sur le code.
+
+### D-422 — Un refus d'empreinte qu'on ne peut pas diagnostiquer finit par etre contourne
+
+**Decision.** La capture de review enregistre, a cote de l'empreinte globale, une **empreinte par
+entree** (`Run.workspaceEntries`). Un refus de reprise nomme alors les chemins qui ont diverge :
+apparus, disparus, modifies, reindexes.
+
+**Justification.** L'empreinte HMAC de TASK-012 repond parfaitement a sa question — « ce dossier de
+travail est-il exactement celui qui a ete relu ? » — mais elle ne sait dire que « non ». Devant
+vingt-quatre fichiers, un refus muet ne laisse qu'une issue praticable : tout jeter. Un controle
+qu'on contourne ne protege plus rien.
+
+**Ces entrees ne decident de rien, et ne doivent jamais le faire.** L'empreinte globale reste seule
+autorite : la comparaison a lieu **apres** le refus, et ne peut ni le lever ni l'attenuer. Si les
+deux se contredisaient — liste identique, empreinte differente — c'est l'empreinte qui gagne, et le
+message le dit au lieu de laisser croire que rien n'a change.
+
+**Le contenu ne sort pas.** Une entree porte un chemin relatif — deja ce que la review affiche —,
+deux lettres de statut Git, et un HMAC tronque calcule avec la cle du runner. Jamais un octet de
+fichier. Le digest d'une entree couvre son **contenu** et non son etat d'index : les melanger ferait
+lire un simple `git add` comme une edition, et le diagnostic accuserait d'un changement qui n'a pas
+eu lieu.
+
+**Absentes, le refus tient.** Une execution anterieure a HOTFIX-006 n'en porte aucune, et le message
+reconnait alors qu'il ne peut pas nommer de chemin — en rappelant qu'un jeton de runner different
+produit le meme refus, deux causes que NOX ne sait pas distinguer.
+
+### D-423 — Une timeline qu'on ne peut pas interroger n'aide pas a comprendre un echec
+
+**Decision.** Les evenements d'outil portent desormais un `detail` : la ligne de commande entiere
+quand chaque segment est autorise, la raison de son masquage sinon, la commande a laquelle un
+resultat repond, et le code de sortie **quand le protocole l'expose**. Le message final porte son
+sous-type.
+
+**Justification.** Le pilote s'est arrete sur trois lignes muettes :
+
+```text
+Running an allowed command
+Bash completed
+Finished with an error
+```
+
+Aucune ne disait ce qui avait ete tente ni ce que NOX avait observe. Le libelle est borne a deux
+cents caracteres, et c'est donc la **fin** d'un enchainement `a && b` — celle qui a echoue — qui
+disparaissait.
+
+**Ce que NOX ne sait pas, il le dit.** Claude Code n'expose pas systematiquement de code de sortie
+sur un `tool_result` : la ligne ecrit alors « non expose par le protocole » plutot que de se taire,
+parce que le silence se lit comme une lacune de NOX et envoie chercher au mauvais endroit.
+
+**Aucune frontiere ne bouge.** Le contenu d'un `tool_result` ne sort toujours pas, la ligne affichee
+reste celle dont chaque segment a ete valide mot pour mot, et un sous-type venu du reseau n'est
+recopie que s'il a la forme d'un identifiant de protocole — sinon il devient `unknown`. Le `detail`
+passe par le meme nettoyeur et la meme borne que le reste.
+
+**La derniere activite se derive, elle ne se stocke pas.** Une colonne « derniere action » serait un
+compteur denormalise de plus, et finirait par ne plus decrire les lignes qu'elle resume — le meme
+argument qui avait fait renoncer a `lastEventSequence` sur `Run`.
+
+
+### D-424 — `Retry` changeait un statut sans jamais verifier qu'il pouvait partir
+
+**Decision.** La transition `FAILED → READY` — c'est-a-dire `Retry`, et elle seule — est
+desormais precedee d'un controle **en lecture** : repository libre, et preflight du runner
+satisfait. Un refus ne touche a rien, et son message dit qu'aucune execution n'a demarre.
+
+**Justification.** `Retry` ne lance rien. Le lancement est une **seconde** action, sur une autre
+page, et c'est elle qui exige un repository propre. Entre les deux, personne ne verifiait quoi que
+ce soit : le clic ecrivait le statut et rendait la main.
+
+Le second pilote reel a donc obtenu ceci :
+
+```text
+RUN-001 echoue, 24 fichiers non commites restent
+clic sur Retry           →  TASK-000 passe FAILED → READY
+tentative de lancement   →  refusee : repository sale
+etat final               →  READY, aucune execution, echec inatteignable
+```
+
+La tache annoncait qu'elle attendait une execution qui ne pouvait pas partir. Pire : en quittant
+`FAILED`, elle avait perdu l'autre geste — la reprise ciblee de HOTFIX-006 s'ancre sur une tache en
+echec.
+
+**Le controle est volontairement limite a cette transition.** Toutes les autres restent des
+ecritures SQLite : mettre un brouillon en attente, bloquer une tache ou accepter un travail n'a
+aucune raison de dependre d'une machine, et les pages doivent continuer de fonctionner runner
+arrete. Un test compte les allers-retours pour le garantir.
+
+**Les dependances non satisfaites ne sont pas un motif de refus.** Une tache prete qui attend une
+autre tache **reste prete** — invariant de TASK-025 : la dependance refuse un lancement, elle ne
+decide pas d'un statut. Les confondre ici aurait transforme un refus d'execution en refus de
+transition.
+
+**Un runner injoignable refuse aussi**, et c'est delibere. NOX ne peut alors pas prouver qu'une
+execution neuve partirait ; rester en echec garde les deux gestes ouverts, en sortir les perd tous
+les deux.
+
+### D-425 — Une reprise s'ancre a l'execution, jamais au statut de la tache
+
+**Decision.** `Correct failed run` accepte un troisieme statut de tache, `READY`, sous trois
+conditions cumulatives : l'execution visee a **echoue**, rien d'autre n'a eu lieu depuis, et aucune
+correction n'en est nee. La preuve est refaite dans la transaction qui ecrit.
+
+**Justification.** Le defaut de D-424 existe deja dans des bases installees — le pilote reel est
+dans cet etat. Un correctif qui ne repare que l'avenir aurait laisse son travail inatteignable, et
+la seule issue aurait ete une edition manuelle de SQLite.
+
+`READY` seul ne prouve rien : une tache prete attend normalement une execution **neuve**, et y
+reprendre une ancienne session serait faux. Ce qui distingue les deux situations n'est pas le
+statut mais l'histoire des executions :
+
+```text
+Retry avorte    →  l'echec est encore le dernier fait de la tache
+Retry reel      →  une execution plus recente existe
+```
+
+D'ou `isLatestRunForTask`, et son detail qui compte : **les corrections nees de cette execution ne
+comptent pas**. Elles en descendent, et leur presence ne veut pas dire qu'autre chose s'est produit.
+Sans cette exclusion, la question reposee dans la transaction se repondrait toujours « non », le run
+de correction venant d'etre cree.
+
+Le filtre est ecrit en `OR` explicite plutot qu'en `NOT` : sous SQL, une comparaison avec `NULL` ne
+vaut ni vrai ni faux, et un `NOT (parentRunId = x)` aurait silencieusement ecarte toutes les
+executions initiales — c'est-a-dire exactement celles qu'on cherche.
+
+**Rien n'est assoupli.** Branche, `HEAD` et empreinte du dossier de travail restent verifies par le
+runner juste avant le lancement, et un refus laisse la tache ou elle etait. Reconnaitre un `Retry`
+avorte ouvre une **porte**, pas une exception : ce qui la franchit subit tous les controles.
+
+**Une execution anterieure a HOTFIX-006 ne porte pas d'empreintes par entree.** L'empreinte globale,
+elle, existe et decide exactement comme ailleurs. Ce qui manque est la **localisation** d'une
+divergence, pas la garantie — et l'ecran le dit, plutot que de laisser croire que la reprise serait
+moins sure ici.

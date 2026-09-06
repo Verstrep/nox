@@ -16,6 +16,7 @@
 
 import {
   ACTIVE_RUN_STATUSES,
+  RUN_FAILURE_LIMITS,
   RUN_LIMITS,
   RUN_STATUS,
   TASK_STATUS,
@@ -68,6 +69,10 @@ export type RunOutcomeInput = {
   exitCode?: number | null;
   errorCode?: string | null;
   errorMessage?: string | null;
+  /** Valeur de `RunFailureCategory`, telle que le runner l'a nommee. */
+  failureCategory?: string | null;
+  /** Phrase ecrite par NOX, bornee a l'ecriture comme tout le reste. */
+  failureDetail?: string | null;
   stderrTail?: string | null;
   resultText?: string | null;
   claudeSessionId?: string | null;
@@ -113,6 +118,8 @@ type DetailRow = SummaryRow & {
   exitCode: number | null;
   errorCode: string | null;
   errorMessage: string | null;
+  failureCategory: string | null;
+  failureDetail: string | null;
   durationApiMs: number | null;
   numTurns: number | null;
   reportedCostUsd: number | null;
@@ -197,6 +204,8 @@ function toDetail(row: DetailRow): DevelopmentRunDetail {
     },
     errorCode: row.errorCode,
     errorMessage: row.errorMessage,
+    failureCategory: row.failureCategory,
+    failureDetail: row.failureDetail,
     stderrTail: row.stderrTail,
     cancellationRequestedAt:
       row.cancellationRequestedAt === null ? null : row.cancellationRequestedAt.toISOString(),
@@ -224,6 +233,18 @@ function toColumns(outcome: RunOutcomeInput): Record<string, unknown> {
     columns["reportedCostUsd"] = outcome.reportedCostUsd;
   }
   if (outcome.errorCode !== undefined) columns["errorCode"] = outcome.errorCode;
+  if (outcome.failureCategory !== undefined) {
+    columns["failureCategory"] = outcome.failureCategory;
+  }
+  if (outcome.failureDetail !== undefined) {
+    // Deja bornee par le runner, rebornee ici : c'est le dernier point par
+    // lequel passe forcement tout ce qui vient de l'exterieur, et une couche qui
+    // fait confiance a la precedente finit par ecrire ce qu'elle n'a pas relu.
+    columns["failureDetail"] =
+      outcome.failureDetail === null
+        ? null
+        : boundText(outcome.failureDetail, RUN_FAILURE_LIMITS.detail);
+  }
   if (outcome.cancellationRequestedAt !== undefined) {
     columns["cancellationRequestedAt"] = outcome.cancellationRequestedAt;
   }
@@ -303,11 +324,17 @@ export type TaskRunFact = {
   kind: string;
   parentRunId: string | null;
   errorCode: string | null;
+  /** Code de sortie du processus ; sert a nommer ce qui a cede. */
+  exitCode: number | null;
+  /** Categorie enregistree, ou `null` avant HOTFIX-006. */
+  failureCategory: string | null;
   hasReview: boolean;
   hasSession: boolean;
   hasFingerprint: boolean;
   /** Une correction a deja ete lancee depuis cette execution. */
   hasCorrection: boolean;
+  /** L'execution a laisse des fichiers changes dans le repository. */
+  hasPartialWork: boolean;
 };
 
 /** Executions d'une tache, de la plus recente a la plus ancienne. */
@@ -325,9 +352,12 @@ export async function listTaskRunFacts(
       kind: true,
       parentRunId: true,
       errorCode: true,
+      exitCode: true,
+      failureCategory: true,
       reviewCapturedAt: true,
       claudeSessionId: true,
       workspaceFingerprint: true,
+      changedFiles: true,
     },
   });
 
@@ -346,10 +376,17 @@ export async function listTaskRunFacts(
       kind: row.kind,
       parentRunId: row.parentRunId,
       errorCode: row.errorCode,
+      exitCode: row.exitCode,
+      failureCategory: row.failureCategory,
       hasReview: row.reviewCapturedAt !== null,
       hasSession: row.claudeSessionId !== null && row.claudeSessionId.trim() !== "",
       hasFingerprint: row.workspaceFingerprint !== null,
       hasCorrection: parents.has(row.id),
+      // La liste des fichiers changes est capturee a la fin de l'execution :
+      // elle dit ce que le processus a laisse, pas ce que le disque contient
+      // aujourd'hui. C'est exactement ce qu'il faut ici — la question posee est
+      // « cette execution a-t-elle produit quelque chose ? ».
+      hasPartialWork: readChangedFiles(row.changedFiles).length > 0,
     };
   });
 }
@@ -707,6 +744,51 @@ export function updateRunFromRunner(
  * tache. L'exclusion d'execution, elle, porte sur le repository canonique et
  * vit dans `repository-lock.ts` ; le runner la refait sur les processus reels.
  */
+/**
+ * Rien d'autre n'a-t-il eu lieu depuis cette execution ?
+ *
+ * ## Pourquoi cette question existe
+ *
+ * Parce qu'une reprise apres echec doit etre **ancree a l'execution**, jamais au
+ * statut de la tache. Un `Retry` qui n'a jamais demarre laisse la tache en
+ * `READY` alors que l'echec est toujours le dernier fait de son histoire ; un
+ * `Retry` qui a bien demarre, lui, produit une execution plus recente, et la
+ * precedente cesse d'etre reprenable.
+ *
+ * Les deux situations se ressemblent a l'ecran — tache `READY`, execution
+ * `FAILED` — et seule cette question les separe.
+ *
+ * ## Les corrections de cette execution ne comptent pas
+ *
+ * Une correction nait **de** cet echec : elle en descend, et sa presence ne veut
+ * pas dire qu'autre chose s'est produit entre-temps. L'exclure est ce qui permet
+ * a la question d'etre reposee **dans** la transaction qui demarre la reprise,
+ * alors que le run de correction vient d'etre cree.
+ *
+ * Le filtre est ecrit en `OR` explicite plutot qu'en `NOT` : sous SQL, une
+ * comparaison avec `NULL` ne vaut ni vrai ni faux, et un `NOT (parentRunId = x)`
+ * ecarterait silencieusement toutes les executions initiales.
+ *
+ * `sequence` fait autorite, jamais une date : il est attribue atomiquement a la
+ * creation et ne bouge plus, alors que deux `createdAt` peuvent tomber dans la
+ * meme milliseconde.
+ */
+export async function isLatestRunForTask(
+  db: DatabaseClient,
+  taskId: string,
+  runId: string,
+): Promise<boolean> {
+  const latest = await db.run.findFirst({
+    where: {
+      taskId,
+      OR: [{ parentRunId: null }, { parentRunId: { not: runId } }],
+    },
+    orderBy: { sequence: "desc" },
+    select: { id: true },
+  });
+  return latest !== null && latest.id === runId;
+}
+
 export async function hasActiveRun(db: DatabaseClient, taskId: string): Promise<boolean> {
   const active = await db.run.findFirst({
     // `CANCELLING` compte comme actif : le processus n'est pas mort, et rien ne

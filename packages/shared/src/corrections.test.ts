@@ -132,10 +132,45 @@ describe("checkResumeCandidate", () => {
     assert.equal(checkResumeCandidate(candidate()), null);
   });
 
-  it("refuse une execution echouee", () => {
+  it("accepte une execution echouee qui a laisse du travail", () => {
+    // Le coeur de HOTFIX-006. Avant lui, ce cas etait refuse, et l'utilisateur
+    // n'avait que `Retry` — qui exige un repository propre, donc qui commence
+    // par demander de jeter le travail que l'echec a laisse.
     assert.equal(
-      checkResumeCandidate(candidate({ runStatus: "FAILED" })),
-      RESUME_REFUSAL.RUN_NOT_COMPLETED,
+      checkResumeCandidate(
+        candidate({
+          runStatus: "FAILED",
+          taskStatus: "FAILED",
+          errorCode: "CLAUDE_PROCESS_FAILED",
+          exitCode: 1,
+        }),
+      ),
+      null,
+    );
+  });
+
+  it("refuse une execution echouee dont la tache n'est plus en echec", () => {
+    assert.equal(
+      checkResumeCandidate(
+        candidate({ runStatus: "FAILED", taskStatus: "DRAFT", exitCode: 1 }),
+      ),
+      RESUME_REFUSAL.TASK_NOT_IN_REVIEW,
+    );
+  });
+
+  it("refuse un echec qui n'a rien produit", () => {
+    // Un processus qui n'a jamais demarre ne laisse aucun dossier de travail a
+    // continuer : proposer une reprise y serait proposer de continuer le vide.
+    assert.equal(
+      checkResumeCandidate(
+        candidate({
+          runStatus: "FAILED",
+          taskStatus: "FAILED",
+          errorCode: "CLAUDE_START_FAILED",
+          exitCode: null,
+        }),
+      ),
+      RESUME_REFUSAL.NO_PARTIAL_WORK,
     );
   });
 

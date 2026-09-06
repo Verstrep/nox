@@ -31,7 +31,11 @@
  * la decision ; tout ce qu'un test peut verifier sans rien lancer.
  */
 
-import { RUN_KIND } from "./corrections.js";
+import { RUN_KIND, isStrandedRetry } from "./corrections.js";
+import {
+  categoryMayLeavePartialWork,
+  type RunFailureCategory,
+} from "./run-failure.js";
 import { QUEUE_STATE, type QueueState } from "./execution-queue.js";
 import { TASK_KIND, type TaskKind } from "./tasks.js";
 import {
@@ -55,7 +59,7 @@ import {
 /**
  * Pourquoi une correction a ete lancee.
  *
- * Deux valeurs, fermees. Une troisieme — « mixte », « inconnue » — serait
+ * Trois valeurs, fermees. Une quatrieme — « mixte », « inconnue » — serait
  * l'endroit ou l'on rangerait ce qu'on n'a pas su attribuer, et il faudrait
  * bien l'attribuer au moment de decider si la borne automatique s'applique.
  */
@@ -64,6 +68,19 @@ export const CORRECTION_SOURCE = {
   HUMAN_FEEDBACK: "HUMAN_FEEDBACK",
   /** NOX possede une preuve autonome d'echec et repart de lui-meme. */
   AUTOMATED_VALIDATION: "AUTOMATED_VALIDATION",
+  /**
+   * L'execution elle-meme a cede, et a laisse un travail partiel.
+   *
+   * Ni une review qui demande des changements, ni une preuve de NOX : le
+   * processus s'est arrete avant d'avoir fini. Personne n'a rien relu, et il n'y
+   * a rien a reprocher au travail — il est simplement inacheve.
+   *
+   * Cette origine ne **declenche jamais** rien toute seule : elle nomme le point
+   * de depart d'un geste humain. Une correction automatique reste reservee a
+   * `AUTOMATED_VALIDATION`, c'est-a-dire a une preuve que NOX a obtenue
+   * lui-meme — un processus mort ne prouve rien sur le code.
+   */
+  PROCESS_FAILURE: "PROCESS_FAILURE",
 } as const;
 
 export type CorrectionSource = (typeof CORRECTION_SOURCE)[keyof typeof CORRECTION_SOURCE];
@@ -200,6 +217,15 @@ export const CORRECTION_REFUSAL = {
    * qui execute Claude Code sur **son** repository n'entre pas dans ce refus.
    */
   REPOSITORY_RUN_ACTIVE: "CORRECTION_REPOSITORY_RUN_ACTIVE",
+  /**
+   * L'execution a echoue sans rien laisser derriere elle.
+   *
+   * Un processus qui n'a jamais demarre, ou une limite d'utilisation atteinte,
+   * ne produisent aucun travail partiel. Proposer de « continuer » y serait
+   * proposer de continuer le vide — le geste qui s'applique est `Retry`, ou
+   * d'attendre.
+   */
+  NO_PARTIAL_WORK: "CORRECTION_NO_PARTIAL_WORK",
 } as const;
 
 export type CorrectionRefusalCode =
@@ -207,6 +233,16 @@ export type CorrectionRefusalCode =
 
 export const CORRECTION_REFUSAL_CODES: readonly CorrectionRefusalCode[] =
   Object.values(CORRECTION_REFUSAL);
+
+/**
+ * Reconnait un code de refus.
+ *
+ * Sert aux surfaces qui recoivent un code depuis la couche donnees et doivent
+ * le traduire : une valeur inconnue y produit une phrase generique plutot qu'un
+ * acces hors table. Un ecran de diagnostic est le dernier endroit qui doive
+ * cesser de s'afficher.
+ */
+export const isCorrectionRefusalCode = createStatusGuard(CORRECTION_REFUSAL_CODES);
 
 /**
  * Tout ce dont la decision depend, relu au moment de decider.
@@ -364,6 +400,91 @@ export function checkHumanCorrection(
   }
   // Lancer une correction pendant qu'une preuve est en train d'etre obtenue
   // produirait une reprise fondee sur un resultat qu'on n'a pas encore.
+  if (
+    facts.batchStatus === VALIDATION_BATCH_STATUS.PENDING ||
+    facts.batchStatus === VALIDATION_BATCH_STATUS.RUNNING
+  ) {
+    return refuse(CORRECTION_REFUSAL.BATCH_NOT_FINAL);
+  }
+  if (facts.attemptReserved) {
+    return refuse(CORRECTION_REFUSAL.ALREADY_RESERVED);
+  }
+  return { eligible: true, attempt: 0 };
+}
+
+/**
+ * Une correction peut-elle repartir d'une execution qui a echoue ?
+ *
+ * ## Pourquoi une troisieme fonction plutot qu'un assouplissement des deux
+ *
+ * Parce que les trois repondent a des questions differentes.
+ * `checkAutomaticCorrection` demande « NOX a-t-il une preuve, et
+ * l'autorisation d'agir seul ? ». `checkHumanCorrection` demande « un humain
+ * a-t-il relu, et peut-il demander autre chose ? ». Celle-ci demande « le
+ * processus a-t-il laisse un travail qu'on puisse continuer ? ».
+ *
+ * Elargir l'une des deux premieres aurait mele ces questions, et le jour ou
+ * l'une bougerait, les autres auraient bouge avec elle sans que personne ne
+ * l'ait voulu.
+ *
+ * ## Elle n'autorise aucun automatisme
+ *
+ * Elle ne regarde ni la file, ni son autorisation permanente, et n'incremente
+ * aucun compteur de corrections automatiques. Un echec de processus ne prouve
+ * rien sur le code : il ne peut donc pas declencher de correction tout seul.
+ * C'est toujours un humain qui clique.
+ */
+export function checkProcessFailureCorrection(
+  facts: Pick<
+    AutomaticCorrectionFacts,
+    "taskStatus" | "runStatus" | "decided" | "batchStatus" | "attemptReserved"
+  > & {
+    /** Categorie deja resolue — enregistree, ou derivee pour une execution ancienne. */
+    failureCategory: RunFailureCategory;
+    /** L'execution visee est encore la plus recente de sa tache. */
+    isLatestRun?: boolean;
+    /** Une correction est deja nee de cette execution. */
+    hasCorrection?: boolean;
+  },
+): AutomaticCorrectionDecision {
+  // ## Pourquoi un amorcage n'est **pas** refuse ici
+  //
+  // `checkAutomaticCorrection` le refuse, et a raison : un amorcage porte des
+  // permissions d'installation elargies, et NOX ne relance pas cela tout seul.
+  // `checkHumanCorrection` ne le refuse pas, et a raison aussi : c'est un humain
+  // qui clique, et une correction d'amorcage garde simplement les permissions
+  // d'un amorcage — le pipeline le prevoit depuis TASK-028.
+  //
+  // Cette porte-ci est humaine. La fermer aux amorcages aurait exclu le cas
+  // meme qui a motive HOTFIX-006 : le second pilote reel a echoue sur
+  // `TASK-000`, apres onze minutes et vingt-quatre fichiers.
+  if (facts.runStatus !== RUN_STATUS.FAILED) {
+    return refuse(CORRECTION_REFUSAL.RUN_NOT_COMPLETED);
+  }
+  // `FAILED` est le cas normal. `READY` n'est accepte que lorsqu'un `Retry` y a
+  // mene la tache sans jamais demarrer : l'echec est alors toujours le dernier
+  // fait de son histoire, et c'est a lui que la reprise s'ancre — jamais au
+  // statut. Voir `isStrandedRetry`.
+  if (
+    facts.taskStatus !== TASK_STATUS.FAILED &&
+    !isStrandedRetry({
+      runStatus: facts.runStatus,
+      taskStatus: facts.taskStatus,
+      isLatestRun: facts.isLatestRun,
+      hasCorrection: facts.hasCorrection ?? false,
+    })
+  ) {
+    return refuse(CORRECTION_REFUSAL.TASK_NOT_IN_REVIEW);
+  }
+  if (!categoryMayLeavePartialWork(facts.failureCategory)) {
+    return refuse(CORRECTION_REFUSAL.NO_PARTIAL_WORK);
+  }
+  if (facts.decided) {
+    return refuse(CORRECTION_REFUSAL.ALREADY_DECIDED);
+  }
+  // Meme raison que pour une correction humaine : reprendre pendant qu'une
+  // preuve s'obtient produirait une correction fondee sur un resultat qu'on n'a
+  // pas encore.
   if (
     facts.batchStatus === VALIDATION_BATCH_STATUS.PENDING ||
     facts.batchStatus === VALIDATION_BATCH_STATUS.RUNNING

@@ -1,7 +1,9 @@
 import {
   RUN_PROVENANCE,
   RUN_STATUS,
+  isCorrectionRefusalCode,
   isFinalRunStatus,
+  readRunFailureCategory,
   runProvenance,
   type DevelopmentRunDetail,
 } from "@nox/shared";
@@ -31,7 +33,22 @@ import {
   reviewUnavailableMessage,
   reviewUrl,
 } from "@/lib/review-display";
-import { runProvenanceLabel } from "@/lib/correction-display";
+import {
+  correctionFailureUrl,
+  correctionRefusalMessage,
+  resumeRefusalMessage,
+  runProvenanceLabel,
+} from "@/lib/correction-display";
+import {
+  RETRY_NEEDS_CLEAN_NOTICE,
+  STRANDED_RETRY_NOTICE,
+  failureRecoveryOptions,
+  hasFailureDiagnostics,
+  runFailureCategoryLabel,
+  runFailureCategoryMeaning,
+} from "@/lib/run-failure-display";
+import { TASK_SECTION_ANCHOR } from "@/lib/guided-workflow-display";
+import { loadCorrectionContext } from "@/lib/correction-cycle";
 import { loadRunReview, syncRunReview } from "@/lib/run-review";
 import { loadRun, reconcileRun } from "@/lib/runs";
 import { loadTask } from "@/lib/tasks";
@@ -44,6 +61,19 @@ import { AutomatedValidationSection } from "@/components/VerificationPanels";
 import { loadVerificationReview } from "@/lib/verification-review";
 
 import { RunTimeline } from "./RunTimeline";
+
+/**
+ * Traduit le refus d'une reprise, en restant tolerant.
+ *
+ * Un code que ce web ne connaitrait pas rend une phrase generique plutot que de
+ * faire tomber la page : un diagnostic est le dernier endroit qui doive cesser
+ * de s'afficher.
+ */
+function correctionRefusalText(code: string): string {
+  return isCorrectionRefusalCode(code)
+    ? correctionRefusalMessage(code)
+    : resumeRefusalMessage("RUN_NOT_COMPLETED");
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -190,6 +220,36 @@ export default async function RunPage({
   const lastSequence = events.at(-1)?.sequence ?? 0;
   const page = runUrl(project.id, task.id, run.id);
 
+  // Les options de reprise, pour une execution qui ne s'est pas terminee
+  // normalement. Lecture seule, comme tout le reste de cette page : afficher
+  // « Correct failed run » ne reserve rien et ne lance rien.
+  const showsRecovery = hasFailureDiagnostics(run.status);
+  const failureCategory = readRunFailureCategory(run.failureCategory, {
+    status: run.status,
+    errorCode: run.errorCode,
+    exitCode: run.claude.exitCode,
+  });
+  const cycle = showsRecovery
+    ? await loadCorrectionContext(getDatabaseClient(), { runId: run.id, taskId: task.id })
+    : null;
+  const canCorrect = cycle?.processFailure.eligible === true;
+  const recovery = showsRecovery
+    ? failureRecoveryOptions({
+        category: failureCategory,
+        hasPartialWork: run.git.changedFiles.length > 0,
+        correctHref: canCorrect ? correctionFailureUrl(project.id, task.id, run.id) : null,
+        // Le refus est **nomme** plutot que cache : une action attendue qui
+        // disparait sans explication est ce qui a envoye le pilote reel dans un
+        // terminal. Voir `run-failure-display.ts`.
+        correctBlockedReason:
+          cycle === null || cycle.processFailure.eligible
+            ? null
+            : correctionRefusalText(cycle.processFailure.code),
+        retryHref: `/projects/${project.id}/tasks/${task.id}#${TASK_SECTION_ANCHOR.status}`,
+        markBlockedHref: `/projects/${project.id}/tasks/${task.id}#${TASK_SECTION_ANCHOR.status}`,
+      })
+    : [];
+
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-4 border-b border-zinc-800 pb-6">
@@ -253,6 +313,83 @@ export default async function RunPage({
             )}
           </div>
         )}
+
+        {showsRecovery ? (
+          <SectionCard
+            title="Ce qui a échoué, et ce que vous pouvez faire"
+            description="Trois gestes différents. NOX recommande, il ne choisit pas à votre place."
+          >
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+              <p className="text-sm font-medium text-zinc-200">
+                {runFailureCategoryLabel(failureCategory)}
+              </p>
+              <p className="mt-1 max-w-prose text-sm leading-relaxed text-zinc-400">
+                {runFailureCategoryMeaning(failureCategory)}
+              </p>
+              {run.failureDetail === null ? null : (
+                <p className="mt-2 max-w-prose text-sm leading-relaxed text-zinc-300">
+                  {run.failureDetail}
+                </p>
+              )}
+              <p className="mt-3 text-xs text-zinc-600">
+                {run.git.changedFiles.length === 0
+                  ? "Aucun fichier n'a été laissé modifié dans le repository."
+                  : `${String(run.git.changedFiles.length)} fichier(s) laissés modifiés dans le repository. NOX n'a rien restauré.`}
+              </p>
+              {cycle?.strandedRetry === true ? (
+                <p className="mt-3 max-w-prose rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-200/90">
+                  {STRANDED_RETRY_NOTICE}
+                </p>
+              ) : null}
+              {run.git.changedFiles.length > 0 ? (
+                <p className="mt-3 max-w-prose text-xs leading-relaxed text-zinc-600">
+                  {RETRY_NEEDS_CLEAN_NOTICE}
+                </p>
+              ) : null}
+              <Link
+                href={runInspectUrl(project.id, task.id, run.id)}
+                className="mt-3 inline-block text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
+              >
+                Diagnostic complet dans Inspect run
+              </Link>
+            </div>
+
+            <ul className="mt-4 flex flex-col gap-3">
+              {recovery.map((option) => (
+                <li
+                  key={option.kind}
+                  className="rounded-md border border-zinc-800 px-4 py-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    {option.available && option.href !== null ? (
+                      <Link
+                        href={option.href}
+                        className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-600 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
+                      >
+                        {option.label}
+                      </Link>
+                    ) : (
+                      <span className="rounded-md border border-zinc-800 px-3 py-1.5 text-sm text-zinc-600">
+                        {option.label}
+                      </span>
+                    )}
+                    {option.recommended ? (
+                      <StatusBadge tone="muted">Recommandé</StatusBadge>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 max-w-prose text-xs leading-relaxed text-zinc-500">
+                    {option.description}
+                  </p>
+                  {option.unavailableReason === null ? null : (
+                    <p className="mt-2 max-w-prose text-xs leading-relaxed text-amber-200/90">
+                      Indisponible : {option.unavailableReason}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </SectionCard>
+        ) : null}
 
         {run.status === RUN_STATUS.CANCELLED ? (
           <div

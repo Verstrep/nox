@@ -130,6 +130,14 @@ export type StartClaudeRunRequest = {
     sessionId: string;
     expectedBranch: string;
     expectedWorkspaceFingerprint: string;
+    /**
+     * Entrees de l'etat relu, serialisees.
+     *
+     * Facultatives et sans pouvoir : elles ne relachent aucun controle, et ne
+     * sont regardees que lorsque l'empreinte a **deja** refuse. Leur seul role
+     * est de nommer les chemins qui ont diverge.
+     */
+    expectedWorkspaceEntries?: string | null;
   };
 };
 
@@ -168,6 +176,26 @@ export type ClaudeRunSnapshot = {
   exitCode: number | null;
   /** Code d'erreur stable du contrat, lorsqu'il y en a un. */
   errorCode: string | null;
+  /**
+   * Ce qui a cede, nomme par le runner. Valeur de `RunFailureCategory`.
+   *
+   * Distincte d'`errorCode`, qui reste l'autorite du contrat. Le code dit
+   * « laquelle des erreurs connues » ; la categorie dit « qu'est-ce qui a
+   * cede », et c'est elle qui separe un processus jamais demarre d'un processus
+   * qui a travaille avant de rendre un code non nul.
+   *
+   * Facultative : un runner anterieur a HOTFIX-006 n'en envoie pas, et le web
+   * la derive alors des faits deja enregistres.
+   */
+  failureCategory?: string | null;
+  /**
+   * Phrase ecrite par NOX pour nommer la cause, bornee.
+   *
+   * Jamais un message venu du systeme ou du processus : NOX la compose a partir
+   * du seul code systeme, exactement comme le diagnostic de panne de validation
+   * de TASK-027. Un message de Node porterait le chemin absolu de l'executable.
+   */
+  failureDetail?: string | null;
   /** Queue de la sortie d'erreur, bornee et deja nettoyee. */
   stderrTail: string | null;
   /** Compte rendu final de Claude Code. */
@@ -337,10 +365,18 @@ export function parseStartClaudeRunRequest(value: unknown): StartClaudeRunReques
     ) {
       return null;
     }
+    // Les entrees, elles, sont **facultatives** : elles n'entrent dans aucun
+    // controle, et les exiger ferait refuser une correction parfaitement
+    // legitime lancee depuis une execution d'avant HOTFIX-006.
+    const entries: unknown = correction["expectedWorkspaceEntries"];
+    if (entries !== undefined && entries !== null && typeof entries !== "string") {
+      return null;
+    }
     request.correction = {
       sessionId: correction["sessionId"],
       expectedBranch: correction["expectedBranch"],
       expectedWorkspaceFingerprint: correction["expectedWorkspaceFingerprint"],
+      expectedWorkspaceEntries: entries ?? null,
     };
   }
 
@@ -360,6 +396,16 @@ export type ClaudeCorrectionPreflightRequest = {
   expectedGitHead: string;
   expectedBranch: string;
   expectedWorkspaceFingerprint: string;
+  /**
+   * Empreintes par entree de l'etat relu, serialisees.
+   *
+   * Facultatives, et sans aucun pouvoir : elles n'accordent rien, ne relachent
+   * rien, et ne sont meme pas regardees quand l'empreinte globale correspond.
+   * Elles servent uniquement a **nommer** les chemins d'une divergence quand
+   * elle ne correspond pas. Absentes, le refus tient et reste muet sur le
+   * detail — c'est le comportement d'avant HOTFIX-006.
+   */
+  expectedWorkspaceEntries?: string | null;
 };
 
 /** Reponse de `POST /claude/corrections/preflight`. */
@@ -379,8 +425,9 @@ export type ClaudeCorrectionPreflightSuccess = {
 /**
  * Valide le corps recu par `POST /claude/corrections/preflight`.
  *
- * Les quatre champs sont obligatoires. Une empreinte vide ferait passer un
- * repository quelconque pour l'etat relu.
+ * Les quatre premiers champs sont obligatoires. Une empreinte vide ferait passer
+ * un repository quelconque pour l'etat relu. `expectedWorkspaceEntries` est
+ * facultatif : il n'accorde rien, il n'aide qu'a nommer une divergence.
  */
 export function parseClaudeCorrectionPreflightRequest(
   value: unknown,
@@ -396,11 +443,17 @@ export function parseClaudeCorrectionPreflightRequest(
   ) {
     return null;
   }
+
+  const entries: unknown = value["expectedWorkspaceEntries"];
+  if (entries !== undefined && entries !== null && typeof entries !== "string") {
+    return null;
+  }
   return {
     repositoryPath: value["repositoryPath"],
     expectedGitHead: value["expectedGitHead"],
     expectedBranch: value["expectedBranch"],
     expectedWorkspaceFingerprint: value["expectedWorkspaceFingerprint"],
+    expectedWorkspaceEntries: entries ?? null,
   };
 }
 
@@ -633,6 +686,10 @@ export function isClaudeRunStatusSuccess(value: unknown): value is ClaudeRunStat
     typeof run["eventsTruncated"] === "boolean" &&
     isNullableNumber(run["exitCode"]) &&
     isNullableString(run["errorCode"]) &&
+    // Absentes est valide : un runner d'avant HOTFIX-006 n'envoie ni l'une ni
+    // l'autre, et exiger le champ ferait rejeter toute sa reponse.
+    (run["failureCategory"] === undefined || isNullableString(run["failureCategory"])) &&
+    (run["failureDetail"] === undefined || isNullableString(run["failureDetail"])) &&
     isNullableString(run["stderrTail"]) &&
     isNullableString(run["resultText"]) &&
     isNullableString(run["claudeSessionId"]) &&
