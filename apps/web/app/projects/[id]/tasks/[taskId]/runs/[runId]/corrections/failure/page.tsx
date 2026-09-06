@@ -1,7 +1,6 @@
-import { getDatabaseClient, getRunResumeContext, hasActiveRun, listRunEvents } from "@nox/database";
+import { getDatabaseClient, getRunResumeContext, listRunEvents } from "@nox/database";
 import {
   CORRECTION_SOURCE,
-  checkResumeCandidate,
   describeActivityEvent,
   lastRecognizedActivity,
 } from "@nox/shared";
@@ -10,14 +9,12 @@ import { notFound } from "next/navigation";
 
 import { SectionCard } from "@/components/SectionCard";
 import { WorkflowLink } from "@/components/WorkflowLink";
-import { loadCorrectionContext } from "@/lib/correction-cycle";
 import {
-  allPreconditionsMet,
-  buildPreconditions,
-  correctionRefusalMessage,
-  resumeRefusalMessage,
+  preconditionMark,
+  preconditionStatusLabel,
   type Precondition,
 } from "@/lib/correction-display";
+import { evaluateFailureCorrection } from "@/lib/failure-correction";
 import { buildCorrectionContext } from "@/lib/correction-evidence";
 import { loadProject } from "@/lib/projects";
 import {
@@ -29,21 +26,26 @@ import {
 } from "@/lib/run-failure-display";
 import { buildCorrectionPrompt } from "@/lib/run-prompt";
 import { runUrl } from "@/lib/run-display";
-import { claudeCorrectionPreflight } from "@/lib/runner/client";
-import { describeInfrastructureFailure } from "@/lib/runner/errors";
 import { loadRun } from "@/lib/runs";
 import { loadTask } from "@/lib/tasks";
 
 import { StartFailureCorrectionForm } from "./StartFailureCorrectionForm";
 
 function PreconditionRow({ precondition }: { precondition: Precondition }) {
-  const met = precondition.state === "met";
+  // Trois etats, trois rendus. « Non verifie » se lit en gris : ce n'est ni une
+  // reussite, ni un refus — c'est une question qui n'a pas ete posee.
+  const tone =
+    precondition.state === "met"
+      ? "text-zinc-400"
+      : precondition.state === "unknown"
+        ? "text-zinc-500"
+        : "text-amber-200";
   return (
-    <li className={`flex flex-col gap-1 text-sm ${met ? "text-zinc-400" : "text-amber-200"}`}>
+    <li className={`flex flex-col gap-1 text-sm ${tone}`}>
       <span className="flex gap-2">
-        <span aria-hidden="true">{met ? "✓" : "✗"}</span>
+        <span aria-hidden="true">{preconditionMark(precondition.state)}</span>
         <span>{precondition.label}</span>
-        <span className="sr-only">{met ? " — OK" : " — Blocked"}</span>
+        <span className="sr-only">{` — ${preconditionStatusLabel(precondition.state)}`}</span>
       </span>
       {precondition.detail === null ? null : (
         <span className="pl-6 text-xs leading-relaxed text-amber-200/90">
@@ -103,22 +105,20 @@ export default async function PrepareFailureCorrectionPage({
     notFound();
   }
 
-  const cycle = await loadCorrectionContext(db, { runId: run.id, taskId: task.id });
-  if (cycle === null) {
+  // **Le** verdict. La page n'en calcule aucun autre : c'est exactement la
+  // duplication qui a produit un ecran se contredisant lui-meme — le cycle
+  // reconnaissait un `Retry` avorte pendant que la page, qui reassemblait le
+  // candidat sans `isLatestRun`, affichait « Task is in Failed — Blocked ».
+  const eligibility = await evaluateFailureCorrection(db, {
+    project: { id: project.id, repositoryPath: project.repositoryPath },
+    task: { id: task.id, status: task.status },
+    runId: run.id,
+  });
+  if (eligibility === null) {
     notFound();
   }
 
-  const refusal = checkResumeCandidate({
-    runStatus: context.status,
-    taskStatus: task.status,
-    errorCode: context.errorCode,
-    exitCode: context.exitCode,
-    claudeSessionId: context.claudeSessionId,
-    hasReview: context.hasReview,
-    hasFingerprint: context.workspaceFingerprint !== null,
-    hasActiveRun: await hasActiveRun(db, taskId),
-    hasCorrection: context.hasCorrection,
-  });
+  const { cycle, history, preconditions, ready } = eligibility;
 
   const back = runUrl(project.id, task.id, run.id);
 
@@ -154,44 +154,6 @@ export default async function PrepareFailureCorrectionPage({
     evidence: built.evidence,
   });
 
-  const canAsk =
-    refusal === null &&
-    cycle.processFailure.eligible &&
-    context.workspaceFingerprint !== null &&
-    context.gitBranch !== null &&
-    context.gitHeadAfter !== null;
-
-  const preflight = canAsk
-    ? await claudeCorrectionPreflight({
-        repositoryPath: project.repositoryPath,
-        expectedGitHead: context.gitHeadAfter ?? "",
-        expectedBranch: context.gitBranch ?? "",
-        expectedWorkspaceFingerprint: context.workspaceFingerprint ?? "",
-        expectedWorkspaceEntries: context.workspaceEntries,
-      })
-    : null;
-
-  const preconditions = buildPreconditions({
-    fromFailedRun: true,
-    taskInReview: refusal !== "TASK_NOT_IN_REVIEW",
-    runCompleted: refusal !== "RUN_NOT_COMPLETED" && refusal !== "NO_PARTIAL_WORK",
-    sessionAvailable: context.claudeSessionId !== null,
-    reviewAvailable: context.hasReview,
-    workspaceMatches: preflight?.ok === true,
-    gitUnchanged: preflight?.ok === true,
-    claudeAvailable: preflight?.ok === true,
-    // Le detail du runner est conserve : c'est lui qui nomme les chemins ayant
-    // diverge. Un refus qu'on ne peut pas diagnostiquer finit par etre
-    // contourne, et le contournement detruit le travail qu'il protegeait.
-    workspaceDetail:
-      preflight === null || preflight.ok
-        ? null
-        : describeInfrastructureFailure(preflight.failure).message,
-  });
-
-  const ready =
-    refusal === null && cycle.processFailure.eligible && allPreconditionsMet(preconditions);
-
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-8 px-5 py-10 sm:px-8 sm:py-14">
       <header className="flex flex-col gap-3 border-b border-zinc-800 pb-6">
@@ -206,7 +168,7 @@ export default async function PrepareFailureCorrectionPage({
             {task.code} · {run.code}
           </p>
           <h1 className="mt-1 text-xl font-semibold text-zinc-50">Correct failed run</h1>
-          {cycle.strandedRetry ? (
+          {eligibility.strandedRetry ? (
             <p className="mt-2 max-w-prose rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-200/90">
               {STRANDED_RETRY_NOTICE}
             </p>
@@ -275,14 +237,9 @@ export default async function PrepareFailureCorrectionPage({
               <PreconditionRow key={precondition.label} precondition={precondition} />
             ))}
           </ul>
-          {cycle.processFailure.eligible ? null : (
+          {history.ok ? null : (
             <p role="alert" className="mt-4 text-sm leading-relaxed text-amber-200">
-              {correctionRefusalMessage(cycle.processFailure.code)}
-            </p>
-          )}
-          {refusal === null ? null : (
-            <p role="alert" className="mt-4 text-sm leading-relaxed text-amber-200">
-              {resumeRefusalMessage(refusal)}
+              {history.message}
             </p>
           )}
           <p className="mt-4 text-xs leading-relaxed text-zinc-600">
@@ -290,7 +247,7 @@ export default async function PrepareFailureCorrectionPage({
             l&apos;inverse : il doit etre <strong>exactement</strong> celui que l&apos;execution a
             laisse. Un fichier modifie depuis, meme d&apos;un caractere, fait refuser la reprise.
           </p>
-          {context.workspaceEntries === null ? (
+          {eligibility.entriesUnavailable ? (
             <p className="mt-2 text-xs leading-relaxed text-zinc-600">
               {NO_ENTRY_DIAGNOSTICS_NOTICE}
             </p>

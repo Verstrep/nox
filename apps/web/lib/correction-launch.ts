@@ -69,6 +69,7 @@ import {
 import { randomUUID } from "node:crypto";
 
 import { loadCorrectionContext } from "./correction-cycle.ts";
+import { resumeCandidateFrom } from "./failure-correction.ts";
 import { correctionRefusalMessage, resumeRefusalMessage } from "./correction-display.ts";
 import { buildCorrectionContext } from "./correction-evidence.ts";
 import { buildCorrectionPrompt } from "./run-prompt.ts";
@@ -174,22 +175,17 @@ export async function launchCorrection(
   // contrat : une correction travaille forcement sur un dossier de travail sale,
   // et c'est ce controle-la — branche, `HEAD`, empreinte — qui distingue « le
   // travail qu'on vient de relire » de « quelque chose d'autre ».
-  const refusal = checkResumeCandidate({
-    runStatus: resume.status,
-    taskStatus: context.task.status,
-    errorCode: resume.errorCode,
-    claudeSessionId: resume.claudeSessionId,
-    hasReview: resume.hasReview,
-    hasFingerprint: resume.workspaceFingerprint !== null,
-    hasActiveRun: await hasActiveRun(db, input.taskId),
-    hasCorrection: resume.hasCorrection,
-    // Sert a distinguer un echec qui a laisse du travail d'un echec qui n'a
-    // rien produit. Sans lui, une panne de lancement paraitrait reprenable.
-    exitCode: resume.exitCode,
-    // Autorise le seul `READY` acceptable : celui d'un `Retry` qui n'a jamais
-    // demarre. La transaction d'ecriture le reverifiera elle-meme.
-    isLatestRun: await isLatestRunForTask(db, input.taskId, input.sourceRunId),
-  });
+  // Le meme assemblage que celui de la page de preparation, par la meme
+  // fonction. Les deux ont diverge une fois — sur `isLatestRun`, le champ qui
+  // reconnait un `Retry` avorte — et l'ecran proposait alors une reprise que le
+  // lancement aurait refusee, ou l'inverse.
+  const refusal = checkResumeCandidate(
+    resumeCandidateFrom(resume, {
+      taskStatus: context.task.status,
+      hasActiveRun: await hasActiveRun(db, input.taskId),
+      isLatestRun: await isLatestRunForTask(db, input.taskId, input.sourceRunId),
+    }),
+  );
   if (refusal !== null) {
     return await release(
       db,

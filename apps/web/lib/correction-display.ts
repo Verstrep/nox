@@ -81,15 +81,28 @@ export function resumeRefusalMessage(refusal: ResumeRefusal): string {
   return REFUSAL_MESSAGES[refusal];
 }
 
-/** Etat d'une precondition affichee sur la page de preparation. */
-export type PreconditionState = "met" | "unmet";
+/**
+ * Etat d'une precondition affichee sur la page de preparation.
+ *
+ * `unknown` n'est pas une nuance de `unmet` : c'est l'aveu que la question n'a
+ * **pas ete posee**. Le second pilote reel a lu « Git branch and HEAD unchanged
+ * — Blocked » sur un repository parfaitement intact, simplement parce qu'une
+ * precondition anterieure avait empeche la sonde. Afficher un refus la ou rien
+ * n'a ete verifie envoie chercher au mauvais endroit — exactement le defaut que
+ * HOTFIX-006 existe pour corriger, reintroduit par l'ecran.
+ */
+export type PreconditionState = "met" | "unmet" | "unknown";
 
 export type Precondition = {
   label: string;
   state: PreconditionState;
-  /** Precise ce qui manque, uniquement lorsque la precondition n'est pas tenue. */
+  /** Precise ce qui manque, ou pourquoi la question n'a pas ete posee. */
   detail: string | null;
 };
+
+/** Ce qu'une precondition non evaluee affiche a la place d'un refus. */
+export const NOT_EVALUATED_DETAIL =
+  "Non verifie : une precondition precedente a empeche la sonde du repository.";
 
 /**
  * Construit la liste des preconditions affichees avant un lancement.
@@ -115,11 +128,40 @@ export function buildPreconditions(input: {
    * une tache en echec ferait lire une precondition tenue comme une anomalie.
    */
   fromFailedRun?: boolean;
+  /**
+   * Libelle de la premiere ligne, quand ni « Review » ni « Failed » ne decrit
+   * l'etat reel.
+   *
+   * Le cas est unique : une tache `READY` qu'un `Retry` avorte y a laissee.
+   * Afficher « Task is in Failed » a cote d'une tache prete serait faux, et
+   * afficher « Blocked » sur une precondition **tenue** l'est encore plus.
+   */
+  taskStatusLabel?: string;
+  /**
+   * La sonde du repository a-t-elle reellement eu lieu ?
+   *
+   * Absente ou `false`, les trois preconditions qui en dependent passent a
+   * `unknown` plutot qu'a `unmet` : elles n'ont pas echoue, elles n'ont pas ete
+   * posees. La distinction change ou l'utilisateur va chercher.
+   */
+  repositoryProbed?: boolean;
 }): Precondition[] {
   const fromFailure = input.fromFailedRun === true;
+
+  // Les trois lignes ci-dessous parlent du repository, et n'ont de sens que si
+  // le runner a ete interroge. `repositoryProbed` est facultatif pour rester
+  // compatible avec les surfaces qui sondent toujours ; absent, il vaut « sonde »
+  // uniquement lorsqu'un resultat est effectivement passe.
+  const probed = input.repositoryProbed ?? true;
+  const probeState = (passed: boolean): PreconditionState =>
+    !probed ? "unknown" : passed ? "met" : "unmet";
+  const probeDetail = (passed: boolean, detail: string | null): string | null =>
+    !probed ? NOT_EVALUATED_DETAIL : passed ? null : detail;
+
   return [
     {
-      label: fromFailure ? "Task is in Failed" : "Task is in Review",
+      label:
+        input.taskStatusLabel ?? (fromFailure ? "Task is in Failed" : "Task is in Review"),
       state: input.taskInReview ? "met" : "unmet",
       detail: null,
     },
@@ -140,16 +182,54 @@ export function buildPreconditions(input: {
     },
     {
       label: "Git branch and HEAD unchanged",
-      state: input.gitUnchanged ? "met" : "unmet",
-      detail: null,
+      state: probeState(input.gitUnchanged),
+      detail: probeDetail(input.gitUnchanged, null),
     },
     {
       label: "Repository matches reviewed state",
-      state: input.workspaceMatches ? "met" : "unmet",
-      detail: input.workspaceMatches ? null : input.workspaceDetail,
+      state: probeState(input.workspaceMatches),
+      detail: probeDetail(input.workspaceMatches, input.workspaceDetail),
     },
-    { label: "Claude Code available", state: input.claudeAvailable ? "met" : "unmet", detail: null },
+    {
+      label: "Claude Code available",
+      state: probeState(input.claudeAvailable),
+      detail: probeDetail(input.claudeAvailable, null),
+    },
   ];
+}
+
+/**
+ * La marque affichee devant une precondition.
+ *
+ * Trois etats, trois signes. Rendre `unknown` avec la croix de `unmet` — ce que
+ * faisaient les trois pages — annonce un refus que NOX n'a pas constate.
+ */
+export function preconditionMark(state: PreconditionState): string {
+  switch (state) {
+    case "met":
+      return "✓";
+    case "unmet":
+      return "✗";
+    case "unknown":
+      return "•";
+  }
+}
+
+/**
+ * Le mot qui accompagne la marque, pour qui ne voit pas les couleurs.
+ *
+ * « Not checked » n'est pas une politesse : c'est la difference entre aller
+ * verifier son repository et aller lire la precondition qui a arrete la sonde.
+ */
+export function preconditionStatusLabel(state: PreconditionState): string {
+  switch (state) {
+    case "met":
+      return "OK";
+    case "unmet":
+      return "Blocked";
+    case "unknown":
+      return "Not checked";
+  }
 }
 
 /** Toutes les preconditions sont-elles tenues ? */

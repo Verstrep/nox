@@ -9,6 +9,8 @@ import { loadCorrectionContext } from "@/lib/correction-cycle";
 import {
   allPreconditionsMet,
   buildPreconditions,
+  preconditionMark,
+  preconditionStatusLabel,
   correctionRefusalMessage,
   resumeRefusalMessage,
   type Precondition,
@@ -25,13 +27,20 @@ import { loadTask } from "@/lib/tasks";
 import { StartEvidenceCorrectionForm } from "./StartEvidenceCorrectionForm";
 
 function PreconditionRow({ precondition }: { precondition: Precondition }) {
-  const met = precondition.state === "met";
+  // Trois etats, trois rendus. « Non verifie » se lit en gris : ce n'est ni une
+  // reussite, ni un refus — c'est une question qui n'a pas ete posee.
+  const tone =
+    precondition.state === "met"
+      ? "text-zinc-400"
+      : precondition.state === "unknown"
+        ? "text-zinc-500"
+        : "text-amber-200";
   return (
-    <li className={`flex flex-col gap-1 text-sm ${met ? "text-zinc-400" : "text-amber-200"}`}>
+    <li className={`flex flex-col gap-1 text-sm ${tone}`}>
       <span className="flex gap-2">
-        <span aria-hidden="true">{met ? "✓" : "✗"}</span>
+        <span aria-hidden="true">{preconditionMark(precondition.state)}</span>
         <span>{precondition.label}</span>
-        <span className="sr-only">{met ? " — OK" : " — Blocked"}</span>
+        <span className="sr-only">{` — ${preconditionStatusLabel(precondition.state)}`}</span>
       </span>
       {precondition.detail === null ? null : (
         <span className="pl-6 text-xs leading-relaxed text-amber-200/90">
@@ -139,6 +148,10 @@ export default async function PrepareEvidenceCorrectionPage({
     : null;
 
   const preconditions = buildPreconditions({
+    // Les trois lignes du repository n'ont de sens que si le runner a repondu.
+    // Sans cela, une precondition anterieure non tenue les afficherait « Blocked »
+    // sans que rien n'ait ete verifie.
+    repositoryProbed: preflight !== null,
     taskInReview: refusal !== "TASK_NOT_IN_REVIEW",
     runCompleted: refusal !== "RUN_NOT_COMPLETED",
     sessionAvailable: context.claudeSessionId !== null,

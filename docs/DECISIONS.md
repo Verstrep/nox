@@ -7027,3 +7027,61 @@ avorte ouvre une **porte**, pas une exception : ce qui la franchit subit tous le
 elle, existe et decide exactement comme ailleurs. Ce qui manque est la **localisation** d'une
 divergence, pas la garantie — et l'ecran le dit, plutot que de laisser croire que la reprise serait
 moins sure ici.
+
+
+### D-426 — Deux assemblages du meme candidat produisaient deux verdicts
+
+**Decision.** L'eligibilite d'une reprise apres echec est calculee a **un seul endroit**,
+`apps/web/lib/failure-correction.ts`, utilise par la page de preparation, par le bouton et par le
+lancement. Le candidat lui-meme est assemble par une unique fonction pure, `resumeCandidateFrom`.
+
+**Justification.** `ResumeCandidate` etait rempli a la main sur huit surfaces. Il suffisait d'en
+oublier un champ pour obtenir un verdict different du voisin — et c'est exactement ce qui est
+arrive a `isLatestRun`, le fait qui reconnait un `Retry` avorte : le lancement le passait, la page
+de preparation non.
+
+Le troisieme pilote reel a donc lu les deux moities de la contradiction sur le meme ecran :
+
+```text
+« un Retry l'y a menee, mais aucune execution n'a demarre »   ← le cycle reconnait
+« Task is in Failed — Blocked »                              ← la page refuse
+```
+
+Aucune des deux gardes n'etait fausse **prise seule**. C'est pour cela qu'aucun test unitaire ne
+l'avait vu : le defaut n'existait qu'a la jonction. Le test de regression exerce donc
+`evaluateFailureCorrection`, c'est-a-dire ce que la route appelle, et non des aides isolees.
+
+**La duplication est supprimee, pas arbitree.** Ajouter le champ manquant a la page aurait repare
+ce symptome-ci et laisse le suivant arriver. Un champ ajoute a `ResumeCandidate` n'a desormais
+qu'un seul endroit ou etre rempli.
+
+### D-427 — « Non verifie » n'est pas « bloque »
+
+**Decision.** `PreconditionState` compte trois valeurs : `met`, `unmet`, `unknown`. Les trois
+preconditions qui dependent du runner passent a `unknown` quand la sonde n'a pas eu lieu, avec la
+raison, et l'ecran les rend en gris avec la mention `Not checked`.
+
+**Justification.** La page n'interroge le runner que si l'historique autorise deja la reprise —
+economie legitime : il n'y a rien a lui demander. Mais les preconditions lisaient
+`preflight?.ok === true`, et un preflight **absent** rendait donc `false`, c'est-a-dire « Blocked ».
+
+Le pilote a lu ceci sur un repository parfaitement intact :
+
+```text
+✗ Git branch and HEAD unchanged   — Blocked
+✗ Repository matches reviewed state — Blocked
+✗ Claude Code available           — Blocked
+```
+
+Trois refus que NOX n'avait pas constates. La distinction n'est pas cosmetique : elle decide de
+l'endroit ou l'utilisateur va chercher. « Blocked » envoie inspecter Git ; « Not checked » renvoie
+a la precondition qui a arrete la sonde.
+
+C'est la meme regle que celle qui separe `ERROR` de `FAILED` dans la validation autonome depuis
+TASK-027 — « je n'ai pas pu regarder » n'est jamais « j'ai regarde et c'est faux » —, appliquee
+cette fois a l'ecran.
+
+**Le libelle du statut de tache suit le verdict.** Une tache `READY` laissee par un `Retry` avorte
+**tient** cette precondition : elle affiche « Legacy Retry left task Ready without starting a run —
+OK ». Lui laisser « Task is in Failed — Blocked » etait faux deux fois, sur son statut et sur son
+verdict.

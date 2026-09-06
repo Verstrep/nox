@@ -1532,10 +1532,28 @@ satisfait. Un refus n'écrit rien, et le dit : « aucune exécution n'a démarr�
 `Retry` qui n'a jamais démarré : exécution en échec, rien d'autre depuis, aucune correction déjà
 née. Rien n'est assoupli — branche, `HEAD` et empreinte restent vérifiés par le runner.
 
+### Une garde correcte, deux fois, et un écran qui se contredit
+
+Le pilote a ensuite ouvert la page de reprise, et y a lu les deux moitiés d'une contradiction :
+
+```text
+« un Retry l'y a menée, mais aucune exécution n'a démarré »   ← reconnu
+« Task is in Failed — Blocked »                              ← refusé
+« Git branch and HEAD unchanged — Blocked »                  ← jamais vérifié
+```
+
+`ResumeCandidate` était rempli à la main sur huit surfaces. Le cycle l'assemblait depuis la base —
+`isLatestRun` compris — et la page le réassemblait sans ce champ. Aucune des deux gardes n'était
+fausse prise seule : le défaut n'existait qu'à leur jonction, ce qui explique qu'aucun test unitaire
+ne l'ait vu.
+
+L'éligibilité vit désormais à **un seul endroit**, lu par l'écran, le bouton et le lancement. Et les
+préconditions ont trois états : une question qu'on n'a pas posée ne s'affiche plus comme un refus.
+
 ### Ce que le prochain pilote devrait regarder
 
 Que la reprise aboutisse réellement sur un dossier de travail sale, avec un vrai binaire. Tout le
 reste est vérifié par des tests déterministes ; celle-ci demande un processus réel.
 
 Voir [D-420](DECISIONS.md), [D-421](DECISIONS.md), [D-422](DECISIONS.md), [D-423](DECISIONS.md),
-[D-424](DECISIONS.md), [D-425](DECISIONS.md).
+[D-424](DECISIONS.md), [D-425](DECISIONS.md), [D-426](DECISIONS.md), [D-427](DECISIONS.md).

@@ -840,6 +840,24 @@ ciblée, qui s'ancre sur une tâche en échec.
   transaction qui écrit. Les corrections descendant de cette exécution ne comptent pas : sinon la
   question se répondrait toujours « non », le run de correction venant d'être créé.
 
+### 6.6 quinquies ter Une seule autorite sur l'eligibilite d'une reprise
+
+```text
+failure-correction.ts  →  l'ecran, le bouton et le lancement lisent le meme verdict
+resumeCandidateFrom    →  le candidat est assemble une seule fois
+```
+
+`ResumeCandidate` etait rempli a la main sur huit surfaces. Oublier `isLatestRun` sur l'une d'elles
+suffisait a produire deux verdicts opposes sur le meme etat — la page refusait ce que le lancement
+acceptait — et le troisieme pilote reel a lu les deux moities sur le meme ecran.
+
+- **L'historique et le disque sont deux questions**, evaluees dans cet ordre. Un historique qui
+  refuse n'entraine aucune sonde du runner.
+- **Les preconditions ont trois etats.** `unknown` dit qu'une question n'a pas ete posee ; l'afficher
+  comme un refus envoie chercher au mauvais endroit.
+- **Le verdict est rejoue au moment d'ecrire.** `startTaskCorrection` reverifie l'historique dans sa
+  transaction, et le runner recalcule branche, `HEAD` et empreinte avant le spawn.
+
 ### 6.6 sexies Diagnostic d'une terminaison
 
 ```text

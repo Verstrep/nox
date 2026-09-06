@@ -1439,3 +1439,20 @@ doit le dire explicitement et la justifier.
   globale decide ; seule la localisation d'un refus manque, et l'ecran le dit. Affaiblir l'egalite
   parce que le diagnostic est absent serait confondre « je ne peux pas nommer » et « je ne peux pas
   verifier ».
+- **L'eligibilite d'une reprise est calculee a un seul endroit.** `failure-correction.ts` sert
+  l'ecran, le bouton et le lancement ; le candidat lui-meme est assemble par une seule fonction
+  pure. `ResumeCandidate` etait rempli a la main sur huit surfaces, et il a suffi d'y oublier
+  `isLatestRun` pour qu'une page refuse ce que le lancement acceptait.
+- **Une garde correcte prise seule ne prouve rien.** Le defaut ne vivait a la jonction de deux
+  verdicts, et aucun test unitaire ne pouvait le voir. Les tests de cette surface exercent la
+  fonction que la route appelle, jamais des aides isolees.
+- **Une precondition non evaluee n'est pas une precondition refusee.** `unknown` existe a cote de
+  `met` et `unmet`, et l'ecran ecrit « Not checked » avec sa raison. « Blocked » envoie inspecter
+  Git ; « Not checked » renvoie a la precondition qui a arrete la sonde — c'est la meme regle que
+  `ERROR` contre `FAILED` dans la validation autonome, appliquee a l'affichage.
+- **Le runner n'est interroge que lorsqu'il y a quelque chose a lui demander.** Un historique qui
+  refuse deja n'entraine aucune sonde, et les lignes qui en dependent le disent au lieu d'afficher
+  un refus que personne n'a constate.
+- **Une precondition tenue ne s'affiche jamais comme un blocage.** Une tache `READY` laissee par un
+  `Retry` avorte porte son propre libelle — « Legacy Retry left task Ready without starting a
+  run » — parce que « Task is in Failed » y serait faux sur le statut **et** sur le verdict.
