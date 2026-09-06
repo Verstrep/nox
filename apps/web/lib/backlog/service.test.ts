@@ -1248,28 +1248,45 @@ describe("regression TripKit — un critere d'acceptation refuse", () => {
   }
 
   it("refuse un critere vide, et dit lequel", async () => {
+    // Le chemin nomme desormais le **critere**, pas seulement la tache : depuis
+    // la reprise de HOTFIX-005, `acceptanceCriteria.0` designe le premier.
+    // « Un critere de Tache 2 » laissait chercher lequel parmi huit.
     const { project, provider, generated } = await generateWith(tripkitPayload("   "));
 
     assert.equal(generated.ok, false);
     assert.ok("code" in generated && generated.code === ARCHITECT_ERROR.ARCHITECT_OUTPUT_INVALID);
     assert.ok("diagnostic" in generated && generated.diagnostic !== undefined);
     assert.equal(generated.diagnostic.category, ARCHITECT_BACKLOG_FAILURE.OUTPUT_INVALID);
-    assert.equal(generated.diagnostic.field, "tasks.0.acceptanceCriteria");
+    assert.equal(generated.diagnostic.field, "tasks.0.acceptanceCriteria.0");
     assert.ok(generated.diagnostic.message !== null);
     assert.match(generated.diagnostic.message, /Tache 1/u);
+    // Vide et trop long ne se disent plus pareil.
+    assert.match(generated.diagnostic.message, /vide/u);
+    assert.equal(generated.diagnostic.message.includes("too_long"), false);
 
     // Un seul appel, et aucune tache creee.
     assert.equal(provider.backlogCalls.length, 1);
     assert.equal((await listTasksByProject(db, project.id)).length, 0);
   });
 
-  it("refuse un critere trop long, et dit lequel", async () => {
-    const { generated } = await generateWith(
-      tripkitPayload("a".repeat(ARCHITECT_BACKLOG_LIMITS.criteria.length + 1)),
-    );
+  it("refuse un critere trop long, en disant de combien", async () => {
+    // Le defaut exact du pilote reel : un critere qui portait tout le contrat
+    // d'import. Le diagnostic donne la longueur observee et la borne, sans
+    // jamais recopier le texte refuse.
+    const length = ARCHITECT_BACKLOG_LIMITS.criteria.length + 1;
+    const { generated } = await generateWith(tripkitPayload("a".repeat(length)));
 
     assert.ok("diagnostic" in generated && generated.diagnostic !== undefined);
-    assert.equal(generated.diagnostic.field, "tasks.0.acceptanceCriteria");
+    assert.equal(generated.diagnostic.field, "tasks.0.acceptanceCriteria.0");
+    assert.ok(generated.diagnostic.message !== null);
+    assert.match(generated.diagnostic.message, /too_long/u);
+    assert.match(generated.diagnostic.message, new RegExp(String(length), "u"));
+    assert.match(
+      generated.diagnostic.message,
+      new RegExp(String(ARCHITECT_BACKLOG_LIMITS.criteria.length), "u"),
+    );
+    // Le texte refuse n'entre pas dans le diagnostic.
+    assert.equal(generated.diagnostic.message.includes("aaaa"), false);
   });
 
   it("enregistre la generation, son modele et sa cause", async () => {
@@ -1285,7 +1302,7 @@ describe("regression TripKit — un critere d'acceptation refuse", () => {
     assert.ok(generation !== undefined);
     assert.equal(generation.status, ARCHITECT_BACKLOG_GENERATION_STATUS.FAILED);
     assert.equal(generation.model, "gpt-5.6-sol");
-    assert.equal(generation.diagnostic?.field, "tasks.0.acceptanceCriteria");
+    assert.equal(generation.diagnostic?.field, "tasks.0.acceptanceCriteria.0");
     assert.ok(generation.diagnostic?.message !== null);
 
     // Aucune proposition applicable, et le verrou est rendu.

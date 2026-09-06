@@ -30,6 +30,11 @@
 
 import { checkValidationCommand } from "./claude-commands.js";
 import {
+  PROJECT_MEMORY_ACTIONS,
+  PROJECT_MEMORY_CATEGORIES,
+  PROJECT_MEMORY_LIMITS,
+} from "./project-memory.js";
+import {
   PROJECT_UPDATE_ACTIONS,
   readArchitectProjectUpdate,
   type ArchitectProjectUpdateProposal,
@@ -86,10 +91,72 @@ export const ARCHITECT_TURN_SCHEMA_VERSION_V3 = 3;
  */
 export const ARCHITECT_TURN_SCHEMA_VERSION_V4 = 4;
 
+/**
+ * Version du contrat de tour d'une conversation projet, depuis HOTFIX-005.
+ *
+ * Elle ajoute un champ, et un seul : `projectUpdate.memories`, par lequel un
+ * tour peut poser des regles durables dans la memoire du projet.
+ *
+ * ## Pourquoi une version, alors que HOTFIX-003 n'en avait pas bumpe
+ *
+ * Parce que le **schema** change cette fois. HOTFIX-003 n'avait touche qu'au
+ * texte des instructions, et seule l'etiquette de prompt avait bouge. Ici le
+ * fournisseur doit rendre un champ de plus : deux formes differentes sous une
+ * meme etiquette rendraient l'historique ambigu, ce que `schemaVersion` existe
+ * precisement pour empecher.
+ *
+ * Les generations enregistrees en version 3 le restent, et leurs propositions
+ * se relisent sans migration : l'absence de `memories` y vaut liste vide.
+ */
+export const ARCHITECT_TURN_SCHEMA_VERSION_V5 = 5;
+
+/**
+ * Version 5 avec la replanification, c'est-a-dire l'equivalent de la version 4.
+ *
+ * Le meme croisement qu'entre les versions 3 et 4 : `projectUpdate` pour les
+ * deux, `replan` pour celle-ci seule. Un projet sans backlog applique ne recoit
+ * toujours aucun champ `replan`, et se comporte exactement comme avant
+ * TASK-032.
+ */
+export const ARCHITECT_TURN_SCHEMA_VERSION_V6 = 6;
+
 export type ArchitectTurnSchemaVersion =
   | typeof ARCHITECT_TURN_SCHEMA_VERSION
   | typeof ARCHITECT_TURN_SCHEMA_VERSION_V3
-  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V4;
+  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V4
+  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V5
+  | typeof ARCHITECT_TURN_SCHEMA_VERSION_V6;
+
+/** Vrai pour les versions dont le tour porte une mise a jour de projet. */
+export function architectSchemaCarriesProjectUpdate(
+  version: ArchitectTurnSchemaVersion,
+): boolean {
+  return (
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V3 ||
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V4 ||
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V5 ||
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V6
+  );
+}
+
+/** Vrai pour les versions dont le tour porte une replanification. */
+export function architectSchemaCarriesReplan(version: ArchitectTurnSchemaVersion): boolean {
+  return (
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V4 || version === ARCHITECT_TURN_SCHEMA_VERSION_V6
+  );
+}
+
+/**
+ * Vrai pour les versions dont la mise a jour peut poser des regles durables.
+ *
+ * Les versions 3 et 4 ne le peuvent pas : leur schema ne portait pas le champ,
+ * et une proposition d'alors ne peut donc rien contenir a lire.
+ */
+export function architectSchemaCarriesMemories(version: ArchitectTurnSchemaVersion): boolean {
+  return (
+    version === ARCHITECT_TURN_SCHEMA_VERSION_V5 || version === ARCHITECT_TURN_SCHEMA_VERSION_V6
+  );
+}
 
 /**
  * Issue d'un tour de conversation.
@@ -387,7 +454,7 @@ export function architectTurnSchemaVersion(
   if (kind !== ARCHITECT_SESSION_KIND.PROJECT) {
     return ARCHITECT_TURN_SCHEMA_VERSION;
   }
-  return replanAvailable ? ARCHITECT_TURN_SCHEMA_VERSION_V4 : ARCHITECT_TURN_SCHEMA_VERSION_V3;
+  return replanAvailable ? ARCHITECT_TURN_SCHEMA_VERSION_V6 : ARCHITECT_TURN_SCHEMA_VERSION_V5;
 }
 
 /**
@@ -767,10 +834,7 @@ export function readArchitectTurn(
   // fournisseur qui en rendrait un malgre tout serait simplement ignore : une
   // session de conception de tache n'a jamais eu le droit d'en proposer.
   let projectUpdate: ArchitectProjectUpdateProposal | null = null;
-  if (
-    expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V3 ||
-    expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V4
-  ) {
+  if (architectSchemaCarriesProjectUpdate(expectedVersion)) {
     const rawUpdate: unknown = value["projectUpdate"];
     if (isRecord(rawUpdate)) {
       const readUpdate = readArchitectProjectUpdate(rawUpdate);
@@ -795,7 +859,7 @@ export function readArchitectTurn(
   // c'est meme la forme attendue depuis TASK-032, ou la conversation propose un
   // changement de plan plutot qu'une tache isolee.
   let replan: ArchitectReplan = { mode: REPLAN_MODE.UNCHANGED };
-  if (expectedVersion === ARCHITECT_TURN_SCHEMA_VERSION_V4) {
+  if (architectSchemaCarriesReplan(expectedVersion)) {
     const rawReplan: unknown = value["replan"];
     if (isRecord(rawReplan) && rawReplan["mode"] === REPLAN_MODE.PROPOSED) {
       if (replanSource === null) {
@@ -940,15 +1004,12 @@ export function buildArchitectTurnSchema(
 
   const required = ["schemaVersion", "state", "message", "questions", "proposal"];
 
-  if (
-    version === ARCHITECT_TURN_SCHEMA_VERSION_V3 ||
-    version === ARCHITECT_TURN_SCHEMA_VERSION_V4
-  ) {
-    properties["projectUpdate"] = projectUpdateSchema();
+  if (architectSchemaCarriesProjectUpdate(version)) {
+    properties["projectUpdate"] = projectUpdateSchema(architectSchemaCarriesMemories(version));
     required.push("projectUpdate");
   }
 
-  if (version === ARCHITECT_TURN_SCHEMA_VERSION_V4) {
+  if (architectSchemaCarriesReplan(version)) {
     properties["replan"] = buildReplanSchema();
     required.push("replan");
   }
@@ -991,7 +1052,69 @@ function projectUpdateSection(
   };
 }
 
-function projectUpdateSchema(): Record<string, unknown> {
+/**
+ * Schema d'une regle durable proposee.
+ *
+ * ## Les bornes ne sont pas ici
+ *
+ * Le mode strict ignore `maxLength` et `maxItems`, et les declarer ferait
+ * echouer la requete entiere. Elles vivent donc aux deux seuls endroits qui
+ * existent : les instructions du prompt les annoncent, et
+ * `checkProjectMemoryProposal` les fait respecter. C'est exactement la lecon de
+ * HOTFIX-003, et les deux se lisent depuis `PROJECT_MEMORY_LIMITS`.
+ */
+function proposedMemorySchema(): Record<string, unknown> {
+  return {
+    type: "array",
+    description:
+      "Regles produit durables et precises a poser dans la memoire du projet : contrats, formats, " +
+      "semantiques exactes. Ce qui n'a pas sa place dans le Living V1 Plan, qui decrit des capacites. " +
+      "C'est le SEUL moyen de proposer une entree de memoire : une reponse qui annonce des regles " +
+      "durables sans remplir ce tableau n'en propose aucune, et l'utilisateur n'aura rien a valider. " +
+      "A remplir meme lorsque brief et plan restent UNCHANGED. " +
+      `Au plus ${String(PROJECT_MEMORY_LIMITS.proposals)} entrees ; liste vide dans le cas ordinaire.`,
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action", "code", "category", "title", "content", "rationale"],
+      properties: {
+        action: {
+          type: "string",
+          enum: [...PROJECT_MEMORY_ACTIONS],
+          description:
+            "CREATE pose une entree nouvelle ; UPDATE remplace entierement une entree existante.",
+        },
+        code: {
+          type: ["string", "null"],
+          description:
+            "Code de l'entree visee pour UPDATE, par exemple MEM-004. null pour CREATE.",
+        },
+        category: {
+          type: "string",
+          enum: [...PROJECT_MEMORY_CATEGORIES],
+          description:
+            "DECISION pour un choix tranche, CONSTRAINT pour une limite imposee, CONVENTION pour une regle de conception, KNOWLEDGE pour un fait durable.",
+        },
+        title: {
+          type: "string",
+          description: `Une ligne, au plus ${String(PROJECT_MEMORY_LIMITS.title)} caracteres.`,
+        },
+        content: {
+          type: "string",
+          description:
+            "La regle exacte, ecrite pour etre appliquee sans la conversation qui l'a produite. " +
+            `Au plus ${String(PROJECT_MEMORY_LIMITS.content)} caracteres.`,
+        },
+        rationale: {
+          type: ["string", "null"],
+          description: `Pourquoi cette regle existe. Facultatif, au plus ${String(PROJECT_MEMORY_LIMITS.rationale)} caracteres.`,
+        },
+      },
+    },
+  };
+}
+
+function projectUpdateSchema(withMemories: boolean): Record<string, unknown> {
   const brief = {
     summary: { type: "string", description: "Le projet en quelques phrases." },
     problem: { type: "string", description: "Le probleme resolu." },
@@ -1011,10 +1134,13 @@ function projectUpdateSchema(): Record<string, unknown> {
 
   return {
     type: ["object", "null"],
-    description:
-      "Mise a jour proposee du Project Brief et du Living V1 Plan. null lorsque ce tour n'etablit rien de durable. Independante de state et de proposal.",
+    description: withMemories
+      ? "Ce que ce tour etablit de durable : Project Brief, Living V1 Plan et regles durables de la memoire du projet. " +
+        "Les trois sont independants — une mise a jour qui ne porte QUE des entrees memories, avec brief et plan UNCHANGED, est valide et attendue. " +
+        "null uniquement lorsque ce tour n'etablit aucun des trois. Independante de state et de proposal."
+      : "Mise a jour proposee du Project Brief et du Living V1 Plan. null lorsque ce tour n'etablit rien de durable. Independante de state et de proposal.",
     additionalProperties: false,
-    required: ["reason", "brief", "plan"],
+    required: withMemories ? ["reason", "brief", "plan", "memories"] : ["reason", "brief", "plan"],
     properties: {
       reason: {
         type: "string",
@@ -1022,6 +1148,7 @@ function projectUpdateSchema(): Record<string, unknown> {
       },
       brief: projectUpdateSection("le Project Brief", brief),
       plan: projectUpdateSection("le Living V1 Plan", plan),
+      ...(withMemories ? { memories: proposedMemorySchema() } : {}),
     },
   };
 }

@@ -121,6 +121,32 @@ export function projectMemoryRevision(memory: ArchitectPromptMemory): string {
 }
 
 /**
+ * Revision de **l'ensemble** de la memoire active transmise.
+ *
+ * Les revisions individuelles viennent de `projectMemoryRevision` juste
+ * au-dessus : la memoire n'a qu'une facon d'etre hachee, et un second calcul
+ * finirait par decrire un autre texte que celui qui part reellement.
+ *
+ * ## A quoi elle sert
+ *
+ * A repondre « la memoire a-t-elle change depuis ? » en une seule comparaison.
+ * Depuis HOTFIX-005, une proposition de mise a jour peut poser des regles
+ * durables, et doit etre refusee si l'utilisateur a reecrit la memoire
+ * entre-temps — exactement comme elle l'est quand il a reecrit le plan.
+ *
+ * L'ordre compte : les entrees partent dans l'ordre de leurs codes, et deux
+ * memoires identiques dans un ordre different ne sont pas le meme contexte.
+ */
+export function projectMemorySetRevision(
+  memories: readonly ArchitectPromptMemory[],
+): string {
+  const hash = createHash("sha256");
+  field(hash, "memory-set/1");
+  fieldList(hash, memories.map((memory) => memory.revision));
+  return hash.digest("hex");
+}
+
+/**
  * Revision du brief produit, calculee sur le texte reellement envoye.
  *
  * ## Pourquoi le texte sanitise

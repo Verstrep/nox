@@ -38,6 +38,7 @@ import {
   isProjectMemoryStatus,
   projectMemoryChars,
   type ProjectMemoryEntry,
+  type ProjectMemoryProposal,
   type ProjectMemoryStatus,
   type ProjectMemoryValues,
 } from "@nox/shared";
@@ -415,4 +416,124 @@ export async function deleteProjectMemory(
 ): Promise<boolean> {
   const deleted = await db.projectMemoryEntry.deleteMany({ where: { id: memoryId } });
   return deleted.count === 1;
+}
+
+// --- Ecriture d'une regle durable appliquee ---------------------------------
+
+/** Surface minimale pour ecrire une entree dans une transaction en cours. */
+export type MemoryWriteClient = Pick<DatabaseClient, "project" | "projectMemoryEntry">;
+
+/**
+ * Ce qu'une ecriture proposee rend a l'appelant.
+ *
+ * L'echec porte directement le refus a remonter : l'application d'une mise a
+ * jour de projet doit pouvoir l'abandonner sans traduire un vocabulaire dans un
+ * autre, et sans inventer une raison qui n'existe pas.
+ */
+export type ProposedMemoryWrite =
+  | { ok: true; entry: ProjectMemoryEntry }
+  | {
+      ok: false;
+      failure: { ok: false; reason: "invalid"; field: string };
+    };
+
+/**
+ * Ecrit une regle durable **dans la transaction de son appelant**.
+ *
+ * ## Pourquoi cette fonction existe a cote de `createProjectMemory`
+ *
+ * Parce que celle-ci ouvre sa propre transaction. Une entree posee par
+ * l'application d'une mise a jour du projet doit vivre dans **la meme** que le
+ * brief et le plan : un plan qui annonce un import controle et une memoire qui
+ * ne dit pas ce que « controle » veut dire serait exactement le trou que
+ * HOTFIX-005 comble.
+ *
+ * Les regles, elles, sont identiques : meme compteur atomique, meme plafond
+ * d'entrees, meme budget mesure sur le texte sanitise. Une seconde politique
+ * « pour les entrees proposees » finirait par accepter ce que l'autre refuse.
+ *
+ * ## Une entree proposee nait toujours `ACTIVE`
+ *
+ * Sinon elle serait capturee et inutile : seules les entrees actives atteignent
+ * l'Architecte et la planification, et c'est precisement pour y arriver qu'elle
+ * a ete posee.
+ */
+export async function writeProposedMemory(
+  tx: MemoryWriteClient,
+  input: {
+    projectId: string;
+    proposal: ProjectMemoryProposal;
+    /** Entree visee par un `UPDATE`, deja relue par l'appelant. `null` pour un `CREATE`. */
+    targetId: string | null;
+    sanitize: MemorySanitizer;
+  },
+): Promise<ProposedMemoryWrite> {
+  const values: ProjectMemoryValues = {
+    category: input.proposal.category,
+    title: input.proposal.title,
+    content: input.proposal.content,
+    rationale: input.proposal.rationale,
+    status: PROJECT_MEMORY_STATUS.ACTIVE,
+  };
+
+  // Le budget se mesure sur l'etat **resultant** : l'ancienne version d'une
+  // entree modifiee ne compte pas en plus de la nouvelle.
+  const used = await activeCharsExcept(tx, input.projectId, input.targetId, input.sanitize);
+  const required = sanitizedMemoryChars(values, input.sanitize);
+  if (used + required > PROJECT_MEMORY_LIMITS.activeChars) {
+    // Aucune troncature, aucune entree ecartee : l'application entiere est
+    // abandonnee, et c'est l'utilisateur qui decide quoi archiver.
+    return { ok: false, failure: { ok: false, reason: "invalid", field: "memories.budget" } };
+  }
+
+  if (input.targetId !== null) {
+    const row = await tx.projectMemoryEntry.update({
+      where: { id: input.targetId },
+      data: {
+        category: values.category,
+        title: values.title,
+        content: values.content,
+        rationale: values.rationale,
+        // Le statut n'est pas touche : une entree archivee que l'utilisateur
+        // reecrit reste archivee, et la reactiver serait une decision qu'il n'a
+        // pas prise.
+      },
+    });
+    return { ok: true, entry: toEntry(row) };
+  }
+
+  const project = await tx.project.findUnique({
+    where: { id: input.projectId },
+    select: { nextMemorySequence: true },
+  });
+  if (project === null) {
+    return { ok: false, failure: { ok: false, reason: "invalid", field: "memories.project" } };
+  }
+
+  const count = await tx.projectMemoryEntry.count({ where: { projectId: input.projectId } });
+  if (count >= PROJECT_MEMORY_LIMITS.entries) {
+    return { ok: false, failure: { ok: false, reason: "invalid", field: "memories.entries" } };
+  }
+
+  const claimed = await tx.project.updateMany({
+    where: { id: input.projectId, nextMemorySequence: project.nextMemorySequence },
+    data: { nextMemorySequence: { increment: 1 } },
+  });
+  if (claimed.count !== 1) {
+    return { ok: false, failure: { ok: false, reason: "invalid", field: "memories.sequence" } };
+  }
+
+  const row = await tx.projectMemoryEntry.create({
+    data: {
+      projectId: input.projectId,
+      sequence: project.nextMemorySequence,
+      category: values.category,
+      title: values.title,
+      content: values.content,
+      rationale: values.rationale,
+      status: values.status,
+    },
+  });
+
+  return { ok: true, entry: toEntry(row) };
 }

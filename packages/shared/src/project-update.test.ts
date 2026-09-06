@@ -21,6 +21,7 @@ import { describe, it } from "node:test";
 import {
   ARCHITECT_TURN_SCHEMA_VERSION,
   ARCHITECT_TURN_SCHEMA_VERSION_V3,
+  ARCHITECT_TURN_SCHEMA_VERSION_V5,
   ARCHITECT_SESSION_KIND,
   PROJECT_PLAN_LIMITS,
   PROJECT_UPDATE_ACTION,
@@ -97,11 +98,33 @@ function turn(overrides: Record<string, unknown> = {}): Record<string, unknown> 
 }
 
 describe("version de contrat selon le role de la session", () => {
-  it("une conversation projet parle la version 3", () => {
+  it("une conversation projet parle la version 5", () => {
+    // Version 3 jusqu'a HOTFIX-005. Le schema porte desormais un champ de plus,
+    // `projectUpdate.memories`, par lequel un tour pose des regles durables en
+    // memoire du projet — c'est le manque que le second pilote reel a paye.
+    //
+    // Une etiquette nouvelle parce que la **forme** change, la ou HOTFIX-003
+    // n'avait bumpe que la version de prompt : deux formes differentes sous un
+    // meme numero rendraient l'historique ambigu.
     assert.equal(
       architectTurnSchemaVersion(ARCHITECT_SESSION_KIND.PROJECT),
+      ARCHITECT_TURN_SCHEMA_VERSION_V5,
+    );
+  });
+
+  it("les generations enregistrees en version 3 restent lisibles", () => {
+    // Aucune migration : une proposition d'alors ne porte pas de regles
+    // durables, et son absence vaut liste vide.
+    const read = readArchitectTurn(
+      turn({ projectUpdate: update({ brief: BRIEF }) }),
+      [],
       ARCHITECT_TURN_SCHEMA_VERSION_V3,
     );
+
+    assert.equal(read.ok, true);
+    if (read.ok) {
+      assert.deepEqual(read.turn.projectUpdate?.memories, []);
+    }
   });
 
   it("une session de conception de tache reste en version 2", () => {

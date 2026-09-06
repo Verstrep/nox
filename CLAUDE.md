@@ -104,7 +104,20 @@ Pour comprendre le produit avant de coder : [docs/PROJECT_BRIEF.md](docs/PROJECT
 
 Commandes racine : `npm run dev:web` · `npm run dev:runner` · `npm run runner:health` ·
 `npm run test` · `npm run lint` · `npm run typecheck` · `npm run build` ·
-`npm run db:generate` · `npm run db:migrate` · `npm run db:studio`.
+`npm run db:generate` · `npm run db:migrate` · `npm run db:deploy` · `npm run db:studio`.
+
+**Appliquer des migrations est un geste manuel.** Ni `npm run dev:web`, ni `npm run build`, ni le
+démarrage du serveur n'écrivent dans le schéma de la base : un serveur de développement qui
+modifierait la base en silence rendrait impossible de dire quand elle a changé. Après avoir
+récupéré des migrations écrites ailleurs, `npm run db:deploy` les applique à la base existante
+**sans rien supprimer** ; `npm run db:migrate` sert à en créer une nouvelle pendant le
+développement. Une colonne manquante se manifeste sinon par une erreur Prisma au premier accès.
+
+La configuration du CLI Prisma vit dans
+[packages/database/prisma.config.ts](packages/database/prisma.config.ts), et c'est **elle** qui
+calcule l'URL de la base. Prisma 7 la découvre depuis le répertoire courant : une commande
+`npx prisma …` lancée depuis la racine, même avec `--schema`, ne la charge pas et échoue sur
+`datasource.url is required`. Passer par les scripts npm, qui s'exécutent dans le workspace.
 
 Le web et le runner sont **deux processus séparés** : ils se lancent dans deux terminaux et
 partagent le `.env` de la racine, dont `NOX_RUNNER_TOKEN`. L'Architecte ne concerne que le web :
@@ -509,10 +522,16 @@ doit le dire explicitement et la justifier.
 
 ### 8.10 Mémoire projet
 
-- **Elle est contrôlée par l'utilisateur, et par lui seul.** Aucune entrée n'est créée, modifiée
-  ou archivée automatiquement : ni depuis une conversation, ni depuis une proposition, ni depuis
-  une review, ni depuis un compte rendu de Claude Code. Le Structured Output d'un tour ne porte ni
-  `memoriesToCreate`, ni `memoriesToUpdate`.
+- **Aucune entrée n'est jamais écrite sans un geste humain.** Ni depuis une review, ni depuis un
+  compte rendu de Claude Code, ni depuis une planification de backlog, ni au fil d'une
+  conversation. Une entrée n'apparaît qu'après un `Apply` explicite.
+- **Une conversation peut en *proposer*, depuis HOTFIX-005, et proposer n'est pas écrire.**
+  `projectUpdate.memories` porte au plus huit entrées, revues et appliquées par le même geste
+  humain que le brief et le plan, dans la même transaction. C'était la pièce manquante : la
+  mémoire était déjà la bonne autorité, déjà bornée et déjà transmise à la planification, et aucun
+  chemin de code n'y menait depuis une conversation. Voir § 8.26.
+- **Aucune proposition ne supprime une entrée.** `CREATE` et `UPDATE`, et rien d'autre : une règle
+  qui cesse de s'appliquer s'archive, et l'archivage reste un geste humain.
 - **Aucune opération de mémoire n'appelle OpenAI, Claude Code ou le runner.** Ce sont des
   écritures SQLite ; un test le vérifie sur la source des modules.
 - **La mémoire vit dans SQLite, jamais dans le repository.** Aucune écriture Git, aucun fichier
@@ -1275,3 +1294,67 @@ doit le dire explicitement et la justifier.
   bouton mort.
 - **Le prochain reglage du plafond viendra de durees observees.** Pas d'un second pari : c'est pour
   cela que la mesure a ete ajoutee en meme temps que la valeur a ete deplacee.
+
+### 8.26 Continuite d'une specification produit
+
+- **Quatre autorites durables, quatre roles.** Le **Project Brief** dit pourquoi et pour qui. Le
+  **Living V1 Plan** dit quelles capacites la V1 apporte. La **memoire du projet** porte les regles
+  produit **exactes** — formats, intitules, comportements ligne a ligne, semantiques de mise a
+  jour. La **documentation du repository** decrit ce qui est reellement implemente. Les confondre
+  est l'erreur que ce paragraphe existe pour empecher, et l'omettre la troisieme est celle que le
+  second pilote reel a payee.
+- **Le detail produit ne monte pas dans le plan.** Une specification recopiee dans le Living V1
+  Plan le fait grossir a chaque decision jusqu'a franchir ses bornes, et la borne de vingt entrees
+  ne bouge pas pour l'accueillir. Le contrat d'import de TicketPulse — dix-neuf regles — aurait
+  fait deborder un plan qui en portait deja quatre.
+- **Ce qui n'est ecrit nulle part disparait.** Les tours anciens sortent de la fenetre transmise,
+  et la planification ne recoit **aucun transcript**. Une regle tranchee en conversation et jamais
+  posee en memoire n'existe donc plus au moment ou une tache est ecrite — quelle que soit la
+  clarte avec laquelle elle a ete decidee.
+- **Un tour peut proposer une regle durable ; il ne l'ecrit jamais.** Aucune entree n'entre en
+  memoire sans un `Apply` humain explicite. Proposer et ecrire restent deux gestes, et c'est la
+  garantie que l'invariant « aucune creation automatique » protegeait depuis TASK-018.
+- **Une mise a jour du projet est une seule decision.** Brief, plan et regles durables issus du
+  meme tour s'appliquent ensemble ou pas du tout, dans une transaction. Un plan qui annoncerait un
+  « import controle » sans que la memoire dise ce que « controle » veut dire serait le trou que ce
+  correctif comble.
+- **Une regle durable se remplace, elle ne se duplique pas.** `UPDATE` vise une entree existante par
+  son code et rend son contenu complet. Deux entrees sur un meme sujet laisseraient deux regles
+  contradictoires, et la planification recevrait les deux sans savoir laquelle s'applique.
+- **Aucune proposition ne supprime une regle.** Une regle qui cesse de s'appliquer s'archive, et
+  l'archivage reste un geste humain.
+- **La peremption couvre trois axes.** Brief, plan **et** memoire. Une proposition batie sur une
+  memoire depuis reecrite est refusee, jamais fusionnee : deux redactions d'une meme regle
+  produiraient un contrat que personne n'a valide.
+- **Une tache generee porte les regles exactes dont elle a besoin.** Jamais un renvoi — « conforme
+  au contrat V1 » decrit une exigence que l'implementeur ne peut pas lire, puisqu'il ne recoit ni
+  le brief, ni le plan, ni la memoire. Et jamais un resume : « les doublons ne creent pas deux
+  incidents » autorise a en garder un la ou la decision rejetait toutes les occurrences.
+- **La pertinence est declaree, jamais devinee.** Les entrees `ACTIVE` partent toutes, les
+  `ARCHIVED` ne partent pas, et il n'existe pas de troisieme etat. Aucune selection par mots-cles,
+  aucune similarite : une facon silencieuse de retirer une regle d'un contexte serait le bug de
+  HOTFIX-005 reintroduit par l'autre bout. C'est le fournisseur, qui voit la memoire et les taches,
+  qui decide quelle regle recopier dans quelle tache.
+- **Une regle durable ne se propose que par `projectUpdate.memories`.** Il n'existe aucun autre
+  canal, et une reponse qui annonce des regles sans remplir ce tableau n'en propose aucune :
+  l'utilisateur cherchera une carte a valider et n'en trouvera pas. Une mise a jour qui ne porte
+  **que** des regles — brief et plan `UNCHANGED` — est valide et attendue ; c'est le cas central
+  quand le plan decrit deja la capacite et que l'utilisateur en fige le contrat precis. Le champ se
+  decrivait lui-meme comme portant « le Project Brief et le Living V1 Plan » : le premier pilote a
+  donc recu une reponse qui annoncait six entrees et n'en emettait aucune.
+- **Un critere d'acceptation prouve un comportement, il ne porte pas une specification.** Chacun
+  est borne, et la borne est annoncee au fournisseur comme toutes les autres depuis HOTFIX-003 :
+  une borne connue du seul validateur produit un refus deterministe que le modele ne peut pas
+  eviter. Plusieurs regles durables sur une meme tache se repartissent sur plusieurs criteres ; le
+  contexte et l'objectif portent ce qui leur est commun. Le decoupage repartit les regles, il ne
+  les affaiblit jamais.
+- **Un refus nomme ce qu'il refuse.** Le critere fautif est designe par son index, sa cause est
+  distinguee — vide, absent, trop long — et sa longueur est donnee avec la borne. Le texte refuse,
+  lui, n'entre dans aucun diagnostic.
+- **Rien ne se deduit du texte du modele.** NOX ne cherche aucune intention dans une phrase, et une
+  entree de memoire ne peut naitre que du tableau structure. Une detection en langue naturelle
+  transformerait une formulation malheureuse en ecriture durable.
+- **Une regle durable est bornee comme toute entree de memoire.** Huit entrees proposables par
+  tour, quatre Kio par contenu, quarante-huit Kio actifs. Les bornes sont annoncees au fournisseur
+  **et** appliquees par le validateur, depuis la meme constante ; un depassement refuse la mise a
+  jour entiere, et rien n'est tronque.

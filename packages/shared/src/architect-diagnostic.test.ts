@@ -11,6 +11,7 @@ import {
   ARCHITECT_TURN_FAILURE,
   ARCHITECT_TURN_FAILURE_CATEGORIES,
   ARCHITECT_TURN_SCHEMA_VERSION_V3,
+  ARCHITECT_TURN_SCHEMA_VERSION_V5,
   ARCHITECT_TURN_STATE,
   ARCHITECT_PROMPT_VERSION,
   ARCHITECT_PROMPT_VERSION_V4,
@@ -18,6 +19,10 @@ import {
   ARCHITECT_PROMPT_VERSION_V6,
   ARCHITECT_PROMPT_VERSION_V7,
   ARCHITECT_PROMPT_VERSION_V8,
+  ARCHITECT_PROMPT_VERSION_V9,
+  ARCHITECT_PROMPT_VERSION_V11,
+  ARCHITECT_PROMPT_VERSION_V12,
+  ARCHITECT_PROMPT_VERSION_V10,
   ARCHITECT_SESSION_KIND,
   PROJECT_PLAN_LIMITS,
   PROJECT_UPDATE_ACTION,
@@ -529,7 +534,11 @@ describe("HOTFIX-003 — les instructions annoncent les bornes", () => {
     const instructions = projectInstructions();
 
     assert.match(instructions, /Le plan n'est pas une specification/u);
-    assert.match(instructions, /appartient aux \*\*taches\*\*/u);
+    // HOTFIX-005 corrige la destination : le detail allait « aux taches et a la
+    // documentation du repository », qui n'existaient ni l'un ni l'autre au
+    // moment ou une regle est tranchee en conversation. Il va desormais a la
+    // memoire du projet, qui est durable et deja transmise a la planification.
+    assert.match(instructions, /appartient a la \*\*memoire du projet\*\*/u);
     assert.match(instructions, /minimale/u);
   });
 
@@ -540,26 +549,31 @@ describe("HOTFIX-003 — les instructions annoncent les bornes", () => {
 });
 
 describe("HOTFIX-003 — la version de prompt suit le changement d'instructions", () => {
-  it("une conversation projet sans replanification passe en architect/7", () => {
+  it("une conversation projet sans replanification passe en architect/11", () => {
+    // `architect/7` a la sortie de HOTFIX-003, `architect/9` depuis
+    // HOTFIX-005 : les instructions de bornes que ce fichier verifie sont
+    // intactes, et la destination du detail produit a change.
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, false),
-      ARCHITECT_PROMPT_VERSION_V7,
+      ARCHITECT_PROMPT_VERSION_V11,
     );
   });
 
-  it("une conversation projet replanifiable passe en architect/8", () => {
+  it("une conversation projet replanifiable passe en architect/12", () => {
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, true),
-      ARCHITECT_PROMPT_VERSION_V8,
+      ARCHITECT_PROMPT_VERSION_V12,
     );
   });
 
-  it("le schema, lui, ne bouge pas", () => {
-    // La compatibilite `architect/4` tient ici : le contrat lu est le meme, et
-    // seules les instructions ont change.
+  it("le schema bouge aussi, et le dit", () => {
+    // Il ne bougeait pas en HOTFIX-003 — seules les instructions avaient change.
+    // HOTFIX-005 ajoute un champ au contrat, `projectUpdate.memories`, donc une
+    // etiquette de schema nouvelle. Les generations enregistrees en version 3
+    // restent lisibles : l'absence du champ y vaut liste vide.
     assert.equal(
       architectTurnSchemaVersion(ARCHITECT_SESSION_KIND.PROJECT, false),
-      ARCHITECT_TURN_SCHEMA_VERSION_V3,
+      ARCHITECT_TURN_SCHEMA_VERSION_V5,
     );
   });
 
@@ -571,8 +585,15 @@ describe("HOTFIX-003 — la version de prompt suit le changement d'instructions"
       ARCHITECT_PROMPT_VERSION_V6,
       ARCHITECT_PROMPT_VERSION_V7,
       ARCHITECT_PROMPT_VERSION_V8,
+      ARCHITECT_PROMPT_VERSION_V9,
+      ARCHITECT_PROMPT_VERSION_V10,
+      ARCHITECT_PROMPT_VERSION_V11,
+      ARCHITECT_PROMPT_VERSION_V12,
     ]);
 
-    assert.equal(versions.size, 6, "aucune etiquette n'est reutilisee");
+    // Huit etiquettes depuis HOTFIX-005. Aucune n'est reutilisee : une
+    // generation doit toujours pouvoir dire quelles consignes elle a recues, et
+    // recycler un numero effacerait cette reponse.
+    assert.equal(versions.size, 10, "aucune etiquette n'est reutilisee");
   });
 });

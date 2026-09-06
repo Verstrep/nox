@@ -110,6 +110,16 @@ export const PROJECT_MEMORY_LIMITS = {
   activeChars: 48 * 1024,
   /** Nombre d'entrees par projet, actives et archivees confondues. */
   entries: 100,
+  /**
+   * Entrees qu'un seul tour d'Architecte peut proposer.
+   *
+   * Huit, et non « autant qu'il veut » : un tour etablit quelques regles
+   * durables, pas un manuel. La borne est annoncee au fournisseur et appliquee
+   * par le validateur, comme toutes les bornes de NOX depuis HOTFIX-003 — le
+   * mode strict ignore `maxItems`, donc une borne connue d'un seul des deux
+   * produirait un refus deterministe que le modele ne peut pas eviter.
+   */
+  proposals: 8,
 } as const;
 
 /** Prefixe du code affiche d'une entree de memoire. */
@@ -320,4 +330,157 @@ export function projectMemoryChars(memory: {
   rationale: string | null;
 }): number {
   return memory.title.length + memory.content.length + (memory.rationale?.length ?? 0);
+}
+
+// --- Memoire proposee par l'Architecte ---------------------------------------
+
+/**
+ * Ce qu'une proposition demande pour une entree de memoire.
+ *
+ * Deux actions, declarees plutot que deduites — exactement comme les sections
+ * du Project Update. Une entree qui « existe peut-etre deja » obligerait le
+ * serveur a deviner une intention, et deux lectures raisonnables suffiraient a
+ * rendre l'application impossible a verifier.
+ *
+ * Il n'existe **pas** d'action de suppression. Une regle qui cesse de
+ * s'appliquer s'archive, et l'archivage est un geste humain : c'est deja la
+ * regle de la memoire, et une proposition ne doit pas pouvoir faire disparaitre
+ * un contrat etabli.
+ */
+export const PROJECT_MEMORY_ACTION = {
+  /** Une entree nouvelle. `code` vaut alors `null`. */
+  CREATE: "CREATE",
+  /** Une entree existante, remplacee entierement. `code` la designe. */
+  UPDATE: "UPDATE",
+} as const;
+
+export type ProjectMemoryAction =
+  (typeof PROJECT_MEMORY_ACTION)[keyof typeof PROJECT_MEMORY_ACTION];
+
+export const PROJECT_MEMORY_ACTIONS: readonly ProjectMemoryAction[] =
+  Object.values(PROJECT_MEMORY_ACTION);
+
+export function isProjectMemoryAction(value: unknown): value is ProjectMemoryAction {
+  return (
+    typeof value === "string" && PROJECT_MEMORY_ACTIONS.includes(value as ProjectMemoryAction)
+  );
+}
+
+/**
+ * Une entree de memoire proposee par l'Architecte.
+ *
+ * ## Pourquoi ce type existe
+ *
+ * Le second pilote reel a etabli, en conversation, un contrat d'import Excel
+ * complet — colonnes requises, lignes ignorees, normalisation, semantique des
+ * doublons. `architect/7` a eu raison de ne pas recopier ce detail dans le
+ * Living V1 Plan : ce n'est pas une capacite de V1, c'est une specification.
+ *
+ * Mais il n'existait alors **aucun endroit** ou le poser. La memoire du projet
+ * etait la bonne autorite — elle est durable, bornee, et deja transmise a la
+ * planification — et rien ne menait de la conversation jusqu'a elle. Le contrat
+ * est donc reste dans le fil, hors de portee du planificateur, qui a signale
+ * lui-meme qu'il lui manquait.
+ *
+ * ## Ce que ce type ne change pas
+ *
+ * **Rien n'est ecrit sans un geste humain.** Une proposition se relit et
+ * s'applique explicitement, comme une mise a jour du brief ou du plan, et dans
+ * la meme transaction. La regle « aucune entree de memoire n'est creee
+ * automatiquement » reste entiere : proposer n'est pas ecrire.
+ */
+export type ProjectMemoryProposal = {
+  action: ProjectMemoryAction;
+  /** Code d'une entree existante pour `UPDATE`, `null` pour `CREATE`. */
+  code: string | null;
+  category: ProjectMemoryCategory;
+  title: string;
+  content: string;
+  rationale: string | null;
+};
+
+/** Champ refuse d'une entree proposee, et pourquoi. */
+export type ProjectMemoryProposalRefusal = {
+  /** Index dans la liste proposee, pour nommer l'entree fautive. */
+  index: number;
+  field: "action" | "code" | ProjectMemoryRefusal["field"];
+  reason: ProjectMemoryRefusal["reason"] | "invalid";
+};
+
+export type ProjectMemoryProposalCheck =
+  | { ok: true; values: ProjectMemoryProposal }
+  | { ok: false; refusal: Omit<ProjectMemoryProposalRefusal, "index"> };
+
+/**
+ * Un code de memoire tel qu'il peut etre propose : `MEM-004`.
+ *
+ * Le format est verifie ici, l'**existence** a l'application : deux questions
+ * distinctes, et la seconde depend de la base.
+ */
+export function isProjectMemoryCode(value: string): boolean {
+  if (!value.startsWith(MEMORY_CODE_PREFIX)) {
+    return false;
+  }
+  const digits = value.slice(MEMORY_CODE_PREFIX.length);
+  return digits.length >= 3 && /^[0-9]+$/u.test(digits) && Number(digits) >= 1;
+}
+
+/**
+ * Valide une entree de memoire proposee.
+ *
+ * Reutilise `checkProjectMemoryInput` — meme bornes, memes refus, meme
+ * normalisation. Une seconde validation « pour les propositions » finirait par
+ * accepter ce que l'autre refuse, et c'est exactement l'ecart qui se decouvre
+ * le jour ou une entree impossible a ecrire a deja ete proposee.
+ *
+ * Le statut n'est pas propose : une entree issue d'une proposition nait
+ * `ACTIVE`, sans quoi elle serait ecrite sans jamais atteindre l'Architecte —
+ * c'est-a-dire capturee et inutile.
+ */
+export function checkProjectMemoryProposal(value: unknown): ProjectMemoryProposalCheck {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, refusal: { field: "action", reason: "invalid" } };
+  }
+  const record = value as Record<string, unknown>;
+
+  const action: unknown = record["action"];
+  if (!isProjectMemoryAction(action)) {
+    return { ok: false, refusal: { field: "action", reason: "unknown" } };
+  }
+
+  const rawCode: unknown = record["code"];
+  let code: string | null = null;
+  if (action === PROJECT_MEMORY_ACTION.UPDATE) {
+    if (typeof rawCode !== "string" || !isProjectMemoryCode(rawCode)) {
+      return { ok: false, refusal: { field: "code", reason: "invalid" } };
+    }
+    code = rawCode;
+  } else if (rawCode !== null && rawCode !== undefined && rawCode !== "") {
+    // Une creation qui designe une entree existante est une contradiction, et
+    // l'accepter ferait ecrire ailleurs que la ou le modele croyait ecrire.
+    return { ok: false, refusal: { field: "code", reason: "invalid" } };
+  }
+
+  const checked = checkProjectMemoryInput({
+    category: typeof record["category"] === "string" ? record["category"] : "",
+    title: typeof record["title"] === "string" ? record["title"] : "",
+    content: typeof record["content"] === "string" ? record["content"] : "",
+    rationale: typeof record["rationale"] === "string" ? record["rationale"] : "",
+    status: PROJECT_MEMORY_STATUS.ACTIVE,
+  });
+  if (!checked.ok) {
+    return { ok: false, refusal: checked.refusal };
+  }
+
+  return {
+    ok: true,
+    values: {
+      action,
+      code,
+      category: checked.values.category,
+      title: checked.values.title,
+      content: checked.values.content,
+      rationale: checked.values.rationale,
+    },
+  };
 }

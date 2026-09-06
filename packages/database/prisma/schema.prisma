@@ -441,6 +441,19 @@ model ArchitectProjectUpdate {
   baseBriefRevision String?
   basePlanRevision  String?
 
+  /// Revision de la memoire active au moment de la proposition.
+  ///
+  /// Depuis HOTFIX-005, une proposition peut poser des regles durables en
+  /// memoire. Elle doit donc etre refusee quand la memoire a change depuis —
+  /// exactement comme elle l'est quand le brief ou le plan ont change : une
+  /// entree `UPDATE` batie sur un texte que l'utilisateur a reecrit depuis
+  /// ecraserait sa version sans que personne ne l'ait vu.
+  ///
+  /// `null` pour toute proposition anterieure a HOTFIX-005 : aucune ne porte
+  /// d'entree de memoire, et il n'y a donc rien a proteger. Le controle est
+  /// alors saute, plutot que d'inventer une revision de reference.
+  baseMemoryRevision String?
+
   appliedAt   DateTime?
   dismissedAt DateTime?
   createdAt   DateTime  @default(now())

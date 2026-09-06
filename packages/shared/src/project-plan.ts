@@ -38,6 +38,14 @@
  */
 
 /** Bornes de l'etat structure. En caracteres, mesurees apres sanitation. */
+import {
+  PROJECT_MEMORY_ACTION,
+  PROJECT_MEMORY_LIMITS,
+  checkProjectMemoryProposal,
+  type ProjectMemoryProposal,
+  type ProjectMemoryProposalRefusal,
+} from "./project-memory.js";
+
 export const PROJECT_PLAN_LIMITS = {
   /** Le projet en quelques phrases. */
   summary: 2 * 1024,
@@ -438,6 +446,22 @@ export type ArchitectProjectUpdateProposal = {
   reason: string;
   brief: ProjectUpdateSection<ProjectBriefInput>;
   plan: ProjectUpdateSection<ProjectV1PlanInput>;
+  /**
+   * Regles durables a poser dans la memoire du projet.
+   *
+   * ## Pourquoi elles voyagent avec le brief et le plan
+   *
+   * Parce que c'est **une seule decision humaine**. Un tour qui condense une
+   * capacite dans le plan et pose sa specification detaillee en memoire fait les
+   * deux ou ne fait ni l'un ni l'autre : deux boutons produiraient un plan qui
+   * annonce un import controle et une memoire qui ne dit pas ce que « controle »
+   * veut dire. La regle de TASK-032 s'applique telle quelle — une carte, une
+   * revue, un `Apply`, une transaction.
+   *
+   * Vide dans le cas ordinaire, et vide pour toute proposition anterieure a
+   * HOTFIX-005 : un tour qui n'etablit aucune regle durable n'en propose aucune.
+   */
+  memories: ProjectMemoryProposal[];
 };
 
 /** Section vide, utilisee comme valeur de repli d'un payload illisible. */
@@ -472,7 +496,12 @@ export function projectUpdateTouchesSomething(
 ): boolean {
   return (
     proposal.brief.action === PROJECT_UPDATE_ACTION.SET ||
-    proposal.plan.action === PROJECT_UPDATE_ACTION.SET
+    proposal.plan.action === PROJECT_UPDATE_ACTION.SET ||
+    // Une specification durable posee sans toucher au plan est exactement le cas
+    // que HOTFIX-005 existe pour rendre possible : le contrat d'import de
+    // TicketPulse n'avait aucune raison de modifier une capacite de V1 deja
+    // ecrite.
+    proposal.memories.length > 0
   );
 }
 
@@ -677,10 +706,16 @@ export function readArchitectProjectUpdate(value: unknown): ArchitectProjectUpda
     return { ok: false, refusal: plan.refusal };
   }
 
+  const memories = readProposedMemories(value["memories"]);
+  if (!memories.ok) {
+    return { ok: false, refusal: memories.refusal };
+  }
+
   const proposal: ArchitectProjectUpdateProposal = {
     reason,
     brief: brief.section,
     plan: plan.section,
+    memories: memories.values,
   };
 
   // Une proposition qui n'annonce aucun changement n'a rien a proposer. Elle
@@ -688,9 +723,95 @@ export function readArchitectProjectUpdate(value: unknown): ArchitectProjectUpda
   if (!projectUpdateTouchesSomething(proposal)) {
     return refuseUpdate(
       "projectUpdate",
-      "La mise a jour proposee ne modifie ni le brief, ni le plan.",
+      "La mise a jour proposee ne modifie ni le brief, ni le plan, et ne pose aucune regle durable.",
     );
   }
 
   return { ok: true, proposal };
+}
+
+/**
+ * Lit les entrees de memoire proposees par un tour.
+ *
+ * ## L'absence est une liste vide, jamais un refus
+ *
+ * Le mode strict impose au fournisseur de rendre le champ, mais ce lecteur sert
+ * aussi a relire une proposition **enregistree avant HOTFIX-005**, ou il
+ * n'existe pas. Une proposition historique doit rester lisible : c'est la meme
+ * regle que pour `turnState` depuis TASK-014, et la meme raison — l'historique
+ * ne se reecrit pas pour ressembler au contrat du jour.
+ *
+ * ## Rien n'est tronque
+ *
+ * Au dela de la borne, toute la mise a jour est refusee et nommee. Ecarter
+ * silencieusement la neuvieme regle durable d'un contrat d'import produirait un
+ * contrat faux — et personne ne saurait laquelle manque.
+ */
+function readProposedMemories(
+  value: unknown,
+):
+  | { ok: true; values: ProjectMemoryProposal[] }
+  | { ok: false; refusal: ProjectUpdateRefusal } {
+  if (value === undefined || value === null) {
+    return { ok: true, values: [] };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      refusal: {
+        field: "memories",
+        message: "Les regles durables proposees ne forment pas une liste.",
+      },
+    };
+  }
+  if (value.length > PROJECT_MEMORY_LIMITS.proposals) {
+    return {
+      ok: false,
+      refusal: {
+        field: "memories",
+        message:
+          `Un tour ne peut poser que ${String(PROJECT_MEMORY_LIMITS.proposals)} regles durables ` +
+          `au plus ; celui-ci en propose ${String(value.length)}. Rien n'a ete enregistre : ` +
+          "regroupez les regles voisines en une seule entree.",
+      },
+    };
+  }
+
+  const values: ProjectMemoryProposal[] = [];
+  const seen = new Set<string>();
+
+  for (const [index, entry] of value.entries()) {
+    const checked = checkProjectMemoryProposal(entry);
+    if (!checked.ok) {
+      const refusal: ProjectMemoryProposalRefusal = { index, ...checked.refusal };
+      return {
+        ok: false,
+        refusal: {
+          field: `memories.${String(refusal.index)}.${refusal.field}`,
+          message: `La regle durable proposee est refusee : ${refusal.reason}.`,
+        },
+      };
+    }
+
+    // Deux operations sur la meme entree dans un seul tour : la seconde
+    // ecraserait la premiere, et personne ne saurait laquelle a ete appliquee.
+    const key =
+      checked.values.action === PROJECT_MEMORY_ACTION.UPDATE
+        ? `code:${checked.values.code ?? ""}`
+        : `title:${checked.values.title.toLowerCase()}`;
+    if (seen.has(key)) {
+      return {
+        ok: false,
+        refusal: {
+          field: `memories.${String(index)}`,
+          message: "Deux regles durables proposees visent la meme entree.",
+        },
+      };
+    }
+    seen.add(key);
+
+    values.push(checked.values);
+  }
+
+  return { ok: true, values };
 }

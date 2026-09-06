@@ -57,6 +57,15 @@ export type TimelineProjectUpdate = {
   /** Nombre de champs que la proposition modifie, section par section. */
   briefChanges: number;
   planChanges: number;
+  /**
+   * Nombre de regles durables proposees.
+   *
+   * Sans ce compteur, une proposition qui ne pose que des regles — le cas
+   * central depuis HOTFIX-005 — s'annoncait « 0 champ » sur ses deux lignes, et
+   * ressemblait a une carte vide. Elle etait ouvrable, et donnait a croire
+   * qu'il n'y avait rien a ouvrir.
+   */
+  memoryChanges: number;
 };
 
 export type ArchitectTimelineEntry =

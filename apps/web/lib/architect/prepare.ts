@@ -42,6 +42,7 @@ import {
   architectTaskRevision,
   architectTurnFingerprint,
   projectMemoryRevision,
+  projectMemorySetRevision,
 } from "./fingerprint.ts";
 import { createArchitectSanitizer } from "./sanitize.ts";
 import {
@@ -240,6 +241,10 @@ export function prepareArchitectGeneration(
     baseStructuredState: {
       briefRevision: bundle.projectBrief?.revision ?? null,
       planRevision: bundle.projectV1Plan?.revision ?? null,
+      // La memoire **reellement transmise** a ce tour. C'est elle que le
+      // fournisseur a vue, et c'est donc elle qui decide si une regle durable
+      // proposee est encore fondee au moment de l'appliquer.
+      memoryRevision: projectMemorySetRevision(bundle.projectMemory),
     },
     replan: input.replan,
     inputHash: architectInputHash({

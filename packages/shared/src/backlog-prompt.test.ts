@@ -94,9 +94,15 @@ function prompt(overrides: Partial<BacklogPromptInput> = {}) {
 }
 
 describe("version", () => {
-  it("est backlog/3, distincte du prompt conversationnel", () => {
-    assert.equal(BACKLOG_PROMPT_VERSION, "backlog/3");
-    assert.equal(prompt().version, "backlog/3");
+  it("est backlog/5, distincte du prompt conversationnel", () => {
+    // `backlog/5` depuis la reprise de HOTFIX-005 : la borne des criteres est
+    // annoncee au fournisseur, et le decoupage lui est enseigne.
+    // `backlog/4` depuis HOTFIX-005 : une tache doit porter les regles exactes
+    // dont son implementeur aura besoin, plutot que renvoyer a un contrat qu'il
+    // ne recevra pas. BACKLOG-003 de TicketPulse avait fait exactement
+    // l'inverse.
+    assert.equal(BACKLOG_PROMPT_VERSION, "backlog/5");
+    assert.equal(prompt().version, "backlog/5");
     assert.equal(prompt().version.startsWith("architect/"), false);
   });
 });

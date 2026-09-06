@@ -34,8 +34,12 @@
 
 import {
   ARCHITECT_PROJECT_UPDATE_STATUS,
+  MEMORY_CODE_PREFIX,
+  PROJECT_MEMORY_ACTION,
+  PROJECT_MEMORY_LIMITS,
   PROJECT_PLAN_LIMITS,
   PROJECT_UPDATE_ACTION,
+  checkProjectMemoryProposal,
   checkProjectBriefInput,
   checkProjectV1PlanInput,
   isArchitectProjectUpdateStatus,
@@ -44,11 +48,13 @@ import {
   type ArchitectProjectUpdateProposal,
   type ArchitectProjectUpdateStatus,
   type ProjectBriefInput,
+  type ProjectMemoryProposal,
   type ProjectUpdateTarget,
   type ProjectV1PlanInput,
 } from "@nox/shared";
 
 import type { DatabaseClient } from "./client.js";
+import { writeProposedMemory } from "./project-memory.js";
 import {
   buildStructuredStateFromRows,
   readProjectPlanRows,
@@ -73,6 +79,14 @@ import {
 export type ProjectUpdateBase = {
   briefRevision: string | null;
   planRevision: string | null;
+  /**
+   * Revision de la memoire active vue par le fournisseur.
+   *
+   * `null` pour une proposition qui ne pose aucune regle durable : il n'y a
+   * alors rien a proteger, et exiger une revision obligerait chaque appelant
+   * historique a en fabriquer une.
+   */
+  memoryRevision: string | null;
 };
 
 /** Une proposition, telle que l'interface la lit. */
@@ -89,6 +103,8 @@ export type ArchitectProjectUpdateView = {
   /** Revision du brief vue par le fournisseur. `null` = pas encore defini. */
   baseBriefRevision: string | null;
   basePlanRevision: string | null;
+  /** Revision de la memoire vue par le fournisseur. `null` avant HOTFIX-005. */
+  baseMemoryRevision: string | null;
   /** Date ISO 8601, ou `null`. */
   appliedAt: string | null;
   dismissedAt: string | null;
@@ -106,6 +122,7 @@ type UpdateRow = {
   appliedJson: string | null;
   baseBriefRevision: string | null;
   basePlanRevision: string | null;
+  baseMemoryRevision: string | null;
   appliedAt: Date | null;
   dismissedAt: Date | null;
   createdAt: Date;
@@ -167,27 +184,54 @@ function readStrings(value: unknown): string[] {
  * comme ne changeant rien. Un tour ancien reste consultable meme si le contrat a
  * evolue depuis — c'est precisement pour cela que NOX le conserve.
  */
+/** Proposition vide, valeur de repli d'une ligne illisible. */
+function emptyProposal(): ArchitectProjectUpdateProposal {
+  return {
+    reason: "",
+    brief: unchangedProjectUpdateSection(),
+    plan: unchangedProjectUpdateSection(),
+    memories: [],
+  };
+}
+
+/**
+ * Relit les regles durables d'une proposition enregistree.
+ *
+ * Ne valide pas : cette lecture sert a **afficher** une proposition, y compris
+ * une proposition dont le contrat a change depuis. La validation a lieu a
+ * l'application, sur ce que l'humain a retenu.
+ */
+function readProposedMemoryList(value: unknown): ProjectMemoryProposal[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: ProjectMemoryProposal[] = [];
+  for (const entry of value) {
+    const checked = checkProjectMemoryProposal(entry);
+    if (checked.ok) {
+      entries.push(checked.values);
+    }
+  }
+  return entries;
+}
+
 function readProposal(value: string): ArchitectProjectUpdateProposal {
   try {
     const parsed: unknown = JSON.parse(value);
     if (!isRecord(parsed)) {
-      return {
-        reason: "",
-        brief: unchangedProjectUpdateSection(),
-        plan: unchangedProjectUpdateSection(),
-      };
+      return emptyProposal();
     }
     return {
       reason: typeof parsed["reason"] === "string" ? parsed["reason"] : "",
       brief: readSection(parsed["brief"], readBriefValue),
       plan: readSection(parsed["plan"], readPlanValue),
+      // Absent pour toute proposition anterieure a HOTFIX-005. Une liste vide,
+      // jamais une panne : l'historique ne se reecrit pas pour ressembler au
+      // contrat du jour.
+      memories: readProposedMemoryList(parsed["memories"]),
     };
   } catch {
-    return {
-      reason: "",
-      brief: unchangedProjectUpdateSection(),
-      plan: unchangedProjectUpdateSection(),
-    };
+    return emptyProposal();
   }
 }
 
@@ -223,6 +267,7 @@ function toUpdate(row: UpdateRow): ArchitectProjectUpdateView {
     applied: readApplied(row.appliedJson),
     baseBriefRevision: row.baseBriefRevision,
     basePlanRevision: row.basePlanRevision,
+    baseMemoryRevision: row.baseMemoryRevision,
     appliedAt: row.appliedAt?.toISOString() ?? null,
     dismissedAt: row.dismissedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
@@ -263,6 +308,7 @@ export async function createArchitectProjectUpdate(
         proposedJson: JSON.stringify(input.proposed),
         baseBriefRevision: input.baseState.briefRevision,
         basePlanRevision: input.baseState.planRevision,
+        baseMemoryRevision: input.baseState.memoryRevision,
       },
     });
     return { ok: true, update: toUpdate(row) };
@@ -308,6 +354,7 @@ export async function writeArchitectProjectUpdate(
       proposedJson: JSON.stringify(input.proposed),
       baseBriefRevision: input.baseState.briefRevision,
       basePlanRevision: input.baseState.planRevision,
+      baseMemoryRevision: input.baseState.memoryRevision,
     },
     select: { id: true },
   });
@@ -403,6 +450,26 @@ export async function applyArchitectProjectUpdate(
     updateId: string;
     target: ProjectUpdateTarget;
     tools: ProjectPlanTools;
+    /**
+     * Regles durables retenues par l'humain, dans leur forme definitive.
+     *
+     * Absent vaut liste vide : une proposition qui n'en portait pas, ou dont
+     * l'utilisateur les a toutes retirees, n'ecrit rien en memoire.
+     */
+    memories?: readonly ProjectMemoryProposal[];
+    /**
+     * Revision de la memoire active **d'aujourd'hui**.
+     *
+     * Reconstruite par l'appelant, comme l'empreinte de planification d'un
+     * backlog et pour la meme raison : la revision decrit le texte sanitise,
+     * que seule la couche web sait produire. Comparee ici a celle enregistree
+     * avec la proposition, dans la transaction qui prend le statut — donc sans
+     * fenetre exploitable.
+     *
+     * Absente, le controle est saute : c'est le cas d'une proposition
+     * anterieure a HOTFIX-005, qui ne porte aucune entree de memoire.
+     */
+    currentMemoryRevision?: string;
   },
 ): Promise<ProjectUpdateActionResult> {
   return db.$transaction(async (tx): Promise<ProjectUpdateActionResult> => {
@@ -436,6 +503,28 @@ export async function applyArchitectProjectUpdate(
       };
     }
 
+    // La memoire est le troisieme axe depuis HOTFIX-005, et se refuse comme les
+    // deux autres. Une entree `UPDATE` batie sur un texte que l'utilisateur a
+    // reecrit depuis ecraserait sa version sans que personne ne l'ait vu — et
+    // « fusionner » deux redactions d'une meme regle produirait un contrat que
+    // ni l'un ni l'autre n'a valide.
+    //
+    // Le controle ne s'applique qu'aux propositions qui portent une revision de
+    // reference. Une proposition d'avant HOTFIX-005 n'en a pas, ne peut pas
+    // porter d'entree de memoire, et n'a donc rien a proteger.
+    if (
+      row.baseMemoryRevision !== null &&
+      input.currentMemoryRevision !== undefined &&
+      row.baseMemoryRevision !== input.currentMemoryRevision
+    ) {
+      return {
+        ok: false,
+        reason: "stale",
+        currentBriefRevision: current.brief.revision,
+        currentPlanRevision: current.plan.revision,
+      };
+    }
+
     // Le target humain, revalide de zero.
     let briefValues: ProjectBriefInput | null = null;
     if (input.target.brief !== null) {
@@ -455,8 +544,47 @@ export async function applyArchitectProjectUpdate(
       planValues = checked.values;
     }
 
-    if (briefValues === null && planValues === null) {
+    const memories = input.memories ?? [];
+
+    // Poser une regle durable **est** un changement de projet. Avant HOTFIX-005
+    // une proposition qui ne touchait ni le brief ni le plan n'avait rien a
+    // appliquer ; c'est desormais le cas central — le contrat d'import de
+    // TicketPulse n'avait aucune raison de modifier une capacite deja ecrite.
+    if (briefValues === null && planValues === null && memories.length === 0) {
       return { ok: false, reason: "invalid", field: "target" };
+    }
+
+    // Revalidee de zero, comme le brief et le plan : ce qui arrive ici a pu
+    // etre modifie par l'utilisateur dans la revue, et la validation du
+    // fournisseur ne vaut pas pour un texte humain.
+    if (memories.length > PROJECT_MEMORY_LIMITS.proposals) {
+      return { ok: false, reason: "invalid", field: "memories" };
+    }
+    const memoryValues: { proposal: ProjectMemoryProposal; targetId: string | null }[] = [];
+    for (const [index, proposal] of memories.entries()) {
+      const checked = checkProjectMemoryProposal(proposal);
+      if (!checked.ok) {
+        return { ok: false, reason: "invalid", field: `memories.${String(index)}` };
+      }
+
+      let targetId: string | null = null;
+      if (checked.values.action === PROJECT_MEMORY_ACTION.UPDATE) {
+        // L'entree visee est relue **ici**, dans la transaction : son existence
+        // est une question de base, pas de format, et une entree supprimee
+        // entre la proposition et l'application doit refuser plutot que
+        // ressusciter sous un autre numero.
+        const sequence = Number(checked.values.code?.slice(MEMORY_CODE_PREFIX.length) ?? "");
+        const existing = await tx.projectMemoryEntry.findFirst({
+          where: { projectId: input.projectId, sequence },
+          select: { id: true },
+        });
+        if (existing === null) {
+          return { ok: false, reason: "invalid", field: `memories.${String(index)}.code` };
+        }
+        targetId = existing.id;
+      }
+
+      memoryValues.push({ proposal: checked.values, targetId });
     }
 
     // Le budget se mesure sur l'etat **resultant**, pas sur ce qui change : une
@@ -478,11 +606,37 @@ export async function applyArchitectProjectUpdate(
       data: {
         status: ARCHITECT_PROJECT_UPDATE_STATUS.APPLIED,
         appliedAt: new Date(),
-        appliedJson: JSON.stringify({ brief: briefValues, plan: planValues }),
+        appliedJson: JSON.stringify({
+          brief: briefValues,
+          plan: planValues,
+          // Ce que l'humain a **retenu**, y compris quand il a retire ou reecrit
+          // une entree proposee. `proposedJson` garde ce que le modele avait
+          // suggere ; les deux restent distincts, comme pour le brief et le plan.
+          memories: memoryValues.map((entry) => entry.proposal),
+        }),
       },
     });
     if (claimed.count !== 1) {
       return { ok: false, reason: "not_pending", status };
+    }
+
+    // Les regles durables sont ecrites dans **cette** transaction, avec le brief
+    // et le plan. Un plan qui annonce un import controle et une memoire qui ne
+    // dit pas ce que « controle » veut dire serait exactement le trou que
+    // HOTFIX-005 comble : les deux moities arrivent ensemble, ou aucune.
+    for (const entry of memoryValues) {
+      const written = await writeProposedMemory(tx, {
+        projectId: input.projectId,
+        proposal: entry.proposal,
+        targetId: entry.targetId,
+        sanitize: input.tools.sanitize,
+      });
+      if (!written.ok) {
+        // La transaction entiere est annulee : ni brief, ni plan, ni memoire, et
+        // la proposition reste `PENDING`. Une application a moitie faite
+        // laisserait un contrat partiel que personne n'aurait valide.
+        return written.failure;
+      }
     }
 
     const savedBrief =

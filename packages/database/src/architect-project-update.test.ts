@@ -38,6 +38,7 @@ import {
   type ArchitectPromptBrief,
   type ArchitectPromptV1Plan,
   type ProjectBriefInput,
+  type ProjectMemoryProposal,
   type ProjectV1PlanInput,
 } from "@nox/shared";
 
@@ -146,11 +147,14 @@ function proposal(
     reason?: string;
     brief?: ProjectBriefInput | null;
     plan?: ProjectV1PlanInput | null;
+    /** Regles durables proposees, depuis HOTFIX-005. Vide dans le cas ordinaire. */
+    memories?: ProjectMemoryProposal[];
   } = {},
 ): ArchitectProjectUpdateProposal {
   const brief = overrides.brief === undefined ? BRIEF : overrides.brief;
   const plan = overrides.plan === undefined ? null : overrides.plan;
   return {
+    memories: overrides.memories ?? [],
     reason: overrides.reason ?? "La discussion a etabli le produit.",
     brief:
       brief === null
@@ -232,7 +236,13 @@ async function newTurn(projectId: string): Promise<{ sessionId: string; generati
 /** Etat structure courant, sous la forme attendue comme base de proposition. */
 async function baseOf(projectId: string): Promise<ProjectUpdateBase> {
   const state = await loadProjectStructuredState(db, projectId, TOOLS);
-  return { briefRevision: state.brief.revision, planRevision: state.plan.revision };
+  // La revision de memoire n'est pas calculee ici : ces tests ne posent aucune
+  // regle durable, et `null` decrit exactement cela — « rien a proteger ».
+  return {
+    briefRevision: state.brief.revision,
+    planRevision: state.plan.revision,
+    memoryRevision: null,
+  };
 }
 
 before(async () => {

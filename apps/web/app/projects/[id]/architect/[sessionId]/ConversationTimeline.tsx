@@ -279,6 +279,18 @@ function ProjectUpdateCard({
             <dt className="text-xs text-zinc-400">Living V1 Plan</dt>
             <dd className="text-xs text-zinc-300">{planChangeCountLabel(entry.planChanges)}</dd>
           </div>
+          {/* Une proposition peut ne porter que des regles durables : c'est
+              meme le cas central quand le plan couvre deja la capacite et que
+              l'utilisateur fige son contrat precis. Sans cette ligne, la carte
+              annoncait « 0 champ » deux fois et paraissait vide. */}
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <dt className="text-xs text-zinc-400">Règles durables</dt>
+            <dd className="text-xs text-zinc-300">
+              {entry.memoryChanges === 0
+                ? "aucune"
+                : `${String(entry.memoryChanges)} ${entry.memoryChanges === 1 ? "règle" : "règles"}`}
+            </dd>
+          </div>
         </dl>
         <div className="mt-4 flex justify-end">
           <Link

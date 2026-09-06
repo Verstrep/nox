@@ -51,7 +51,7 @@ function update(
   updateId: string,
   status: TimelineProjectUpdate["status"] = "PENDING",
 ): TimelineProjectUpdate {
-  return { generationId, updateId, status, briefChanges: 2, planChanges: 0 };
+  return { generationId, updateId, status, briefChanges: 2, planChanges: 0, memoryChanges: 0 };
 }
 
 function change(

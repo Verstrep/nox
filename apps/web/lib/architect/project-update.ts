@@ -23,6 +23,7 @@ import {
   applyArchitectProjectUpdate,
   dismissArchitectProjectUpdate,
   getArchitectProjectUpdate,
+  listActiveProjectMemories,
   listArchitectProjectUpdatesForSession,
   sanitizedBrief,
   sanitizedBriefChars,
@@ -39,12 +40,18 @@ import {
   checkProjectBriefInput,
   checkProjectV1PlanInput,
   projectUpdateTarget,
+  type ArchitectPromptMemory,
   type ArchitectProjectUpdateProposal,
+  type ProjectMemoryProposal,
   type ProjectUpdateReview,
   type ProjectUpdateTarget,
 } from "@nox/shared";
 
+import process from "node:process";
+
 import { projectPlanTools } from "../project-plan.ts";
+import { projectMemoryRevision, projectMemorySetRevision } from "./fingerprint.ts";
+import { createArchitectSanitizer } from "./sanitize.ts";
 import type { TimelineProjectUpdate } from "./timeline.ts";
 
 export type ProjectUpdateCheck =
@@ -144,18 +151,82 @@ export function projectUpdateReview(
  * revisions de base, l'etat courant du projet — est relu cote serveur, dans la
  * transaction qui ecrit.
  */
-export function applyProjectUpdate(
+export async function applyProjectUpdate(
   db: DatabaseClient,
   project: { id: string; repositoryPath: string },
   updateId: string,
   target: ProjectUpdateTarget,
+  /**
+   * Regles durables retenues par l'humain.
+   *
+   * Absent vaut liste vide : une proposition sans regle durable, ou dont
+   * l'utilisateur les a toutes retirees, n'ecrit rien en memoire.
+   */
+  memories: readonly ProjectMemoryProposal[] = [],
+  /**
+   * Environnement du nettoyeur.
+   *
+   * Explicite plutot que lu ici : la revision de memoire doit decrire
+   * exactement le texte que la preparation du tour a produit, et celle-ci recoit
+   * deja son environnement de son appelant. Deux sources differentes donneraient
+   * deux revisions pour un meme contenu.
+   */
+  environment: Record<string, string | undefined> = process.env,
 ): Promise<ProjectUpdateActionResult> {
+  const tools = projectPlanTools(project.repositoryPath);
+
+  // La revision de la memoire **d'aujourd'hui**, reconstruite ici comme
+  // l'empreinte de planification d'un backlog l'est avant son application, et
+  // pour la meme raison : elle decrit le texte sanitise, et la couche donnees
+  // n'a pas le nettoyeur. La comparaison, elle, a lieu dans la transaction.
+  const currentMemoryRevision = await currentProjectMemoryRevision(
+    db,
+    project.id,
+    project.repositoryPath,
+    environment,
+  );
+
   return applyArchitectProjectUpdate(db, {
     projectId: project.id,
     updateId,
     target,
-    tools: projectPlanTools(project.repositoryPath),
+    tools,
+    memories,
+    currentMemoryRevision,
   });
+}
+
+/**
+ * Revision de la memoire active telle qu'elle partirait aujourd'hui.
+ *
+ * Passe par exactement le meme chemin que la preparation d'un tour : memes
+ * entrees actives, meme nettoyeur, meme calcul de revision. Un second chemin
+ * decrirait un autre texte que celui que le fournisseur a reellement vu, et la
+ * comparaison de peremption cesserait de vouloir dire quelque chose.
+ */
+export async function currentProjectMemoryRevision(
+  db: DatabaseClient,
+  projectId: string,
+  repositoryPath: string,
+  environment: Record<string, string | undefined> = process.env,
+): Promise<string> {
+  const sanitize = createArchitectSanitizer({ repositoryRoot: repositoryPath, environment });
+  const entries = await listActiveProjectMemories(db, projectId);
+
+  return projectMemorySetRevision(
+    entries.map((memory) => {
+      const prompt: ArchitectPromptMemory = {
+        revision: "",
+        code: memory.code,
+        category: memory.category,
+        title: sanitize(memory.title),
+        content: sanitize(memory.content),
+        rationale: memory.rationale === null ? null : sanitize(memory.rationale),
+      };
+      prompt.revision = projectMemoryRevision(prompt);
+      return prompt;
+    }),
+  );
 }
 
 /** Ecarte une proposition. Aucune ecriture du brief ni du plan. */
@@ -214,6 +285,7 @@ export async function loadTimelineProjectUpdates(
         status: update.status,
         briefChanges: review.brief.fields.filter((field) => field.changed).length,
         planChanges: review.plan.fields.filter((field) => field.changed).length,
+        memoryChanges: update.proposed.memories.length,
       };
     });
 }

@@ -89,7 +89,10 @@ const CONTINUE_JSON = {
  * y est toujours present, et vaut `null` quand le tour n'etablit rien de durable
  * — ce qui est le cas ordinaire.
  */
-const CONTINUE_V3 = { ...CONTINUE_JSON, schemaVersion: 3, projectUpdate: null };
+// Version 5 depuis HOTFIX-005 : le contrat d'une conversation projet porte
+// desormais `projectUpdate.memories`. Le nom de la constante reste, il
+// designe « le tour d'une conversation projet », pas un numero.
+const CONTINUE_V3 = { ...CONTINUE_JSON, schemaVersion: 5, projectUpdate: null };
 
 /** Tour portant une proposition complete. */
 const READY_JSON = {

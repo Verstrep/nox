@@ -1,5 +1,6 @@
 import {
   ARCHITECT_PROJECT_UPDATE_STATUS,
+  PROJECT_MEMORY_ACTION,
   PROJECT_UPDATE_ACTION,
   PROJECT_UPDATE_FIELD_KIND,
   type ProjectUpdateReviewField,
@@ -277,6 +278,47 @@ export default async function ProjectUpdateReviewPage({
             <Comparison section={review.plan} />
           ) : (
             <p className="text-sm text-zinc-500">No proposed change</p>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Règles durables"
+          description={
+            update.proposed.memories.length === 0
+              ? undefined
+              : "Ce que la proposition ajouterait à la mémoire du projet. Ces règles survivent à la conversation, et la planification du backlog les reçoit."
+            }
+        >
+          {update.proposed.memories.length === 0 ? (
+            <p className="text-sm text-zinc-500">No proposed change</p>
+          ) : (
+            <ul className="flex flex-col gap-4">
+              {update.proposed.memories.map((memory, index) => (
+                <li
+                  key={`${memory.action}-${memory.code ?? String(index)}`}
+                  className="rounded-md border border-zinc-800 bg-zinc-950/40 px-4 py-3"
+                >
+                  <div className="flex flex-wrap items-center gap-3">
+                    <StatusBadge tone={memory.action === PROJECT_MEMORY_ACTION.CREATE ? "success" : "info"}>
+                      {memory.action === PROJECT_MEMORY_ACTION.CREATE ? "Nouvelle" : "Remplace"}
+                    </StatusBadge>
+                    <span className="font-mono text-xs text-zinc-500">
+                      {memory.code ?? "code attribué à l'application"}
+                    </span>
+                    <span className="font-mono text-xs text-zinc-600">{memory.category}</span>
+                  </div>
+                  <p className="mt-2 text-sm text-zinc-200">{memory.title}</p>
+                  <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-zinc-400">
+                    {memory.content}
+                  </p>
+                  {memory.rationale === null ? null : (
+                    <p className="mt-2 whitespace-pre-line text-xs leading-relaxed text-zinc-600">
+                      {memory.rationale}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
         </SectionCard>
 

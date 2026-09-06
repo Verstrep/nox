@@ -26,12 +26,13 @@
  */
 
 import {
-  ARCHITECT_TURN_SCHEMA_VERSION_V3,
+  ARCHITECT_TURN_SCHEMA_VERSION_V5,
   ARCHITECT_TURN_STATE,
   PROJECT_UPDATE_ACTION,
   type ArchitectErrorCode,
   type ArchitectUsage,
   type ProjectBriefInput,
+  type ProjectMemoryProposal,
   type ProjectV1PlanInput,
 } from "@nox/shared";
 
@@ -214,6 +215,8 @@ export type FakeProjectUpdate = {
   reason: string;
   brief?: ProjectBriefInput | null;
   plan?: ProjectV1PlanInput | null;
+  /** Regles durables proposees par ce tour. Vides dans le cas ordinaire. */
+  memories?: ProjectMemoryProposal[];
 };
 
 /** Une section de mise a jour, dans la forme attendue par le contrat v3. */
@@ -243,7 +246,7 @@ export function fakeProjectTurn(options: {
   const update = options.projectUpdate ?? null;
 
   return {
-    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V3,
+    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V5,
     state:
       proposal === null ? ARCHITECT_TURN_STATE.CONTINUE : ARCHITECT_TURN_STATE.PROPOSAL_READY,
     message: options.message ?? "Voici ce que je propose.",
@@ -269,6 +272,9 @@ export function fakeProjectTurn(options: {
             reason: update.reason,
             brief: fakeSection(update.brief),
             plan: fakeSection(update.plan),
+            // Depuis HOTFIX-005. Vide par defaut : un tour qui n'etablit aucune
+            // regle durable n'en propose aucune, et c'est le cas ordinaire.
+            memories: update.memories ?? [],
           },
   };
 }

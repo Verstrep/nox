@@ -187,6 +187,23 @@ Le chemin du fichier est résolu à partir de la racine du monorepo, pas du rép
 les commandes Prisma, les scripts npm et l'application Next.js visent donc toujours la même
 base. La variable `NOX_DATABASE_URL` permet d'en viser une autre (voir `.env.example`).
 
+**Mettre à jour une base existante.** Après avoir récupéré des migrations écrites ailleurs, la
+base locale est en retard sur le schéma, et Prisma le signale par une erreur au premier accès —
+« the column … does not exist ». Rien ne l'applique automatiquement : ni `npm run dev:web`, ni
+`npm run build`, ni le démarrage du serveur.
+
+```powershell
+npm run db:deploy
+```
+
+Cette commande applique uniquement les migrations en attente. Elle ne supprime rien, ne recrée
+rien, et laisse les données en place.
+
+> Les commandes `npx prisma …` lancées depuis la racine échouent sur `datasource.url is required` :
+> la configuration Prisma vit dans `packages/database/prisma.config.ts`, et Prisma 7 la cherche
+> dans le répertoire courant — `--schema` ne suffit pas à la trouver. Les scripts npm s'exécutent
+> dans le bon workspace.
+
 **Repartir d'une base vide.** Il n'existe volontairement aucune commande qui supprime la base :
 l'opération est manuelle.
 
@@ -215,7 +232,7 @@ Toutes les commandes se lancent depuis la racine du repository.
 | `npm run lint` | Analyse ESLint de l'ensemble du repository |
 | `npm run typecheck` | Vérifie le typage de tous les workspaces |
 | `npm run db:migrate` | Crée la base locale et applique les migrations |
-| `npm run db:deploy` | Applique les migrations existantes sans en créer |
+| `npm run db:deploy` | Applique les migrations existantes à la base en place, sans rien supprimer |
 | `npm run db:generate` | Régénère le client Prisma |
 | `npm run db:studio` | Ouvre Prisma Studio |
 

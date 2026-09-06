@@ -143,7 +143,18 @@ export async function applyProjectUpdateAction(
       target.plan = checked.values;
     }
 
-    const applied = await applyProjectUpdate(getDatabaseClient(), project, updateId, target);
+    // Les regles durables sont relues depuis la proposition enregistree, jamais
+    // recues du formulaire : le navigateur ne porte pas la semantique du payload
+    // du fournisseur, exactement comme pour les sections du brief et du plan.
+    // L'utilisateur les voit avant de cliquer, et son choix est `Apply` ou
+    // `Dismiss` — la carte entiere, comme depuis TASK-032.
+    const applied = await applyProjectUpdate(
+      getDatabaseClient(),
+      project,
+      updateId,
+      target,
+      update.proposed.memories,
+    );
     if (!applied.ok) {
       return { values, error: applyRefusalMessage(applied) };
     }

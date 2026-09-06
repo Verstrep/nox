@@ -1351,3 +1351,99 @@ est-ce que quelqu'un a eu besoin d'`Arrêter` ; est-ce que dix minutes ont jamai
 Une limite reste connue : le registre des contrôleurs vit en mémoire et ne survit pas à un
 redémarrage du serveur web. La ligne, elle, est conclue en base dans tous les cas — mais NOX dira
 alors qu'il ne peut pas confirmer avoir fermé la requête, plutôt que de l'affirmer.
+
+## 14. HOTFIX-005 — continuité d'une spécification produit
+
+Le second pilote a continué après HOTFIX-004, et a rencontré un défaut d'**architecture** — le
+premier depuis le début des pilotes qui ne soit ni un délai, ni un diagnostic, ni un affichage.
+
+### Ce qui a été observé
+
+TicketPulse a établi, au fil d'une longue conversation Architecte, un contrat d'import Excel
+complet : une feuille unique, colonnes identifiées par intitulé exact, quatre colonnes requises,
+`CI / Application` pouvant être vide et affichée « Non renseigné », lignes vides et lignes
+« Filtres appliqués : » ignorées, espaces de bord retirés, doublons rejetant **toutes** leurs
+occurrences, sémantique de mise à jour champ par champ, six champs facultatifs retenus.
+
+`architect/7` **n'a pas** recopié ce détail dans le Living V1 Plan, et il a eu raison : ce sont dix-
+neuf règles, et le plan en portait déjà quatre — les y ajouter aurait franchi la borne de vingt.
+
+Puis `BACKLOG-003` a réussi (gpt-5.6-sol, 16 157 jetons, 1 min 58 s, cinq tâches) et a dit
+lui-même ce qui lui manquait :
+
+> « Le point restant incertain est le contrat Excel détaillé : la liste complète des intitulés et
+> formats réellement observés n'apparaît ni dans le brief ni dans le plan. »
+
+La tâche 2 renvoyait alors aux « intitulés exacts du contrat V1 » — un contrat qu'aucune tâche ne
+contenait. Et une décision a été **affaiblie** en étant résumée :
+
+| | |
+| --- | --- |
+| Décision réelle | un numéro dupliqué fait rejeter **toutes** ses occurrences |
+| Tâche générée | les numéros répétés ne doivent pas créer deux incidents |
+
+La seconde autorise à en garder une quand les deux lignes sont identiques. Ce n'est plus la même
+règle, et personne ne s'en serait aperçu avant la recette.
+
+### La cause
+
+**La mémoire du projet était déjà la bonne autorité** — durable, bornée, transmise à la
+conversation, à la planification et à la replanification, et déjà dans l'empreinte de contexte.
+Ce qui manquait n'était pas une couche de persistance : c'était un **chemin**. Aucune ligne de code
+ne menait d'une conversation jusqu'à elle, et l'utilisateur devait recopier chaque règle à la main
+en le sachant.
+
+### Ce qui a changé
+
+**Un tour peut proposer des règles durables**, au plus huit, dans le champ `projectUpdate.memories`.
+Elles sont revues et appliquées par le même geste humain que le brief et le plan, dans la même
+transaction. Proposer n'est pas écrire : rien n'entre en mémoire sans un `Apply` explicite. Voir
+[D-411](DECISIONS.md) et [D-412](DECISIONS.md).
+
+**Une tâche générée porte les règles exactes** dont son implémenteur aura besoin. `backlog/4`
+interdit l'exigence par renvoi et demande la règle exacte plutôt que son résumé — le prompt cite le
+cas des doublons comme contre-exemple. Voir [D-413](DECISIONS.md).
+
+**Aucune sélection de pertinence n'a été inventée** : les entrées `ACTIVE` partent toutes, les
+`ARCHIVED` ne partent pas. Une façon silencieuse de retirer une règle d'un contexte serait le bug
+de HOTFIX-005 réintroduit par l'autre bout. Voir [D-414](DECISIONS.md).
+
+**Le contrat de tour passe en versions 5 et 6**, et le prompt en `architect/9` / `architect/10` :
+la forme change cette fois, contrairement à HOTFIX-003 qui n'avait touché qu'aux instructions. Les
+générations enregistrées en version 3 restent lisibles sans migration. Voir [D-415](DECISIONS.md).
+
+**La péremption couvre un troisième axe**, la mémoire, comme elle couvrait déjà le brief et le
+plan. Voir [D-416](DECISIONS.md).
+
+### La hiérarchie durable, telle qu'elle se lit désormais
+
+```text
+Project Brief                  pourquoi, pour qui, quel résultat
+Living V1 Plan                 les capacités de la V1        (20 entrées, inchangé)
+Mémoire du projet              les règles produit exactes    (48 Kio actifs)
+Backlog / replanification      consomment les trois ci-dessus
+Contrat d'une tâche            porte les règles exactes dont elle a besoin
+Documentation du repository    l'état réellement implémenté
+```
+
+### Ce que le prochain pilote devrait regarder
+
+Que l'Architecte propose effectivement des entrées quand une règle est tranchée — c'est la seule
+partie du correctif qui dépend du modèle plutôt que du code. Le reste est vérifié par des tests
+déterministes ; celle-ci ne peut l'être que par l'usage.
+
+### Reprise — le premier essai réel n'a rien proposé
+
+Le pilote a envoyé le contrat d'import complet en demandant explicitement de l'enregistrer. Le
+modèle a répondu qu'il proposait « six entrées consolidées de Project Memory » qui « ne seront
+enregistrées qu'après votre validation » — puis a rendu `projectUpdate: null`. Aucune carte, rien à
+valider.
+
+**NOX avait raison d'afficher une discussion : c'est exactement ce qu'il avait reçu.** La cause est
+dans le contrat lui-même, qui se décrivait comme « mise à jour proposée du Project Brief et du
+Living V1 Plan ». Un tour qui ne change ni l'un ni l'autre le met donc à `null`, et emporte les
+règles avec lui. HOTFIX-005 avait ajouté `memories` dans ce champ sans corriger ce que ce champ
+disait être, et le prompt disait quoi poser sans jamais dire par où.
+
+Le tour 12 est conservé tel quel comme preuve historique : `architect/9`, `CONTINUE`,
+`projectUpdate: null`, aucune ligne `ArchitectProjectUpdate`. Voir [D-417](DECISIONS.md).

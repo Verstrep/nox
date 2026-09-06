@@ -51,7 +51,7 @@ import {
   type ArchitectTaskProposal,
 } from "./architect.js";
 import { MAX_VALIDATION_COMMAND_LENGTH } from "./claude-commands.js";
-import type { ArchitectPromptMemory } from "./project-memory.js";
+import { PROJECT_MEMORY_LIMITS, type ArchitectPromptMemory } from "./project-memory.js";
 import {
   PROJECT_PLAN_LIMITS,
   type ArchitectPromptBrief,
@@ -142,6 +142,39 @@ export const ARCHITECT_PROMPT_VERSION_V7 = "architect/7";
 export const ARCHITECT_PROMPT_VERSION_V8 = "architect/8";
 
 /**
+ * Depuis HOTFIX-005 : les regles precises se posent en memoire du projet.
+ *
+ * Le second pilote reel a etabli un contrat d'import complet en conversation.
+ * `architect/7` a eu raison de ne pas le recopier dans le Living V1 Plan — mais
+ * il envoyait ce detail vers « les taches et la documentation du repository »,
+ * qui n'existaient ni l'un ni l'autre au moment ou la regle etait tranchee. Le
+ * contrat est donc reste dans le fil, et la planification, qui ne recoit aucun
+ * transcript, a signale elle-meme qu'il lui manquait.
+ */
+export const ARCHITECT_PROMPT_VERSION_V9 = "architect/9";
+
+/** Version 9 avec les consignes de replanification. */
+export const ARCHITECT_PROMPT_VERSION_V10 = "architect/10";
+
+/**
+ * Depuis la reprise de HOTFIX-005 : par ou passe une regle durable.
+ *
+ * `architect/9` disait **ce qui** merite une entree de memoire, et jamais **par
+ * quel champ** elle voyage. Le pilote reel l'a paye au premier essai : sur une
+ * demande explicite d'enregistrement, le modele a repondu « je propose six
+ * entrees consolidees [...] elles ne seront enregistrees qu'apres votre
+ * validation », puis a rendu `projectUpdate: null`. Rien n'etait validable.
+ *
+ * La description du champ y poussait : elle annoncait « mise a jour proposee du
+ * Project Brief et du Living V1 Plan », donc un tour qui ne changeait ni l'un ni
+ * l'autre le mettait a `null` — et emportait les regles avec lui.
+ */
+export const ARCHITECT_PROMPT_VERSION_V11 = "architect/11";
+
+/** Version 11 avec les consignes de replanification. */
+export const ARCHITECT_PROMPT_VERSION_V12 = "architect/12";
+
+/**
  * Version de prompt correspondant a ce que ce tour contient reellement.
  *
  * Le role de la session decide d'abord ; la presence d'un plan de travail
@@ -160,7 +193,7 @@ export function architectPromptVersion(
   if (kind !== ARCHITECT_SESSION_KIND.PROJECT) {
     return ARCHITECT_PROMPT_VERSION;
   }
-  return replanAvailable ? ARCHITECT_PROMPT_VERSION_V8 : ARCHITECT_PROMPT_VERSION_V7;
+  return replanAvailable ? ARCHITECT_PROMPT_VERSION_V12 : ARCHITECT_PROMPT_VERSION_V11;
 }
 
 /** Delimiteurs du contexte projet. */
@@ -641,10 +674,16 @@ function renderProjectUpdateInstructions(): string[] {
     "implementation : format exact d'un fichier, comportement ligne a ligne, regles",
     "de rejet, noms de colonnes, semantique de mise a jour champ par champ.",
     "",
-    "Ce detail appartient aux **taches** et a la documentation du repository, ou il",
-    "peut etre aussi precis que necessaire. Le recopier dans le plan le fait grossir",
-    "a chaque decision, jusqu'a le rendre illisible — et jusqu'a depasser les bornes",
-    "ci-dessus.",
+    "Ce detail appartient a la **memoire du projet**, decrite juste en dessous, ou",
+    "il peut etre aussi precis que necessaire. Le recopier dans le plan le fait",
+    "grossir a chaque decision, jusqu'a le rendre illisible — et jusqu'a depasser",
+    "les bornes ci-dessus.",
+    "",
+    "**Ne renvoie jamais a un contrat que tu n'as pas ecrit quelque part.** Ecrire",
+    "« conforme au contrat d'import V1 » sans que ce contrat existe durablement",
+    "produit un plan qui a l'air complet et un travail impossible a specifier : la",
+    "personne — ou l'agent — qui implementera n'aura pas la conversation sous les",
+    "yeux.",
     "",
     "Quand l'utilisateur demande une mise a jour **minimale**, prends-le au mot :",
     "n'ecris que ce qui change durablement, et laisse le reste tel quel.",
@@ -653,10 +692,111 @@ function renderProjectUpdateInstructions(): string[] {
     "est utilisable » —, jamais un travail a faire. Le brief et le plan ne portent ni",
     "critere d'acceptation, ni commande, ni dependance : cela appartient aux taches.",
     "",
+    "## Les regles precises vivent dans la memoire du projet",
+    "",
+    "### Par ou elles passent",
+    "",
+    "Une entree de memoire se propose **uniquement** en remplissant le tableau",
+    "`projectUpdate.memories`. Il n'existe aucun autre canal : ecrire dans ton",
+    "message que tu proposes des regles durables n'en propose **aucune**, et",
+    "l'utilisateur n'aura rien a valider.",
+    "",
+    "`projectUpdate` ne concerne pas que le brief et le plan : il porte les trois",
+    "choses durables de ce projet, et elles sont independantes.",
+    "",
+    "```text",
+    "brief a changer     → projectUpdate.brief   SET",
+    "plan a changer      → projectUpdate.plan    SET",
+    "regles a poser      → projectUpdate.memories [ ... ]",
+    "```",
+    "",
+    "**Une mise a jour qui ne porte que des entrees `memories` est valide et",
+    "attendue.** Si le brief et le plan couvrent deja ce qu'il faut, laisse-les",
+    "`UNCHANGED` et remplis quand meme `memories` : c'est le cas le plus courant",
+    "quand l'utilisateur fige un contrat precis sur une capacite deja decrite.",
+    "",
+    "Ne mets `projectUpdate` a `null` que si ce tour n'etablit **ni** brief, **ni**",
+    "plan, **ni** regle durable.",
+    "",
+    "### Ce que tu ne peux pas dire",
+    "",
+    "N'annonce jamais des regles durables que tu n'as pas emises. Ces phrases sont",
+    "interdites lorsque `projectUpdate` vaut `null` ou que `memories` est vide :",
+    "",
+    "```text",
+    "  interdit  « Je propose six entrees de Project Memory. »",
+    "  interdit  « Elles seront enregistrees apres votre validation. »",
+    "  interdit  « J'ai enregistre le contrat en memoire. »",
+    "```",
+    "",
+    "Elles decrivent quelque chose qui n'existe pas : l'utilisateur cherchera une",
+    "carte a valider et n'en trouvera aucune.",
+    "",
+    "Si tu as besoin d'une precision avant de poser une regle, une discussion",
+    "simple reste la bonne reponse — mais dis alors clairement qu'**aucune",
+    "proposition n'a encore ete creee**, et pose ta question.",
+    "",
+    "### Ce qu'elles contiennent",
+    "",
+    "La memoire du projet est l'endroit **durable** des regles produit exactes :",
+    "contrats de fichier, intitules de colonnes, comportement ligne a ligne, regles",
+    "de rejet, semantique de mise a jour champ par champ, valeurs affichees.",
+    "",
+    "Elle survit a la conversation. Ce qui n'y est pas ecrit **disparait** : les",
+    "tours anciens sortent de la fenetre transmise, et la planification du backlog",
+    "ne recoit aucun transcript. Une regle etablie en discussion et jamais posee en",
+    "memoire n'existe donc plus au moment ou une tache est ecrite.",
+    "",
+    "### Quand poser une entree",
+    "",
+    "Quand l'utilisateur **tranche** une regle produit durable et precise. Pas une",
+    "hypothese, pas une option en cours d'examen, pas une reformulation de ce que la",
+    "memoire porte deja.",
+    "",
+    "```text",
+    "capacite de V1                    → Living V1 Plan",
+    "regle produit exacte et durable   → memoire du projet",
+    "piste encore ouverte              → ni l'un ni l'autre",
+    "```",
+    "",
+    "Une entree se lit **sans la conversation qui l'a produite**. Ecris la regle en",
+    "entier, pas son resume : « les doublons sont geres » ne dit pas ce qui se passe,",
+    "« un numero d'incident presente plusieurs fois dans un meme classeur fait",
+    "rejeter toutes ses occurrences » le dit.",
+    "",
+    "### Les quatre categories",
+    "",
+    "- `DECISION` : un choix tranche. « Les colonnes sont identifiees par intitule",
+    "  exact, jamais par position. »",
+    "- `CONSTRAINT` : une limite imposee de l'exterieur.",
+    "- `CONVENTION` : une regle de conception ou d'ecriture.",
+    "- `KNOWLEDGE` : un fait durable utile a la comprehension.",
+    "",
+    "### Les bornes",
+    "",
+    `Au plus **${String(PROJECT_MEMORY_LIMITS.proposals)} entrees** par tour. Un titre tient sur une ligne et fait au plus`,
+    `${String(PROJECT_MEMORY_LIMITS.title)} caracteres ; le contenu au plus ${String(PROJECT_MEMORY_LIMITS.content)}.`,
+    "Un depassement refuse la mise a jour **entiere**, et rien n'est tronque pour la",
+    "faire passer : regroupe les regles voisines en une seule entree plutot que d'en",
+    "multiplier.",
+    "",
+    "### Modifier plutot que dupliquer",
+    "",
+    "Quand une regle deja en memoire evolue, utilise `UPDATE` avec le code de",
+    "l'entree — `MEM-004` — et rends son contenu **complet**. Poser une seconde",
+    "entree sur le meme sujet laisserait deux regles contradictoires, et personne ne",
+    "saurait laquelle s'applique.",
+    "",
+    "N'utilise `CREATE` que pour un sujet que la memoire ne couvre pas encore.",
+    "",
     "## Tu proposes ; l'utilisateur applique",
     "",
     "Tu peux proposer une mise a jour du projet. **Seul l'utilisateur peut",
     "l'appliquer.** Il peut aussi la modifier avant, ou l'ecarter.",
+    "",
+    "Cela vaut pour le brief, pour le plan **et pour la memoire** : une entree",
+    "proposee n'est pas une entree enregistree, et une planification de backlog ne",
+    "l'appliquera jamais a la place de l'utilisateur.",
     "",
     "Ne dis jamais que tu as mis a jour le Project Brief ou le Living V1 Plan au",
     "seul motif que tu viens d'en proposer un changement. L'etat du projet n'a change",

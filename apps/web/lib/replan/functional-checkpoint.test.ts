@@ -34,7 +34,7 @@ import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  ARCHITECT_TURN_SCHEMA_VERSION_V4,
+  ARCHITECT_TURN_SCHEMA_VERSION_V6,
   ARCHITECT_TURN_STATE,
   PROJECT_UPDATE_ACTION,
   REPLAN_MODE,
@@ -187,7 +187,7 @@ function turnPayload(options: {
   update?: boolean;
 }): Record<string, unknown> {
   return {
-    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V4,
+    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V6,
     state: ARCHITECT_TURN_STATE.CONTINUE,
     message: "Voici ce que je propose.",
     questions: [],

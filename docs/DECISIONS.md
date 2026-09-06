@@ -6587,3 +6587,240 @@ justifier.
 
 Les deux surfaces retenues sont exactement celles ou le second pilote a perdu des appels. Le jour ou
 une autre le fera, la mecanique est en place et se branche sans etre redecouverte.
+
+## HOTFIX-005 — continuite d'une specification produit
+
+### D-411 — La memoire du projet est l'autorite durable des regles produit precises
+
+**Decision.** Aucune entite nouvelle. Les contrats produit precis — formats de fichier, intitules
+de colonnes, comportements ligne a ligne, semantiques de mise a jour — vivent dans la **memoire du
+projet**, qui existe depuis TASK-018.
+
+**Justification.** L'enquete a montre que la piece manquante n'etait pas une couche de persistance
+mais un **chemin**. La memoire avait deja tout ce qu'il fallait :
+
+```text
+categories DECISION / CONSTRAINT / CONVENTION / KNOWLEDGE   deja adaptees
+bornee : 4 Kio par entree, 48 Kio actifs, 100 entrees       deja bornee
+transmise a la conversation                                 deja le cas
+transmise a la planification de backlog                     deja le cas
+transmise a la replanification                              deja le cas
+entree dans l'empreinte de contexte                         deja le cas
+```
+
+Ce qui n'existait pas : **aucun chemin de code ne menait d'une conversation jusqu'a elle.**
+`createProjectMemory` n'etait appele que par la Server Action du formulaire manuel. Un utilisateur
+qui tranchait vingt regles en conversation devait les recopier a la main, une par une, en le
+sachant — et le pilote ne le savait pas.
+
+Creer une entite parallele aurait produit deux memoires durables, deux budgets, deux surfaces
+d'inspection et deux facons de repondre a « qu'est-ce que ce projet a decide ». La hierarchie
+complete de NOX est desormais :
+
+```text
+Project Brief                  pourquoi, pour qui, quel resultat
+Living V1 Plan                 les capacites de la V1
+Memoire du projet              les regles produit exactes et durables
+Backlog / replanification      consomment les trois ci-dessus
+Contrat d'une tache            porte les regles exactes dont elle a besoin
+Documentation du repository    l'etat reellement implemente
+```
+
+### D-412 — Une conversation peut proposer une regle durable ; elle ne l'ecrit jamais
+
+**Decision.** `projectUpdate` porte un champ de plus, `memories` : au plus huit entrees, chacune
+`CREATE` ou `UPDATE`. Elles sont revues et appliquees par le meme geste humain que le brief et le
+plan, dans la meme transaction.
+
+**Justification.** L'invariant de TASK-018 disait que le Structured Output d'un tour ne porte ni
+`memoriesToCreate`, ni `memoriesToUpdate`. Ce correctif le revise, et il faut dire exactement ce
+qui change et ce qui ne change pas.
+
+Ce que l'invariant protegeait — **aucune entree n'est creee automatiquement** — reste entier :
+proposer n'est pas ecrire, et rien n'entre en memoire sans un `Apply` explicite. Ce que
+l'invariant interdisait en trop, c'etait de **proposer**. La distinction avait ete perdue : le
+texte disait « ni depuis une conversation, ni depuis une proposition », en rangeant la proposition
+du cote de l'automatisme alors qu'elle est du cote de la revue.
+
+**Pourquoi dans `projectUpdate` plutot qu'a cote.** Parce que c'est une seule decision humaine. Un
+tour qui condense une capacite dans le plan et pose sa specification en memoire fait les deux ou ne
+fait ni l'un ni l'autre ; deux boutons produiraient un plan annoncant un « import controle » et une
+memoire ne disant pas ce que « controle » veut dire. C'est la regle de TASK-032, appliquee telle
+quelle : une carte, une revue, un `Apply`, une transaction.
+
+**Pourquoi `UPDATE` existe.** Sans lui, la premiere refonte d'un contrat poserait une seconde
+entree sur le meme sujet, et la planification recevrait deux regles contradictoires sans savoir
+laquelle s'applique — le bug d'origine, deplace d'un cran.
+
+**Pourquoi il n'existe pas de suppression.** Une regle qui cesse de s'appliquer s'archive, et
+l'archivage est un geste humain. Une proposition ne doit pas pouvoir faire disparaitre un contrat
+etabli.
+
+### D-413 — Une tache generee porte les regles exactes, jamais un renvoi
+
+**Decision.** `backlog/4` interdit d'ecrire une exigence par renvoi et demande de recopier la
+regle exacte plutot que son resume.
+
+**Justification.** BACKLOG-003 a produit deux defauts distincts, et le second aurait survecu au
+premier correctif.
+
+Le renvoi : la tache 2 exigeait « les intitules exacts du contrat V1 » alors qu'aucune tache ne
+contenait ce contrat. Celui qui implemente ne recoit ni le brief, ni le plan, ni la memoire — il
+recoit le contrat de la tache et le repository. Une exigence qui renvoie ailleurs a l'air precise
+et ne verifie rien.
+
+L'affaiblissement, plus grave parce que silencieux :
+
+```text
+decision reelle   un numero duplique fait rejeter TOUTES ses occurrences
+tache generee     les numeros repetes ne doivent pas creer deux incidents
+```
+
+La seconde formulation autorise a en garder une quand les deux lignes sont identiques. Ce n'est
+plus la meme regle, et personne ne s'en apercevrait avant la recette. Le prompt cite desormais ce
+cas precis comme contre-exemple.
+
+**Ce que cela ne demande pas.** Recopier la memoire entiere dans chaque tache. Seulement ce dont
+**cette** tache a besoin, et les bornes de taille sont inchangees.
+
+### D-414 — La pertinence est celle que l'utilisateur declare, pas une similarite devinee
+
+**Decision.** Aucun mecanisme de selection nouveau. Les entrees `ACTIVE` partent toutes, les
+`ARCHIVED` ne partent pas.
+
+**Justification.** La tentation etait d'ajouter des etiquettes de portee, ou de selectionner les
+entrees « liees a l'import » par mots-cles. Les deux auraient introduit une facon silencieuse de
+**retirer** une regle d'un contexte — c'est-a-dire exactement la classe de bug que ce correctif
+repare, reintroduite par l'autre bout.
+
+Le mecanisme existant est deja deterministe, deja controle par l'utilisateur, deja visible a
+l'ecran, et deja borne par le budget de 48 Kio. Le contrat d'import complet de TicketPulse tient en
+trois entrees et occupe moins du quart de ce budget : la pertinence n'est pas encore un probleme, et
+la resoudre avant qu'elle en soit un aurait coute une garantie.
+
+La selection fine reste possible la ou elle appartient : c'est le fournisseur, qui voit la memoire
+et les taches, qui decide quelles regles recopier dans quelle tache.
+
+### D-415 — Le schema d'un tour bumpe quand sa forme change, pas quand ses consignes changent
+
+**Decision.** `architect/7` → `architect/9`, `architect/8` → `architect/10`, et le contrat passe des
+versions 3 et 4 aux versions **5 et 6**.
+
+**Justification.** HOTFIX-003 n'avait bumpe que la version de prompt : seul le texte des
+instructions avait change, et le contrat lu restait identique. Ici le fournisseur doit rendre un
+champ de plus. Deux formes differentes sous une meme etiquette rendraient l'historique ambigu, ce
+que `schemaVersion` existe precisement pour empecher.
+
+**Aucune migration de donnees.** Une generation enregistree en version 3 le reste, et sa proposition
+se relit sans rien reecrire : l'absence de `memories` y vaut liste vide. C'est la meme regle que
+pour `turnState` depuis TASK-014 — l'historique ne se reecrit pas pour ressembler au contrat du
+jour.
+
+### D-416 — La peremption d'une proposition couvre desormais trois axes
+
+**Decision.** `ArchitectProjectUpdate` recoit `baseMemoryRevision`. Une proposition batie sur une
+memoire depuis reecrite est refusee, comme elle l'est deja quand le brief ou le plan ont change.
+
+**Justification.** Sans ce troisieme axe, une entree `UPDATE` batie sur un texte que l'utilisateur a
+reecrit entre-temps ecraserait sa version sans que personne ne l'ait vu. « Fusionner » deux
+redactions d'une meme regle produirait un contrat que ni l'un ni l'autre n'a valide.
+
+La revision est reconstruite par l'appelant et comparee dans la transaction qui prend le statut —
+exactement le motif de `currentPlanningFingerprint` a l'application d'un backlog, et pour la meme
+raison : elle decrit le texte **sanitise**, que seule la couche web sait produire.
+
+`null` pour toute proposition anterieure : aucune ne porte d'entree de memoire, et il n'y a donc
+rien a proteger. Le controle est saute plutot que d'inventer une revision de reference.
+
+**Une seule implementation de cette revision.** `projectMemorySetRevision` vit a cote de
+`projectMemoryRevision`, et `backlogMemoryRevision` lui delegue : deux calculs paralleles auraient
+fini par repondre differemment a la meme question.
+
+### D-417 — Un champ durable doit nommer tout ce qu'il porte
+
+**Decision.** La description de `projectUpdate` annonce desormais les **trois** choses durables du
+projet — brief, plan et regles de memoire — et dit qu'une mise a jour ne portant que des entrees
+`memories` est valide. Le prompt nomme le champ par lequel une regle voyage, et interdit d'annoncer
+des regles qui ne sont pas emises. `architect/9` → `architect/11`, `architect/10` → `architect/12`.
+
+**Justification.** Le pilote reel a envoye le contrat d'import complet en demandant explicitement de
+l'enregistrer. Le modele a repondu :
+
+```text
+« Le Brief et le Living V1 Plan couvrent deja correctement les capacites attendues ;
+  aucune modification n'est necessaire. Je propose six entrees consolidees de Project
+  Memory [...] Elles ne seront enregistrees qu'apres votre validation dans NOX. »
+```
+
+Puis il a rendu `projectUpdate: null`. Aucune carte, rien a valider, et NOX a affiche exactement ce
+qu'il avait recu : une discussion.
+
+**Le raisonnement du modele etait correct** — c'est le contrat qui l'a egare. Le champ se decrivait
+lui-meme comme « mise a jour proposee du Project Brief et du Living V1 Plan ». Un tour qui ne
+changeait ni l'un ni l'autre le mettait donc a `null`, et emportait les regles avec lui. HOTFIX-005
+avait ajoute `memories` **dans** ce champ sans jamais corriger ce que ce champ disait etre.
+
+`architect/9` disait **ce qui** merite une entree de memoire, et jamais **par ou** elle passe. Les
+deux moities de l'information vivaient a deux endroits qui ne se citaient pas.
+
+**Ce qui n'a pas ete fait.** Aucune lecture de prose. NOX ne cherche pas « je propose » dans un
+message, et une entree de memoire ne peut naitre que du tableau structure. Un test le verifie sur la
+source des modules concernes : detecter une intention dans du francais serait fragile, et
+transformerait une phrase malheureuse en ecriture durable.
+
+**Aucun drapeau d'intention non plus.** Un champ « je propose des regles » qui devrait valoir
+`memories.length > 0` serait une seconde declaration du meme fait, donc une seconde facon d'etre
+incoherent — et un modele qui oublie le tableau oublierait aussi le drapeau. La declaration
+machine existe deja : c'est le tableau lui-meme.
+
+**Le schema ne bouge pas.** Memes champs, meme liste requise : seules des descriptions changent, et
+une consigne ne bumpe pas un contrat — c'est exactement la regle posee en D-415.
+
+### D-418 — Une borne appliquee par le validateur est annoncee au fournisseur, sur **tous** les champs
+
+**Decision.** `backlog/5` annonce la longueur maximale d'un critere d'acceptation et celle d'une
+entree de hors perimetre, depuis la meme constante que le validateur. La description du schema la
+porte aussi. Le refus nomme desormais le critere fautif, sa cause et sa longueur.
+
+**Justification.** HOTFIX-003 avait pose la regle — « toute borne que le validateur applique est
+annoncee au fournisseur » — et l'avait appliquee aux listes du plan. Les criteres d'acceptation ne
+l'avaient jamais ete : le prompt annoncait leur **nombre** (de 1 a 8) et jamais leur **taille**
+(300 caracteres), connue du seul `readArchitectBacklogProposalV3`.
+
+`backlog/4` a transforme cet oubli en refus certain. Il demandait — a juste titre — de recopier les
+regles durables exactes dans la tache, sans dire qu'un critere est borne. Le pilote reel a obtenu
+une tache d'import dont un critere portait tout le contrat, et NOX l'a refusee :
+
+```text
+Tache 2 · Criteres d'acceptation
+Un critere de Tache 2 est vide ou trop long.
+```
+
+**La borne n'a pas ete relevee, et elle n'avait pas a l'etre.** Le contrat complet de TicketPulse —
+six regles durables — tient dans huit criteres exacts, tous sous les 300 caracteres, sans qu'aucune
+regle ne soit affaiblie. Un test le demontre avec le decoupage reel. Relever la limite aurait
+deplace le probleme d'un cran et produit des criteres qu'on ne peut plus verifier un par un.
+
+**Ce que le prompt enseigne desormais.** Un critere prouve **un** comportement observable. Plusieurs
+regles durables sur une meme tache se repartissent sur plusieurs criteres au lieu d'etre
+concatenees ; le contexte et l'objectif portent ce qui leur est commun. Le decoupage repartit les
+regles, il ne les affaiblit pas — « toutes les occurrences d'un numero duplique sont rejetees » peut
+devenir un critere entier, jamais « les doublons sont empeches ».
+
+### D-419 — « Vide ou trop long » ne disait ni lequel, ni de combien
+
+**Decision.** Le chemin de refus nomme le critere — `tasks.1.acceptanceCriteria.3` — et la phrase
+distingue les trois causes, en donnant la longueur observee et la borne. Le texte refuse n'est
+**jamais** recopie.
+
+**Justification.** `readProposedText` rend `null` pour trois causes distinctes, et l'appelant ne
+pouvait donc en nommer aucune. Le pilote a lu « Un critere de Tache 2 est vide ou trop long » et a
+du deviner lequel parmi huit, dans quel sens corriger, et de combien il fallait raccourcir.
+
+Une longueur, une borne et une position suffisent a corriger. Recopier le contenu ferait entrer du
+texte de projet dans un diagnostic, ce que HOTFIX-003 a explicitement exclu — et un test le
+verifie.
+
+`readBoundedProposedText` reutilise exactement la normalisation et les bornes de
+`readProposedText` : c'est la meme lecture, qui rend simplement sa raison. Deux implementations
+finiraient par accepter l'une ce que l'autre refuse.

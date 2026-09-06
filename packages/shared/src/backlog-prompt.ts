@@ -90,7 +90,30 @@ import type { ArchitectPromptBrief, ArchitectPromptV1Plan } from "./project-plan
  * qu'aucun lien ne l'exprime — parce que `backlog/2` interdisait explicitement
  * d'en ecrire un. L'ordre restait juste ; il n'empechait rien.
  */
-export const BACKLOG_PROMPT_VERSION = "backlog/3";
+export const BACKLOG_PROMPT_VERSION = "backlog/5";
+
+/**
+ * `backlog/4` : la version qui exigeait des taches autoportantes sans dire
+ * comment les borner.
+ *
+ * Elle demandait de recopier les regles exactes dans la tache — ce qui etait
+ * juste — et n'annoncait pas que chaque critere d'acceptation est borne. Le
+ * pilote reel a produit une tache d'import dont un critere portait tout le
+ * contrat, et NOX l'a refusee. `backlog/5` annonce la borne et enseigne le
+ * decoupage : un critere, un comportement observable.
+ */
+export const BACKLOG_PROMPT_VERSION_4 = "backlog/4";
+
+/**
+ * `backlog/3` : la version d'avant HOTFIX-005.
+ *
+ * `backlog/4` ajoute une seule exigence, et elle vient d'un defaut observe :
+ * BACKLOG-003 de TicketPulse a produit une tache qui renvoyait aux « intitules
+ * exacts du contrat V1 » sans que ce contrat figure nulle part, et qui a
+ * affaibli une regle de deduplication en la resumant. Une tache doit desormais
+ * porter les regles exactes dont son implementeur aura besoin.
+ */
+export const BACKLOG_PROMPT_VERSION_3 = "backlog/3";
 
 /** Version historique, conservee pour relire une generation anterieure. */
 export const BACKLOG_PROMPT_VERSION_2 = "backlog/2";
@@ -170,8 +193,11 @@ function renderInstructions(): string {
     "",
     "- Le **Project Brief** et le **Living V1 Plan** sont l'intention produit",
     "  **actuelle**, validee par l'utilisateur dans NOX. C'est la cible.",
-    "- La **memoire du projet** porte des decisions, contraintes et conventions",
-    "  durables, enregistrees explicitement. Respecte-les.",
+    "- La **memoire du projet** porte les decisions, contraintes et conventions",
+    "  durables, enregistrees explicitement. Elle contient les **regles produit",
+    "  exactes** que le brief et le plan resument : contrats de fichier, intitules,",
+    "  comportements ligne a ligne, semantiques de mise a jour. Respecte-les, et",
+    "  **recopie dans tes taches celles dont l'implementeur aura besoin**.",
     "- Les **taches existantes** sont des contrats d'implementation courants ou",
     "  passes. Traite-les comme des faits : ce qu'elles couvrent est engage ou fait.",
     "- La **documentation du repository** decrit l'etat du depot. Elle est utile, et",
@@ -488,15 +514,98 @@ function renderInstructions(): string {
     "- L'objectif decrit le resultat observable attendu, pas une implementation",
     `  inventee. ${String(ARCHITECT_BACKLOG_LIMITS.objective)} caracteres au maximum.`,
     `- Le contexte explique pourquoi la tache existe. ${String(ARCHITECT_BACKLOG_LIMITS.context)} caracteres au maximum.`,
-    `- Les criteres d'acceptation sont entre ${String(ARCHITECT_BACKLOG_LIMITS.criteria.min)} et ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)}. Chacun est verifiable,`,
+    `- Les criteres d'acceptation sont entre ${String(ARCHITECT_BACKLOG_LIMITS.criteria.min)} et ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)}, et chacun fait`,
+    `  **au plus ${String(ARCHITECT_BACKLOG_LIMITS.criteria.length)} caracteres**. Un critere qui depasse fait refuser toute la`,
+    "  proposition, et rien n'est tronque pour la faire passer. Chacun est verifiable,",
     "  observable et specifique. « Le code est propre » n'est pas un critere.",
     "  Chacun declare aussi **comment** il se verifie : voir la section suivante.",
-    `- Le hors perimetre dit ce que l'implementeur ne doit pas faire. ${String(ARCHITECT_BACKLOG_LIMITS.outOfScope.max)} au maximum.`,
+    `- Le hors perimetre dit ce que l'implementeur ne doit pas faire. ${String(ARCHITECT_BACKLOG_LIMITS.outOfScope.max)} au maximum,`,
+    `  de ${String(ARCHITECT_BACKLOG_LIMITS.outOfScope.length)} caracteres chacun.`,
     "- `CRITICAL` est reserve a une urgence technique ou de securite reelle. La",
     "  priorite dit l'urgence, jamais l'ambition de la tache.",
     "",
     "Evite les doublons : deux taches de ton backlog ne doivent pas couvrir le meme",
     "travail, et aucune ne doit refaire ce qu'une tache existante couvre deja.",
+    "",
+    "## Une tache se suffit a elle-meme",
+    "",
+    "Celui qui implementera une tache **n'aura pas la conversation sous les yeux**,",
+    "et ne recevra ni le brief, ni le plan, ni la memoire du projet. Il recevra le",
+    "contrat de la tache, et le repository.",
+    "",
+    "Donc : **n'ecris jamais une exigence par renvoi.**",
+    "",
+    "```text",
+    "  refuse   « conforme au contrat d'import V1 »",
+    "  refuse   « les intitules exacts definis par le contrat »",
+    "  refuse   « la normalisation minimale prevue »",
+    "  attendu  « les colonnes requises sont N° d'Incident, Cree, Site et",
+    "           CI / Application, identifiees par intitule exact »",
+    "```",
+    "",
+    "Une formule comme « selon le contrat » decrit une exigence que personne ne peut",
+    "lire : elle a l'air precise et ne verifie rien. Quand une regle durable est",
+    "necessaire pour implementer ou verifier une tache, **ecris-la en toutes",
+    "lettres** dans son objectif, ses criteres d'acceptation ou son hors perimetre.",
+    "",
+    "### Recopie la regle exacte, jamais son resume",
+    "",
+    "Un resume affaiblit. Si la memoire dit qu'un numero d'incident presente",
+    "plusieurs fois dans un meme classeur fait rejeter **toutes** ses occurrences,",
+    "un critere qui dit « les doublons ne creent pas deux incidents » autorise a en",
+    "garder un : ce n'est plus la meme regle, et personne ne s'en apercevra avant la",
+    "recette.",
+    "",
+    "Verifie chaque critere ainsi : **un implementeur qui ne connait que cette tache",
+    "peut-il en deduire le comportement attendu, sans choix a faire ?** Si non, la",
+    "regle manque.",
+    "",
+    "### Un critere par comportement, pas une specification par critere",
+    "",
+    `Un critere fait au plus ${String(ARCHITECT_BACKLOG_LIMITS.criteria.length)} caracteres. Cette borne n'est pas une invitation a`,
+    "resumer : elle dit **comment repartir**. Une regle durable detaillee ne tient",
+    "pas dans un critere unique, et n'a aucune raison d'y tenir.",
+    "",
+    "```text",
+    "  refuse   1 critere qui empile structure, lignes ignorees, normalisation,",
+    "           doublons et semantique de mise a jour",
+    "  attendu  5 criteres, un par comportement observable, chacun exact",
+    "```",
+    "",
+    "**Un critere prouve un comportement coherent, et un seul.** Quand plusieurs",
+    "regles durables concernent la meme tache, repartis-les sur plusieurs criteres",
+    "plutot que de les concatener. Un contrat d'import se decoupe naturellement :",
+    "",
+    "- structure du fichier et colonnes requises ;",
+    "- lignes ignorees et lignes candidates ;",
+    "- normalisation du texte ;",
+    "- doublons ;",
+    "- creation, mise a jour, inchange ;",
+    "- champ facultatif absent contre cellule vide ;",
+    "- compte rendu de l'import.",
+    "",
+    "Le **contexte** et l'**objectif** de la tache portent ce qui est commun a",
+    "plusieurs criteres : le cadre, le vocabulaire, la raison d'etre. Un critere n'a",
+    "pas a rappeler ce que le contexte dit deja ; il enonce ce qui doit etre vrai.",
+    "",
+    "Chaque critere reste **verifiable independamment**, et reste **exact** : le",
+    "decoupage repartit les regles, il ne les affaiblit pas. « Toutes les",
+    "occurrences d'un numero duplique sont rejetees » peut devenir un critere a lui",
+    "seul, jamais « les doublons sont empeches ».",
+    "",
+    `Si les ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)} criteres ne suffisent pas, regroupe des comportements **voisins**`,
+    "sans changer leur sens — deux regles de normalisation dans un meme critere,",
+    "par exemple — plutot que d'en abandonner une ou de la rendre vague.",
+    "",
+    "### Ce que cela ne veut pas dire",
+    "",
+    "Ne recopie pas la memoire entiere dans chaque tache. Seulement ce dont **cette",
+    "tache** a besoin. Une regle d'import n'a rien a faire dans une tache",
+    "d'affichage, et les bornes de taille restent celles ci-dessus.",
+    "",
+    "Si une regle necessaire n'existe nulle part — ni dans le brief, ni dans le plan,",
+    "ni dans la memoire —, ne l'invente pas et ne renvoie pas a un contrat absent :",
+    "dis dans ton message qu'elle manque, et propose une tache qui l'etablit.",
     "",
     "## Documents",
     "",

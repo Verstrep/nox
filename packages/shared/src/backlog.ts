@@ -287,6 +287,65 @@ function refuse(field: string, message: string): ArchitectBacklogResult {
  * presque identiques auraient diverge au premier ajout de champ — et celle qui
  * aurait tort serait celle qui laisse passer.
  */
+/**
+ * Ce qu'un texte propose a de fautif, quand il l'est.
+ *
+ * `readProposedText` rend `null` pour trois causes distinctes — absent, vide,
+ * trop long — et l'appelant ne peut donc en nommer aucune. Le pilote reel l'a
+ * paye : « Un critere de Tache 2 est vide ou trop long » ne dit ni lequel, ni
+ * de combien, ni dans quel sens corriger.
+ *
+ * Ce type ne porte **jamais** le texte refuse. Une longueur, une borne et une
+ * position suffisent a corriger ; recopier le contenu ferait entrer du texte de
+ * projet dans un diagnostic, ce que HOTFIX-003 a exclu.
+ */
+export type ProposedTextRefusal = {
+  reason: "missing" | "empty" | "too_long";
+  /** Longueur observee apres normalisation. `0` quand rien n'a ete rendu. */
+  length: number;
+  max: number;
+};
+
+export type ProposedTextResult =
+  | { ok: true; text: string }
+  | { ok: false; refusal: ProposedTextRefusal };
+
+/**
+ * Lit un texte borne en nommant precisement ce qui cloche.
+ *
+ * Meme normalisation et memes bornes que `readProposedText` — c'est la meme
+ * lecture, qui rend simplement sa raison. Deux implementations finiraient par
+ * accepter l'une ce que l'autre refuse.
+ */
+export function readBoundedProposedText(value: unknown, max: number): ProposedTextResult {
+  if (typeof value !== "string") {
+    return { ok: false, refusal: { reason: "missing", length: 0, max } };
+  }
+  const trimmed = value.replace(/\r\n?/gu, "\n").trim();
+  if (trimmed === "") {
+    return { ok: false, refusal: { reason: "empty", length: 0, max } };
+  }
+  if (trimmed.length > max) {
+    return { ok: false, refusal: { reason: "too_long", length: trimmed.length, max } };
+  }
+  return { ok: true, text: trimmed };
+}
+
+/** Phrase de refus d'un texte borne, sans jamais citer le texte. */
+export function describeProposedTextRefusal(refusal: ProposedTextRefusal): string {
+  switch (refusal.reason) {
+    case "missing":
+      return "aucun texte n'a ete rendu.";
+    case "empty":
+      return "le texte rendu est vide.";
+    case "too_long":
+      return (
+        `too_long — ${String(refusal.length)} caracteres pour un maximum de ` +
+        `${String(refusal.max)}. Rien n'est tronque : decoupez en plusieurs entrees.`
+      );
+  }
+}
+
 export function readProposedText(value: unknown, max: number): string | null {
   if (typeof value !== "string") {
     return null;
@@ -871,21 +930,30 @@ export function readProposedTaskCriteria(
   }
 
   const criteria: ArchitectBacklogCriterionProposal[] = [];
-  for (const raw of value) {
+  for (const [index, raw] of value.entries()) {
+    // Le chemin nomme desormais le critere. « Un critere de Tache 2 » laissait
+    // chercher lequel parmi huit — et le pilote reel a du le deviner.
+    const criterionField = `${at("acceptanceCriteria")}.${String(index)}`;
+
     if (!isRecord(raw)) {
       return {
         ok: false,
-        refusal: { field: at("acceptanceCriteria"), message: `Un critere de ${label} n'est pas lisible.` },
+        refusal: { field: criterionField, message: `Le critere ${String(index + 1)} de ${label} n'est pas lisible.` },
       };
     }
 
-    const text = readProposedText(raw["text"], ARCHITECT_BACKLOG_LIMITS.criteria.length);
-    if (text === null) {
+    const read = readBoundedProposedText(raw["text"], ARCHITECT_BACKLOG_LIMITS.criteria.length);
+    if (!read.ok) {
       return {
         ok: false,
-        refusal: { field: at("acceptanceCriteria"), message: `Un critere de ${label} est vide ou trop long.` },
+        refusal: {
+          field: criterionField,
+          message:
+            `Critere ${String(index + 1)} de ${label} : ${describeProposedTextRefusal(read.refusal)}`,
+        },
       };
     }
+    const text = read.text;
     if (criteria.some((entry) => entry.text === text)) {
       continue;
     }
@@ -1233,7 +1301,10 @@ export function buildArchitectBacklogSchemaV2(): Record<string, unknown> {
     context: { type: ["string", "null"], description: "Pourquoi cette tache existe." },
     acceptanceCriteria: {
       type: "array",
-      description: `Criteres verifiables, de ${String(ARCHITECT_BACKLOG_LIMITS.criteria.min)} a ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)}, chacun classe.`,
+      description:
+        `Criteres verifiables, de ${String(ARCHITECT_BACKLOG_LIMITS.criteria.min)} a ${String(ARCHITECT_BACKLOG_LIMITS.criteria.max)}, chacun classe. ` +
+        `Le texte de chaque critere fait au plus ${String(ARCHITECT_BACKLOG_LIMITS.criteria.length)} caracteres : repartis une regle ` +
+        "detaillee sur plusieurs criteres plutot que de la concatener dans un seul.",
       items: criterion,
     },
     outOfScope: shortStrings("Ce que l'implementeur ne doit pas faire dans cette tache."),

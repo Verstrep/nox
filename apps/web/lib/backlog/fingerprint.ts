@@ -37,6 +37,8 @@ import type {
 } from "@nox/shared";
 import { createHash, type Hash } from "node:crypto";
 
+import { projectMemorySetRevision } from "../architect/fingerprint.ts";
+
 /** Version de l'algorithme, incluse dans chaque empreinte. */
 export const BACKLOG_FINGERPRINT_VERSION = "backlog-context/1";
 
@@ -110,7 +112,12 @@ export function backlogMemoryRevision(
 ): string {
   const hash = createHash("sha256");
   field(hash, "backlog-memory/1");
-  fieldList(hash, memories.map((memory) => memory.revision));
+  // Delegue depuis HOTFIX-005 : la mise a jour de projet avait besoin de la
+  // meme question — « la memoire a-t-elle change ? » — et deux calculs
+  // paralleles auraient fini par repondre differemment. L'etiquette locale
+  // reste, pour que les empreintes de planification deja enregistrees gardent
+  // leur valeur.
+  field(hash, projectMemorySetRevision(memories));
   return hash.digest("hex");
 }
 

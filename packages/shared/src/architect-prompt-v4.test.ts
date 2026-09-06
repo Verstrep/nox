@@ -22,7 +22,7 @@ import { describe, it } from "node:test";
 
 import {
   ARCHITECT_PROMPT_VERSION,
-  ARCHITECT_PROMPT_VERSION_V7,
+  ARCHITECT_PROMPT_VERSION_V11,
   ARCHITECT_SESSION_KIND,
   architectPromptVersion,
   renderArchitectPrompt,
@@ -105,17 +105,26 @@ function at(text: string, heading: string): number {
 }
 
 describe("version du prompt", () => {
-  it("une conversation projet sans replanification utilise architect/7", () => {
+  it("une conversation projet sans replanification utilise architect/11", () => {
     // `architect/4` jusqu'a HOTFIX-003. Les instructions de mise a jour du
     // projet annoncent desormais les bornes des listes et demandent de
     // consolider plutot que d'ajouter : un jeu de regles different merite une
     // etiquette differente, sans quoi une generation dirait avoir recu des
     // consignes qu'elle n'a pas vues.
     //
-    // Le **schema**, lui, n'a pas bouge : `architect/7` parle toujours le
-    // schema 3, et tout ce que ce fichier verifie du contrat reste vrai.
-    assert.equal(architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT), ARCHITECT_PROMPT_VERSION_V7);
-    assert.equal(renderArchitectPrompt(input()).version, ARCHITECT_PROMPT_VERSION_V7);
+    // `architect/9` depuis HOTFIX-005 : les instructions disent desormais ou
+    // vivent les regles produit precises — la memoire du projet — la ou
+    // `architect/7` les envoyait vers « les taches et la documentation du
+    // repository », qui n'existaient ni l'un ni l'autre au moment ou une regle
+    // est tranchee en conversation.
+    //
+    // Le schema bouge aussi cette fois, et porte sa propre etiquette : ce
+    // fichier verifie le prompt, `project-update.test.ts` verifie le contrat.
+    // `architect/11` depuis la reprise de HOTFIX-005 : les instructions disent
+    // desormais **par quel champ** une regle durable voyage. Le pilote reel
+    // avait annonce six entrees et rendu `projectUpdate: null`.
+    assert.equal(architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT), ARCHITECT_PROMPT_VERSION_V11);
+    assert.equal(renderArchitectPrompt(input()).version, ARCHITECT_PROMPT_VERSION_V11);
   });
 
   it("une session de conception de tache reste en architect/3", () => {

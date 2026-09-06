@@ -18,12 +18,12 @@ import {
   ARCHITECT_PROMPT_VERSION_V4,
   ARCHITECT_PROMPT_VERSION_V5,
   ARCHITECT_PROMPT_VERSION_V6,
-  ARCHITECT_PROMPT_VERSION_V7,
-  ARCHITECT_PROMPT_VERSION_V8,
+  ARCHITECT_PROMPT_VERSION_V11,
+  ARCHITECT_PROMPT_VERSION_V12,
   ARCHITECT_SESSION_KIND,
   ARCHITECT_TURN_SCHEMA_VERSION,
-  ARCHITECT_TURN_SCHEMA_VERSION_V3,
-  ARCHITECT_TURN_SCHEMA_VERSION_V4,
+  ARCHITECT_TURN_SCHEMA_VERSION_V5,
+  ARCHITECT_TURN_SCHEMA_VERSION_V6,
   ARCHITECT_TURN_STATE,
   PROJECT_UPDATE_ACTION,
   REPLAN_MODE,
@@ -83,7 +83,7 @@ const PROJECT_UPDATE = {
 
 function turn(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V4,
+    schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V6,
     state: ARCHITECT_TURN_STATE.CONTINUE,
     message: "Voici ce que je propose.",
     questions: [],
@@ -102,11 +102,11 @@ describe("version du contrat", () => {
     );
     assert.equal(
       architectTurnSchemaVersion(ARCHITECT_SESSION_KIND.PROJECT, false),
-      ARCHITECT_TURN_SCHEMA_VERSION_V3,
+      ARCHITECT_TURN_SCHEMA_VERSION_V5,
     );
     assert.equal(
       architectTurnSchemaVersion(ARCHITECT_SESSION_KIND.PROJECT, true),
-      ARCHITECT_TURN_SCHEMA_VERSION_V4,
+      ARCHITECT_TURN_SCHEMA_VERSION_V6,
     );
   });
 
@@ -123,11 +123,11 @@ describe("version du contrat", () => {
     // toujours pas les consignes de replanification.
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, false),
-      ARCHITECT_PROMPT_VERSION_V7,
+      ARCHITECT_PROMPT_VERSION_V11,
     );
     assert.equal(
       architectPromptVersion(ARCHITECT_SESSION_KIND.PROJECT, true),
-      ARCHITECT_PROMPT_VERSION_V8,
+      ARCHITECT_PROMPT_VERSION_V12,
     );
     // Aucune etiquette n'est reutilisee : les generations deja enregistrees se
     // relisent avec les regles qu'elles ont reellement recues.
@@ -136,8 +136,8 @@ describe("version du contrat", () => {
       ARCHITECT_PROMPT_VERSION_V4,
       ARCHITECT_PROMPT_VERSION_V5,
       ARCHITECT_PROMPT_VERSION_V6,
-      ARCHITECT_PROMPT_VERSION_V7,
-      ARCHITECT_PROMPT_VERSION_V8,
+      ARCHITECT_PROMPT_VERSION_V11,
+      ARCHITECT_PROMPT_VERSION_V12,
     ]);
     assert.equal(distinctes.size, 6);
   });
@@ -147,12 +147,12 @@ describe("schema strict du tour", () => {
   it("n'ouvre le champ replan qu'en version 4", () => {
     for (const schema of [
       buildArchitectTurnSchema(ARCHITECT_TURN_SCHEMA_VERSION),
-      buildArchitectTurnSchema(ARCHITECT_TURN_SCHEMA_VERSION_V3),
+      buildArchitectTurnSchema(ARCHITECT_TURN_SCHEMA_VERSION_V5),
     ]) {
       assert.equal((schema["required"] as string[]).includes("replan"), false);
     }
 
-    const v4 = buildArchitectTurnSchema(ARCHITECT_TURN_SCHEMA_VERSION_V4);
+    const v4 = buildArchitectTurnSchema(ARCHITECT_TURN_SCHEMA_VERSION_V6);
     assert.ok((v4["required"] as string[]).includes("replan"));
     assert.ok((v4["required"] as string[]).includes("projectUpdate"));
   });
@@ -160,7 +160,7 @@ describe("schema strict du tour", () => {
 
 describe("lecture d'un tour version 4", () => {
   it("lit un tour sans replanification", () => {
-    const result = readArchitectTurn(turn(), [], ARCHITECT_TURN_SCHEMA_VERSION_V4, SOURCE);
+    const result = readArchitectTurn(turn(), [], ARCHITECT_TURN_SCHEMA_VERSION_V6, SOURCE);
     assert.ok(result.ok);
     assert.equal(result.turn.replan.mode, REPLAN_MODE.UNCHANGED);
   });
@@ -169,7 +169,7 @@ describe("lecture d'un tour version 4", () => {
     const result = readArchitectTurn(
       turn({ replan: REPLAN }),
       [],
-      ARCHITECT_TURN_SCHEMA_VERSION_V4,
+      ARCHITECT_TURN_SCHEMA_VERSION_V6,
       SOURCE,
     );
     assert.ok(result.ok);
@@ -182,7 +182,7 @@ describe("lecture d'un tour version 4", () => {
     const result = readArchitectTurn(
       turn({ projectUpdate: PROJECT_UPDATE, replan: REPLAN }),
       [],
-      ARCHITECT_TURN_SCHEMA_VERSION_V4,
+      ARCHITECT_TURN_SCHEMA_VERSION_V6,
       SOURCE,
     );
     assert.ok(result.ok);
@@ -196,7 +196,7 @@ describe("lecture d'un tour version 4", () => {
     const result = readArchitectTurn(
       turn({ replan: REPLAN }),
       [],
-      ARCHITECT_TURN_SCHEMA_VERSION_V4,
+      ARCHITECT_TURN_SCHEMA_VERSION_V6,
       null,
     );
     assert.equal(result.ok, false);
@@ -212,7 +212,7 @@ describe("lecture d'un tour version 4", () => {
         },
       }),
       [],
-      ARCHITECT_TURN_SCHEMA_VERSION_V4,
+      ARCHITECT_TURN_SCHEMA_VERSION_V6,
       SOURCE,
     );
     assert.equal(result.ok, false);
@@ -223,7 +223,7 @@ describe("compatibilite historique", () => {
   it("lit un tour version 3 sans jamais voir de replanification", () => {
     const result = readArchitectTurn(
       {
-        schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V3,
+        schemaVersion: ARCHITECT_TURN_SCHEMA_VERSION_V5,
         state: ARCHITECT_TURN_STATE.CONTINUE,
         message: "Reponse historique.",
         questions: [],
@@ -234,7 +234,7 @@ describe("compatibilite historique", () => {
         replan: REPLAN,
       },
       [],
-      ARCHITECT_TURN_SCHEMA_VERSION_V3,
+      ARCHITECT_TURN_SCHEMA_VERSION_V5,
       SOURCE,
     );
 
@@ -263,7 +263,7 @@ describe("compatibilite historique", () => {
   });
 
   it("refuse un tour dont la version ne correspond pas a celle attendue", () => {
-    const result = readArchitectTurn(turn(), [], ARCHITECT_TURN_SCHEMA_VERSION_V3, SOURCE);
+    const result = readArchitectTurn(turn(), [], ARCHITECT_TURN_SCHEMA_VERSION_V5, SOURCE);
     assert.equal(result.ok, false);
   });
 });

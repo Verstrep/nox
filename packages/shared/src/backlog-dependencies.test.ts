@@ -277,9 +277,13 @@ describe("le contrat transmis demande explicitement la dependance", () => {
     availableDocuments: [],
   });
 
-  it("est etiquete backlog/3", () => {
+  it("est etiquete backlog/5", () => {
+    // `backlog/5` depuis la reprise de HOTFIX-005 : la borne des criteres est
+    // annoncee au fournisseur, et le decoupage lui est enseigne.
+    // Bumpe par HOTFIX-005. Les consignes de dependance que ce fichier verifie
+    // sont inchangees : c'est l'exigence de taches autoportantes qui s'ajoute.
     assert.equal(prompt.version, BACKLOG_PROMPT_VERSION);
-    assert.equal(prompt.version, "backlog/3");
+    assert.equal(prompt.version, "backlog/5");
   });
 
   it("dit qu'une dependance est un prerequis reel", () => {
