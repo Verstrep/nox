@@ -59,6 +59,7 @@ import type { RunnerResult } from "../runner/errors.ts";
 
 import { buildBootstrapContext, type BootstrapContext } from "./context.ts";
 import type { BootstrapBlocker } from "./display.ts";
+import type { BootstrapSourceRefusal } from "@nox/shared";
 
 /** Acces au runner, injecte plutot qu'importe : les tests n'en demarrent aucun. */
 export type BootstrapRepositoryPorts = {
@@ -87,7 +88,17 @@ export type BootstrapProjectInput = {
 
 export type BootstrapPreview =
   | { ok: true; context: BootstrapContext }
-  | { ok: false; blockers: BootstrapBlocker[] };
+  | {
+      ok: false;
+      blockers: BootstrapBlocker[];
+      /**
+       * Le champ canonique qui ne tient pas, lorsque c'est la cause.
+       *
+       * Distinct du blocage lui-meme : le blocage dit qu'on ne peut pas creer,
+       * celui-ci dit ou regarder.
+       */
+      sourceRefusal?: BootstrapSourceRefusal;
+    };
 
 /**
  * Preconditions verifiees **avant** toute lecture du repository.
@@ -135,7 +146,7 @@ export async function prepareBootstrapPreview(
     environment: input.environment,
   });
 
-  const context = buildBootstrapContext({
+  const built = buildBootstrapContext({
     projectName: input.projectName,
     tasks: input.tasks,
     objectives: input.objectives,
@@ -147,7 +158,14 @@ export async function prepareBootstrapPreview(
     memoryRevision: (memory: ArchitectPromptMemory) => projectMemoryRevision(memory),
   });
 
-  return { ok: true, context };
+  if (!built.ok) {
+    // Un etat produit qui ne tient pas dans son propre contrat d'amorcage. NOX
+    // ne cree pas la tache : elle aurait l'air complete, et c'est exactement ce
+    // qui a coute une review au premier pilote reel.
+    return { ok: false, blockers: ["source_oversized"], sourceRefusal: built.refusal };
+  }
+
+  return { ok: true, context: built.context };
 }
 
 /**
@@ -161,7 +179,12 @@ export type CreateBootstrapOutcome =
   /** Le contexte a change depuis l'apercu. */
   | { ok: false; reason: "stale" }
   /** Une precondition manque, et elle est nommee. */
-  | { ok: false; reason: "blocked"; blockers: BootstrapBlocker[] }
+  | {
+      ok: false;
+      reason: "blocked";
+      blockers: BootstrapBlocker[];
+      sourceRefusal?: BootstrapSourceRefusal;
+    }
   /** Le projet possede deja sa tache d'amorcage. */
   | { ok: false; reason: "already_exists" }
   | { ok: false; reason: "unknown_project" };
@@ -192,7 +215,12 @@ export async function createProjectBootstrapTask(
 
   const preview = await prepareBootstrapPreview(input, ports);
   if (!preview.ok) {
-    return { ok: false, reason: "blocked", blockers: preview.blockers };
+    return {
+      ok: false,
+      reason: "blocked",
+      blockers: preview.blockers,
+      sourceRefusal: preview.sourceRefusal,
+    };
   }
 
   if (preview.context.fingerprint !== expectedFingerprint) {

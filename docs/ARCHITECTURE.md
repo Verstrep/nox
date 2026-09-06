@@ -858,6 +858,73 @@ acceptait — et le troisieme pilote reel a lu les deux moities sur le meme ecra
 - **Le verdict est rejoue au moment d'ecrire.** `startTaskCorrection` reverifie l'historique dans sa
   transaction, et le runner recalcule branche, `HEAD` et empreinte avant le spawn.
 
+### 6.6 quinquies quater Source canonique et source de presentation
+
+Cinq natures de texte circulent dans NOX, et les confondre est ce que HOTFIX-007 corrige.
+
+```text
+etat canonique du projet        brief · plan de V1 · memoire active      jamais raccourci
+        ↓
+contrat deterministe            TASK-000 : objectif, contexte, criteres  jamais raccourci
+        ↓
+prompt d'execution              Run.prompt                               fige, jamais reecrit
+
+contexte borne d'un fournisseur apps/web/lib/architect/                  borne volontairement
+resume de presentation          cartes, inventaires, listes              raccourci librement
+```
+
+**La frontiere est structurelle.** Le rendu contractuel vit dans
+[packages/shared/src/bootstrap-source.ts](../packages/shared/src/bootstrap-source.ts), qui ne
+contient aucun raccourcisseur — un test lit sa source pour le verifier. Ses fonctions ne prennent
+aucune chaine, seulement les objets canoniques : il n'existe pas de parametre ou glisser un resume.
+Le raccourcisseur de presentation, lui, rend un type nominal `SummaryText` qu'aucune valeur
+canonique ne satisfait sans conversion explicite.
+
+**La borne du contexte se derive.** Elle vaut le budget metier du brief et du plan (16 Kio), plus
+celui de la memoire active (48 Kio), plus un majorant calcule du balisage, plus ce que les sections
+de presentation peuvent peser. Les deux budgets sont verifies separement, comme a l'ecriture. Un
+etat produit hors de ses bornes est **refuse en nommant le champ**, jamais coupe : `TASK-000` ne se
+cree pas avec une source dont NOX sait qu'elle est incomplete.
+
+**La fidelite se prouve.** `checkBootstrapSourceFidelity` verifie que chaque valeur canonique figure
+entiere dans le contexte **assemble** — pas dans un rendu refait pour l'occasion. C'est ce qui lui
+permettrait d'attraper une perte survenue apres les sections, comme la troncature globale qui a
+emporte cinq sections de consignes chez le premier pilote reel.
+
+**Le contexte borne des fournisseurs est intact.** HOTFIX-005 borne deliberement ce qui part chez
+l'Architecte, et HOTFIX-007 n'y touche pas : ce sont deux chemins distincts, et le second ne rend
+rien illimite chez le premier.
+
+### 6.6 quinquies quinquies Reparer le transport d'un amorcage deja cree
+
+```text
+Task.context (rendu de l'epoque)
+        ↓
+renderLegacyBootstrapSource(etat canonique d'aujourd'hui)   ← rejeu
+        ↓
+identique (a la troncature pres) ?
+        ↓ oui                                    ↓ non
+supplement de source integrale            refus nomme : source_changed
+        ↓
+prompt de correction humaine              la tache n'est pas modifiee
+```
+
+NOX n'enregistre aucun instantane de la source d'une `TASK-000`, et une colonne de provenance
+ajoutee aujourd'hui n'aiderait que les taches de demain. La preuve se fait donc par **rejeu** : le
+generateur etant pur, rejouer le rendu de l'epoque sur l'etat canonique actuel reproduit le texte
+stocke si, et seulement si, cet etat n'a pas bouge. La comparaison accepte qu'un des deux s'arrete
+plus tot — une troncature ne retire que des caracteres de fin — et refuse au premier caractere de
+difference.
+
+- **Cinq conditions cumulatives** : nature `BOOTSTRAP`, tache non `COMPLETED`, brief et plan
+  presents, contexte reproduit par le rejeu, et au moins une valeur canonique reellement absente.
+- **Le supplement ne renegocie rien.** Il porte la source, dit qu'il ne change ni l'objectif, ni les
+  criteres, ni le perimetre, et rappelle qu'aucune tache produit ne s'ouvre.
+- **L'historique reste historique.** `Run.prompt` n'est jamais reecrit ; la correction enregistre le
+  supplement qu'elle a **reellement** recu, dans son propre prompt.
+- **Un seul assemblage.** Les trois pages de preparation et `correction-launch.ts` passent par
+  `buildCorrectionPromptFor` : ce que l'ecran affiche, empreinte comprise, est ce qui part.
+
 ### 6.6 sexies Diagnostic d'une terminaison
 
 ```text

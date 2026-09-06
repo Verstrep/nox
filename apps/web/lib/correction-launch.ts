@@ -72,7 +72,7 @@ import { loadCorrectionContext } from "./correction-cycle.ts";
 import { resumeCandidateFrom } from "./failure-correction.ts";
 import { correctionRefusalMessage, resumeRefusalMessage } from "./correction-display.ts";
 import { buildCorrectionContext } from "./correction-evidence.ts";
-import { buildCorrectionPrompt } from "./run-prompt.ts";
+import { buildCorrectionPromptFor } from "./correction-prompt.ts";
 import { claudeCorrectionPreflight, startClaudeRun } from "./runner/client.ts";
 import { describeInfrastructureFailure, describeRunnerFailure } from "./runner/errors.ts";
 import { unresolvedDependenciesMessage } from "./task-dependencies.ts";
@@ -274,12 +274,18 @@ export async function launchCorrection(
         : null,
   });
 
-  const { prompt, sha256 } = buildCorrectionPrompt({
+  // La meme fonction que celle des trois pages de preparation. Elles affichent
+  // le prompt et son empreinte ; si l'assemblage divergeait d'un champ — le
+  // supplement de source, par exemple —, l'ecran montrerait un texte et la
+  // session en recevrait un autre.
+  const { prompt, sha256 } = await buildCorrectionPromptFor(db, {
     task: context.task,
+    project,
     sourceRunCode: resume.runCode,
     feedback: input.humanFeedback ?? null,
     contract: built.contract,
     evidence: built.evidence,
+    environment: process.env,
   });
 
   const runnerRunId = randomUUID();

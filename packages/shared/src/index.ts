@@ -98,17 +98,49 @@ export type {
 } from "./repository-inspection.js";
 
 export {
+  BOOTSTRAP_PRESENTATION_LIMITS,
   BOOTSTRAP_SPEC_LIMITS,
   BOOTSTRAP_SPEC_VERSION,
   BOOTSTRAP_TASK_TITLE,
   buildBootstrapTaskSpec,
+  summarizeForDisplay,
 } from "./bootstrap.js";
 
 export type {
   BootstrapSpecInput,
+  BootstrapSpecOutcome,
   BootstrapTaskSpec,
   BootstrapUpcomingTask,
+  SummaryText,
 } from "./bootstrap.js";
+
+export {
+  BOOTSTRAP_SOURCE_HEADINGS,
+  BOOTSTRAP_SOURCE_LIMITS,
+  BOOTSTRAP_SOURCE_VERSION,
+  BOOTSTRAP_SUPPLEMENT_HEADING,
+  renderBootstrapSourceSupplement,
+  bootstrapSourceChars,
+  canonicalBootstrapValues,
+  checkBootstrapSourceFidelity,
+  renderBootstrapBriefSection,
+  renderBootstrapMemorySection,
+  renderBootstrapPlanSection,
+  renderBootstrapSource,
+} from "./bootstrap-source.js";
+
+export type {
+  BootstrapSourceInput,
+  BootstrapSourceRefusal,
+  BootstrapSourceRefusalCode,
+} from "./bootstrap-source.js";
+
+export {
+  LEGACY_BOOTSTRAP_LIMITS,
+  legacyBootstrapSourceMatches,
+  legacyTruncate,
+  renderLegacyBootstrapSource,
+} from "./bootstrap-legacy-source.js";
 
 export { renderTaskMarkdown } from "./task-markdown.js";
 export type { TaskMarkdownDependency } from "./task-markdown.js";

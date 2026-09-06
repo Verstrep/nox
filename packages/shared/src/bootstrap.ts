@@ -44,6 +44,14 @@ import {
 import { TASK_PRIORITY, type TaskPriority } from "./tasks.js";
 import type { ArchitectPromptMemory } from "./project-memory.js";
 import type { ArchitectPromptBrief, ArchitectPromptV1Plan } from "./project-plan.js";
+import {
+  BOOTSTRAP_SOURCE_LIMITS,
+  checkBootstrapSourceFidelity,
+  renderBootstrapBriefSection,
+  renderBootstrapMemorySection,
+  renderBootstrapPlanSection,
+  type BootstrapSourceRefusal,
+} from "./bootstrap-source.js";
 
 /**
  * Version du constructeur de specification.
@@ -62,24 +70,100 @@ export const BOOTSTRAP_SPEC_VERSION = "bootstrap/1";
 export const BOOTSTRAP_TASK_TITLE =
   "Bootstrap project repository and foundational documentation";
 
-/** Bornes de la specification produite. */
+/**
+ * Bornes des sections de **presentation**.
+ *
+ * Elles situent la tache sans l'engager : le nom du projet, et l'inventaire des
+ * taches a venir donne pour etre evite, jamais fait. Les raccourcir ne coute
+ * rien — contrairement au brief, au plan et a la memoire, que `TASK-000` a la
+ * charge de materialiser fidelement et qui vivent desormais dans
+ * `bootstrap-source.ts`.
+ */
+export const BOOTSTRAP_PRESENTATION_LIMITS = {
+  projectName: 600,
+  upcomingTasks: { max: 30, titleLength: 200, objectiveLength: 300 },
+} as const;
+
+/**
+ * Texte raccourci pour l'affichage.
+ *
+ * Type nominal, et c'est tout son interet : un `string` ordinaire ne s'y
+ * convertit pas. Un champ declare `SummaryText` ne peut donc recevoir qu'une
+ * valeur passee par `summarizeForDisplay`, et le compilateur refuse d'y ranger
+ * une valeur canonique sans qu'on l'ait explicitement resumee.
+ *
+ * L'autre sens — glisser un resume la ou une source canonique est attendue —
+ * est ferme differemment : les rendus contractuels ne prennent aucune chaine,
+ * seulement les objets canoniques eux-memes.
+ */
+export type SummaryText = string & { readonly __summary: unique symbol };
+
+/**
+ * Raccourcit une valeur destinee a l'affichage, et signale la coupe.
+ *
+ * Le seul raccourcisseur de l'amorcage. Ce qu'il produit ne peut plus etre
+ * confondu avec une source : le type le refuse.
+ */
+export function summarizeForDisplay(value: string, limit: number): SummaryText {
+  const trimmed = value.trim();
+  if (trimmed.length <= limit) {
+    return trimmed as SummaryText;
+  }
+  return `${trimmed.slice(0, Math.max(0, limit - 1)).trimEnd()}…` as SummaryText;
+}
+
+/**
+ * Budget des sections de **presentation** du contexte.
+ *
+ * Elles situent la tache : nom du projet, inventaire des taches a venir, etat
+ * du repository, consignes fixes. Chacune est deja bornee individuellement ;
+ * cette somme majore ce qu'elles peuvent peser ensemble.
+ */
+const PRESENTATION_BUDGET =
+  BOOTSTRAP_PRESENTATION_LIMITS.projectName +
+  BOOTSTRAP_PRESENTATION_LIMITS.upcomingTasks.max *
+    (BOOTSTRAP_PRESENTATION_LIMITS.upcomingTasks.titleLength +
+      BOOTSTRAP_PRESENTATION_LIMITS.upcomingTasks.objectiveLength +
+      128) +
+  // Etat du repository et consignes fixes : du texte ecrit par NOX, dont la
+  // seule part variable est l'inventaire deja borne par l'inspection.
+  16 * 1024;
+
+/**
+ * Bornes de la specification produite.
+ *
+ * `context` n'est plus un chiffre choisi. C'est la somme de ce que l'etat
+ * produit **valide** peut peser — bornes metier du brief, du plan et de la
+ * memoire, plus le balisage du rendu — et de ce que les sections de
+ * presentation peuvent ajouter. Un projet dans ses bornes tient donc toujours,
+ * et un projet qui n'y tient pas est refuse par son nom plutot que coupe.
+ *
+ * L'ancienne valeur valait douze mille caracteres. Le premier pilote reel l'a
+ * atteinte : cinq sections de consignes — etat du repository, preservation,
+ * fondation technique, installation, responsabilite des documents — n'ont
+ * jamais atteint Claude, et rien ne l'a signale.
+ */
 export const BOOTSTRAP_SPEC_LIMITS = {
   objective: 1_200,
-  context: 12_000,
+  context: BOOTSTRAP_SOURCE_LIMITS.total + PRESENTATION_BUDGET,
   outOfScope: 2_000,
   criteria: { max: 16, length: 400 },
   documents: { max: 8 },
-  memories: { max: 20, length: 400 },
-  upcomingTasks: { max: 30, titleLength: 200, objectiveLength: 300 },
-  field: 600,
-  list: { max: 12, length: 300 },
+  upcomingTasks: BOOTSTRAP_PRESENTATION_LIMITS.upcomingTasks,
+  field: BOOTSTRAP_PRESENTATION_LIMITS.projectName,
 } as const;
 
-/** Une tache a venir, telle que l'amorcage a besoin de la connaitre. */
+/**
+ * Une tache a venir, telle que l'amorcage a besoin de la connaitre.
+ *
+ * Titre et objectif sont declares `SummaryText` : ils sont donnes pour situer
+ * le travail futur, pas pour etre materialises. Le type interdit d'y ranger une
+ * valeur canonique sans l'avoir explicitement resumee.
+ */
 export type BootstrapUpcomingTask = {
   code: string;
-  title: string;
-  objective: string;
+  title: SummaryText;
+  objective: SummaryText;
   priority: string;
   status: string;
 };
@@ -116,20 +200,31 @@ export type BootstrapTaskSpec = {
   shape: RepositoryShape;
 };
 
-function truncate(value: string, limit: number): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= limit) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
-function bulletList(values: readonly string[], limit: number, length: number): string[] {
+/**
+ * Borne une liste de criteres ecrits par NOX lui-meme.
+ *
+ * Ces textes sont des constantes de ce module : la borne ne les coupe jamais,
+ * elle garantit seulement qu'une evolution du texte ne peut pas deriver sans
+ * qu'un test le voie.
+ */
+function boundedCriteria(values: readonly string[], limit: number, length: number): string[] {
   return values
-    .map((value) => truncate(value, length))
+    .map((value) => summarizeForDisplay(value, length) as string)
     .filter((value) => value !== "")
     .slice(0, limit);
 }
+
+/**
+ * Ce que la construction rend.
+ *
+ * Une union, et non une specification eventuellement incomplete. Un contrat
+ * d'amorcage tronque a l'air complet — c'est exactement ce qui l'a rendu si
+ * couteux chez le premier pilote —, donc l'appelant ne peut pas l'obtenir sans
+ * avoir traite le refus.
+ */
+export type BootstrapSpecOutcome =
+  | { ok: true; spec: BootstrapTaskSpec }
+  | { ok: false; refusal: BootstrapSourceRefusal };
 
 function block(title: string, lines: readonly string[]): string {
   return [`### ${title}`, "", ...lines].join("\n");
@@ -140,72 +235,19 @@ function listLines(values: readonly string[]): string[] {
 }
 
 /**
- * Resume du brief produit.
+ * Les trois sections contractuelles, deleguees au rendu integral.
  *
- * Repris tel quel, borne champ par champ : l'amorcage doit savoir ce que le
- * projet cherche a faire, sans recopier des pages de specification.
+ * Elles vivaient ici, bornees champ par champ « pour ne pas recopier des pages
+ * de specification ». C'etait exactement l'erreur : ce que `TASK-000` doit
+ * recopier dans `docs/PROJECT_BRIEF.md` et `docs/V1_SCOPE.md`, elle doit
+ * d'abord le recevoir en entier.
  */
-function briefBlock(brief: ArchitectPromptBrief | null): string {
-  if (brief === null) {
-    return block("Brief produit", ["Non defini."]);
-  }
-  const { field: fieldLimit, list } = BOOTSTRAP_SPEC_LIMITS;
-  return block("Brief produit", [
-    `Resume : ${truncate(brief.summary, fieldLimit)}`,
-    `Probleme : ${truncate(brief.problem, fieldLimit)}`,
-    `Utilisateurs vises : ${truncate(brief.targetUsers, fieldLimit)}`,
-    `Resultat attendu : ${truncate(brief.desiredOutcome, fieldLimit)}`,
-    "",
-    "Objectifs :",
-    ...listLines(bulletList(brief.goals, list.max, list.length)),
-    "",
-    "Hors objectifs :",
-    ...listLines(bulletList(brief.nonGoals, list.max, list.length)),
-  ]);
-}
-
-/**
- * Resume du plan de V1.
- *
- * La direction technique y figure telle quelle, y compris lorsqu'elle laisse
- * plusieurs options ouvertes — c'est precisement l'information dont l'amorcage
- * a besoin pour savoir s'il lui revient de trancher.
- */
-function planBlock(plan: ArchitectPromptV1Plan | null): string {
-  if (plan === null) {
-    return block("Plan de V1", ["Non defini."]);
-  }
-  const { field: fieldLimit, list } = BOOTSTRAP_SPEC_LIMITS;
-  return block("Plan de V1", [
-    `Objectif de V1 : ${truncate(plan.goal, fieldLimit)}`,
-    `Direction technique : ${truncate(plan.technicalDirection, fieldLimit)}`,
-    "",
-    "Dans le perimetre :",
-    ...listLines(bulletList(plan.inScope, list.max, list.length)),
-    "",
-    "Hors perimetre :",
-    ...listLines(bulletList(plan.outOfScope, list.max, list.length)),
-    "",
-    "Etapes :",
-    ...listLines(bulletList(plan.milestones, list.max, list.length)),
-  ]);
-}
-
-function memoryBlock(memories: readonly ArchitectPromptMemory[]): string {
-  if (memories.length === 0) {
-    return block("Memoire du projet", ["Aucune entree active."]);
-  }
-  const { memories: limits } = BOOTSTRAP_SPEC_LIMITS;
-  const lines = memories.slice(0, limits.max).map((memory) => {
-    const rationale = memory.rationale === null ? "" : ` (${truncate(memory.rationale, 200)})`;
-    return `- ${memory.code} · ${memory.category} · ${truncate(memory.title, 200)} : ${truncate(memory.content, limits.length)}${rationale}`;
-  });
-  return block("Memoire du projet", [
-    "Decisions, contraintes et conventions enregistrees explicitement. Elles",
-    "s'appliquent des l'amorcage.",
-    "",
-    ...lines,
-  ]);
+function sourceSections(input: BootstrapSpecInput): string[] {
+  return [
+    renderBootstrapBriefSection(input.brief),
+    renderBootstrapPlanSection(input.v1Plan),
+    renderBootstrapMemorySection(input.memories),
+  ];
 }
 
 /**
@@ -219,9 +261,11 @@ function upcomingBlock(tasks: readonly BootstrapUpcomingTask[]): string {
   if (tasks.length === 0) {
     return block("Taches produit a venir", ["Aucune tache enregistree."]);
   }
-  const { upcomingTasks: limits } = BOOTSTRAP_SPEC_LIMITS;
+  const { upcomingTasks: limits } = BOOTSTRAP_PRESENTATION_LIMITS;
+  // Titre et objectif sont deja resumes par l'appelant : ce sont des
+  // `SummaryText`, et les reraccourcir ici les couperait deux fois.
   const lines = tasks.slice(0, limits.max).map((task) => {
-    return `- ${task.code} · ${task.priority} · ${task.status} · ${truncate(task.title, limits.titleLength)} — ${truncate(task.objective, limits.objectiveLength)}`;
+    return `- ${task.code} · ${task.priority} · ${task.status} · ${task.title} — ${task.objective}`;
   });
   return block("Taches produit a venir", [
     "Ces taches sont deja enregistrees et seront executees **apres** celle-ci.",
@@ -273,7 +317,7 @@ function repositoryBlock(inspection: RepositoryInspection, shape: RepositoryShap
  * la moindre fonctionnalite du backlog.
  */
 function buildObjective(): string {
-  return truncate(
+  return summarizeForDisplay(
     [
       "Etablir une fondation de repository minimale et executable, alignee sur la V1",
       "validee, et materialiser la documentation fondamentale du projet — sans",
@@ -404,19 +448,29 @@ function documentOwnershipLines(): string[] {
  * Contexte de la tache.
  *
  * Il porte l'etat structure du projet, la memoire, les taches a venir et l'etat
- * du repository — borne, et dans un ordre fixe.
+ * du repository, dans un ordre fixe.
+ *
+ * ## Il n'est plus tronque
+ *
+ * La derniere ligne coupait l'assemblage a douze mille caracteres. Chez le
+ * premier pilote reel, cette coupe est tombee au milieu de l'inventaire des
+ * taches a venir : les cinq sections suivantes — etat du repository, consignes
+ * de preservation, choix de la pile, installation, responsabilite de chaque
+ * document — ne sont jamais arrivees a Claude Code, et rien ne l'a dit.
+ *
+ * Ce qui la remplace n'est pas un seuil plus large : c'est l'absence de seuil
+ * ici, et un refus nomme lorsque l'etat produit sort de ses propres bornes
+ * metier.
  */
 function buildContext(input: BootstrapSpecInput, shape: RepositoryShape): string {
   const sections = [
     block("Ce que cette tache est", [
-      `Projet : ${truncate(input.projectName, BOOTSTRAP_SPEC_LIMITS.field)}`,
+      `Projet : ${summarizeForDisplay(input.projectName, BOOTSTRAP_SPEC_LIMITS.field)}`,
       "",
       "Cette tache prepare le repository pour les taches produit qui suivront.",
       "Elle ne livre aucune fonctionnalite de la V1.",
     ]),
-    briefBlock(input.brief),
-    planBlock(input.v1Plan),
-    memoryBlock(input.memories),
+    ...sourceSections(input),
     upcomingBlock(input.upcomingTasks),
     repositoryBlock(input.inspection, shape),
     block("Inspecter avant de modifier", preservationLines(shape)),
@@ -450,7 +504,7 @@ function buildContext(input: BootstrapSpecInput, shape: RepositoryShape): string
     ]),
   ];
 
-  return truncate(sections.join("\n\n"), BOOTSTRAP_SPEC_LIMITS.context);
+  return sections.join("\n\n");
 }
 
 /**
@@ -517,7 +571,11 @@ function buildCriteria(
     "Aucun commit et aucun push n'ont ete effectues.",
   );
 
-  return bulletList(criteria, BOOTSTRAP_SPEC_LIMITS.criteria.max, BOOTSTRAP_SPEC_LIMITS.criteria.length);
+  return boundedCriteria(
+    criteria,
+    BOOTSTRAP_SPEC_LIMITS.criteria.max,
+    BOOTSTRAP_SPEC_LIMITS.criteria.length,
+  );
 }
 
 /** Ce que l'implementeur ne doit pas faire. */
@@ -543,7 +601,7 @@ function buildOutOfScope(input: BootstrapSpecInput): string {
     "- Deployer, publier ou configurer une infrastructure d'hebergement.",
   );
 
-  return truncate(lines.join("\n"), BOOTSTRAP_SPEC_LIMITS.outOfScope);
+  return summarizeForDisplay(lines.join("\n"), BOOTSTRAP_SPEC_LIMITS.outOfScope);
 }
 
 /**
@@ -588,21 +646,36 @@ function buildDocumentReferences(inspection: RepositoryInspection): string[] {
  * les deux est exactement l'erreur qui a produit, au premier run reel, un
  * repository livre sans dependances installees.
  */
-export function buildBootstrapTaskSpec(input: BootstrapSpecInput): BootstrapTaskSpec {
+export function buildBootstrapTaskSpec(input: BootstrapSpecInput): BootstrapSpecOutcome {
   const shape = classifyRepository(input.inspection);
+  const context = buildContext(input, shape);
 
-  return {
+  // La fidelite se prouve sur le contexte **assemble**, pas sur un rendu refait
+  // pour l'occasion : c'est le texte qui sera enregistre dans la tache qui est
+  // examine, et c'est ce qui permettrait d'attraper une perte survenue apres
+  // les sections elles-memes.
+  const refusal = checkBootstrapSourceFidelity(
+    { brief: input.brief, v1Plan: input.v1Plan, memories: input.memories },
+    context,
+  );
+  if (refusal !== null) {
+    return { ok: false, refusal };
+  }
+
+  const spec: BootstrapTaskSpec = {
     version: BOOTSTRAP_SPEC_VERSION,
     title: BOOTSTRAP_TASK_TITLE,
     // L'amorcage precede tout le reste : rien d'autre ne peut avancer avant.
     // `CRITICAL` reste reserve a une urgence technique ou de securite reelle.
     priority: TASK_PRIORITY.HIGH,
     objective: buildObjective(),
-    context: buildContext(input, shape),
+    context,
     acceptanceCriteria: buildCriteria(input, shape),
     outOfScope: buildOutOfScope(input),
     documentReferences: buildDocumentReferences(input.inspection),
     validationCommands: [],
     shape,
   };
+
+  return { ok: true, spec };
 }

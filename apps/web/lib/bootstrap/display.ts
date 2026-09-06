@@ -64,7 +64,8 @@ export type BootstrapBlocker =
   | "brief_missing"
   | "plan_missing"
   | "backlog_missing"
-  | "repository_unreachable";
+  | "repository_unreachable"
+  | "source_oversized";
 
 export function bootstrapBlockerMessage(blocker: BootstrapBlocker): string {
   switch (blocker) {
@@ -76,8 +77,23 @@ export function bootstrapBlockerMessage(blocker: BootstrapBlocker): string {
       return "Applied V1 backlog missing — generez puis appliquez un backlog : l'amorcage prepare le repository pour ces taches-la.";
     case "repository_unreachable":
       return "Repository unreachable — NOX n'a pas pu inspecter le repository. Demarrez le runner, puis rechargez.";
+    case "source_oversized":
+      return (
+        "Project source too large — l'etat produit valide ne tient pas dans le contrat " +
+        "d'amorcage. NOX refuse de creer une tache qui ne transporterait qu'une partie du " +
+        "brief, du plan ou de la memoire : reduisez-les, puis rechargez."
+      );
   }
 }
+
+/**
+ * Ce que le refus de fidelite dit reellement, champ compris.
+ *
+ * Le libelle generique ci-dessus sert la liste ; celui-ci sert la page, qui a
+ * la place de nommer le champ en cause. Un refus qui ne dit pas ou regarder
+ * envoie relire six ecrans.
+ */
+export const BOOTSTRAP_SOURCE_REFUSAL_TITLE = "Source d'amorcage non transportable";
 
 /** L'amorcage annonce ce qu'il ne coute pas : c'est une information utile. */
 export const BOOTSTRAP_FREE_NOTICE =

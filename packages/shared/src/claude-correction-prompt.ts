@@ -159,6 +159,15 @@ export type CorrectionPromptInput = {
    */
   contract?: string | null;
   /**
+   * Source canonique restituee, pour un amorcage genere par un rendu lossy.
+   *
+   * `null` dans l'immense majorite des corrections, et c'est l'etat normal :
+   * une tache dont la source a ete transportee entierement n'a rien a
+   * restituer. Deja rendu par `renderBootstrapSourceSupplement`, qui seul
+   * decide de ce qu'il contient — ce module assemble, il ne compose pas.
+   */
+  sourceSupplement?: string | null;
+  /**
    * Preuves d'echec obtenues par NOX, deja rendues et bornees.
    *
    * C'est ce que l'utilisateur n'a plus a recopier a la main.
@@ -235,6 +244,14 @@ export function renderClaudeCorrectionPrompt(input: CorrectionPromptInput): stri
   const contract = (input.contract ?? "").trim();
   if (contract !== "") {
     blocks.push(contract);
+  }
+
+  // Juste apres le contrat gele, et avant les preuves : c'est de la source, pas
+  // un constat. Le placer parmi les preuves laisserait croire que NOX a observe
+  // quelque chose, alors qu'il restitue ce qu'il avait omis d'envoyer.
+  const supplement = (input.sourceSupplement ?? "").trim();
+  if (supplement !== "") {
+    blocks.push(supplement);
   }
 
   const evidence = (input.evidence ?? "").trim();

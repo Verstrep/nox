@@ -95,6 +95,15 @@ export default async function BootstrapPreviewPage({
               </li>
             ))}
           </ul>
+
+          {preview.sourceRefusal === undefined ? null : (
+            <p className="mt-4 text-sm leading-relaxed text-zinc-400">
+              <span className="font-mono text-xs text-zinc-300">
+                {preview.sourceRefusal.field}
+              </span>{" "}
+              — {preview.sourceRefusal.message}
+            </p>
+          )}
         </SectionCard>
       </main>
     );
@@ -162,6 +171,16 @@ export default async function BootstrapPreviewPage({
                 ))}
               </ul>
             )}
+          </Field>
+
+          <Field label={`Contexte transmis (${String(spec.context.length)} caracteres)`}>
+            <p className="mb-2 text-xs leading-relaxed text-zinc-500">
+              Le brief, le plan de V1 et la memoire active y figurent <em>entiers</em>. C&apos;est ce
+              texte exact que la tache portera, et que Claude Code recevra.
+            </p>
+            <pre className="max-h-96 overflow-auto rounded-md border border-zinc-800 bg-zinc-950/60 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap text-zinc-300">
+              {spec.context}
+            </pre>
           </Field>
 
           <Field label="Commandes de validation">

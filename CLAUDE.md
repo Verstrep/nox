@@ -1456,3 +1456,55 @@ doit le dire explicitement et la justifier.
 - **Une precondition tenue ne s'affiche jamais comme un blocage.** Une tache `READY` laissee par un
   `Retry` avorte porte son propre libelle — « Legacy Retry left task Ready without starting a
   run » — parce que « Task is in Failed » y serait faux sur le statut **et** sur le verdict.
+
+### 8.28 Fidelite de la source d'un amorcage
+
+- **Cinq natures de texte, et une seule qui ne se raccourcit jamais.** L'etat canonique du projet et
+  le contrat deterministe qui le transporte sont **contractuels** : ils ne sont ni tronques, ni
+  suivis de points de suspension. Le contexte borne d'un fournisseur, les resumes de presentation et
+  les prompts historiques ont chacun leur regle, et aucune n'est celle-la. Les confondre est
+  l'erreur que ce paragraphe existe pour empecher.
+- **Ce que `TASK-000` doit recopier, elle doit d'abord le recevoir en entier.** Le brief produit, le
+  plan de V1 et chaque entree de memoire active entrent dans son contrat integralement — contenu
+  **et** justification, car une regle dont on ignore la raison se contourne au premier obstacle. Le
+  critere « restituer fidelement le brief et le plan valides » n'est approuvable que si c'est vrai.
+- **Une liste coupee ne se voit pas.** Une troncature laisse un point de suspension ; six elements
+  de perimetre supprimes au douzieme ne laissent rien. C'est le plus dangereux des deux, et c'est
+  celui qui a fait perdre a un pilote reel un tiers de son perimetre de V1 sans que personne ne le
+  remarque.
+- **La separation est structurelle, pas conventionnelle.** Le rendu contractuel vit dans
+  `bootstrap-source.ts`, qui ne contient aucun raccourcisseur — un test lit sa source. Ses fonctions
+  ne prennent aucune chaine, seulement les objets canoniques : il n'y a pas de parametre ou glisser
+  un resume. Et `summarizeForDisplay` rend un type nominal qu'aucune valeur canonique ne satisfait.
+- **Une borne se derive des bornes metier, ou elle se remplace par un refus.** Elever un seuil
+  arbitraire deplace le probleme d'un pilote au suivant. Une donnee valide au sens des bornes
+  d'ecriture — 16 Kio pour le brief et le plan, 48 Kio pour la memoire active — doit survivre a sa
+  materialisation, et les deux budgets se verifient **separement**, comme a l'ecriture.
+- **Un etat produit hors contrat est refuse en le nommant, jamais coupe.** La construction rend une
+  union, pas une specification eventuellement incomplete : un contrat d'amorcage tronque a l'air
+  complet, et c'est exactement ce qui le rend couteux. Le refus cite des nombres, jamais le texte.
+- **La fidelite est prouvee sur le contexte assemble.** Chaque valeur canonique doit y figurer
+  entiere, verifiee sur le texte qui sera **enregistre** et non sur un rendu refait pour l'occasion.
+  Une comparaison octet a octet du Markdown serait fausse : le rendu ajoute legitimement des titres.
+- **Le contexte borne des fournisseurs reste borne.** HOTFIX-005 le veut ainsi, et rendre la source
+  d'amorcage integrale ne rend rien illimite chez l'Architecte : ce sont deux chemins distincts.
+- **Reparer un transport n'est pas rouvrir un contrat.** Une tache d'amorcage non terminee, dont
+  l'etat produit n'a pas bouge, recoit la source canonique dans le prompt de sa correction humaine.
+  La tache n'est pas modifiee, ses criteres non plus, et les prompts des executions passees restent
+  des faits historiques que rien ne reecrit.
+- **La preuve se fait par rejeu, pas par une colonne.** Le generateur est pur : rejouer le rendu de
+  l'epoque sur l'etat canonique d'aujourd'hui reproduit le texte stocke si, et seulement si, cet
+  etat n'a pas bouge. Une colonne de provenance ajoutee maintenant n'aiderait que les taches de
+  demain — et laisserait sans recours la seule qui en ait besoin.
+- **Les cinq conditions sont cumulatives, et les refus disent des choses differentes.**
+  `source_changed` dit que NOX a regarde et que le projet a evolue ; `not_generated` dit que ce
+  contexte ne vient pas de ce generateur ; `already_complete` dit qu'il n'y a rien a reparer. Un
+  amorcage `COMPLETED` n'est jamais repare : il a ete accepte tel qu'il etait.
+- **Le supplement se dit lui-meme.** Il annonce que le texte historique est incomplet, ce qu'il
+  restitue, et ce qu'il ne change pas. Sans cela, l'agent verrait deux versions du meme plan sans
+  raison de preferer la seconde — et pourrait s'arreter sur une contradiction, ce qui est
+  exactement ce qu'un pilote reel a fait, a juste titre.
+- **Le prompt de correction s'assemble a un seul endroit.** Les trois pages de preparation
+  affichent le prompt **et son empreinte** ; une surface qui assemblerait ses entrees a la main
+  finirait par oublier un champ, et l'ecran montrerait un texte pendant que la session en recevrait
+  un autre. C'est `ResumeCandidate` de HOTFIX-006, sur un autre objet.

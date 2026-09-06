@@ -1557,3 +1557,53 @@ reste est vérifié par des tests déterministes ; celle-ci demande un processus
 
 Voir [D-420](DECISIONS.md), [D-421](DECISIONS.md), [D-422](DECISIONS.md), [D-423](DECISIONS.md),
 [D-424](DECISIONS.md), [D-425](DECISIONS.md), [D-426](DECISIONS.md), [D-427](DECISIONS.md).
+
+
+## HOTFIX-007 — La source d'amorçage arrivait tronquée
+
+Le premier pilote réel a produit un `docs/V1_SCOPE.md` dont la direction technique s'arrêtait sur
+`… et applique u…`. Claude n'avait pas fauté : il avait recopié fidèlement ce que la tâche lui
+donnait, puis **refusé d'inventer la suite**, et l'avait signalé dans son compte rendu.
+
+La perte venait de NOX, et elle avait trois formes distinctes sur la même tâche :
+
+```text
+plan.technicalDirection   653 caractères  → coupée à 600, avec un « … »
+plan.inScope              18 éléments     → 12 conservés, 6 disparus sans trace
+mémoire (5 entrées sur 6) 445 à 893 car.  → coupées à 400
+contexte entier           ~14 000 car.    → coupé à 11 999
+```
+
+Le deuxième cas est le plus dangereux : une troncature laisse un point de suspension, une liste
+coupée à son douzième élément ne laisse rien. Le quatrième l'est presque autant — cinq sections de
+consignes (état du repository, préservation, choix de la pile, installation, responsabilité de
+chaque document) ne sont **jamais arrivées** à Claude Code.
+
+### Ce qui a changé
+
+Le rendu de ce qui est contractuel — brief, plan de V1, mémoire active — vit désormais dans un
+module qui ne contient aucun raccourcisseur, et dont les fonctions ne prennent aucune chaîne. La
+borne du contexte se dérive des bornes métier au lieu d'être choisie ; un état produit hors de ses
+bornes est refusé **en nommant le champ**, jamais coupé. Et la fidélité est prouvée sur le contexte
+assemblé avant que la tâche ne soit créée.
+
+L'aperçu montre maintenant le contexte complet : il annonçait « voici exactement la tâche qui sera
+créée » en omettant sa plus grosse partie.
+
+### La récupération du pilote
+
+`TASK-000` de TicketPulse est en `REVIEW`, avec `RUN-002` terminée. Son contrat porte une source
+amputée, mais l'état produit du projet n'a pas bougé depuis sa création — NOX le **prouve** en
+rejouant le rendu de l'époque sur les lignes d'aujourd'hui.
+
+Une correction humaine demandée sur `RUN-002` reçoit donc un bloc
+`Authoritative bootstrap source supplement` portant les 12 valeurs canoniques manquantes. La tâche
+n'est pas modifiée, ses critères non plus, et les prompts de `RUN-001` et `RUN-002` restent des
+faits historiques.
+
+### Ce que le prochain pilote devrait regarder
+
+Que la correction de `RUN-002` produise bien un `docs/V1_SCOPE.md` complet, sans que l'utilisateur
+ait eu à recopier quoi que ce soit à la main.
+
+Voir [D-428](DECISIONS.md), [D-429](DECISIONS.md), [D-430](DECISIONS.md), [D-431](DECISIONS.md).

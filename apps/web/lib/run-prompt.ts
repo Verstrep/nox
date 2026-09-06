@@ -67,6 +67,8 @@ export function buildCorrectionPrompt(input: {
   feedback: string | null;
   /** Contrat gele deja rendu, ou `null` pour la forme courte historique. */
   contract?: string | null;
+  /** Source canonique restituee, pour un amorcage genere par un rendu lossy. */
+  sourceSupplement?: string | null;
   /** Preuves d'echec deja rendues et bornees. */
   evidence?: string | null;
 }): ExecutionPrompt {
@@ -76,6 +78,7 @@ export function buildCorrectionPrompt(input: {
     sourceRunCode: input.sourceRunCode,
     feedback: input.feedback,
     contract: input.contract ?? null,
+    sourceSupplement: input.sourceSupplement ?? null,
     evidence: input.evidence ?? null,
     validationCommands: input.task.validationCommands,
     kind: input.task.kind,

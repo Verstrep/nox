@@ -38,6 +38,7 @@ import {
   buildBootstrapTaskSpec,
   classifyRepository,
   formatTaskCode,
+  summarizeForDisplay,
   type ArchitectPromptBrief,
   type ArchitectPromptMemory,
   type ArchitectPromptV1Plan,
@@ -78,15 +79,18 @@ const MEMORY: ArchitectPromptMemory = {
 const UPCOMING: BootstrapUpcomingTask[] = [
   {
     code: "TASK-001",
-    title: "Poser le domaine et la persistance",
-    objective: "Un repas se cree, se relit et survit a un rechargement.",
+    title: summarizeForDisplay("Poser le domaine et la persistance", 200),
+    objective: summarizeForDisplay(
+      "Un repas se cree, se relit et survit a un rechargement.",
+      300,
+    ),
     priority: "HIGH",
     status: "DRAFT",
   },
   {
     code: "TASK-002",
-    title: "Livrer l'experience de planning",
-    objective: "La semaine s'affiche et s'edite.",
+    title: summarizeForDisplay("Livrer l'experience de planning", 200),
+    objective: summarizeForDisplay("La semaine s'affiche et s'edite.", 300),
     priority: "MEDIUM",
     status: "DRAFT",
   },
@@ -110,8 +114,16 @@ const EXISTING_REPOSITORY: RepositoryInspection = {
   rootEntryCountTruncated: false,
 };
 
+/**
+ * La specification, extraite de l'issue.
+ *
+ * La construction rend desormais une union : elle peut refuser un etat produit
+ * qui ne tiendrait pas dans son propre contrat. Les cas de refus ont leurs
+ * propres tests ; ici, l'assertion tient lieu de garde et fait echouer le test
+ * plutot que de laisser lire un champ sur un refus.
+ */
 function spec(overrides: Partial<BootstrapSpecInput> = {}) {
-  return buildBootstrapTaskSpec({
+  const built = buildBootstrapTaskSpec({
     projectName: "Planificateur de repas",
     brief: BRIEF,
     v1Plan: PLAN,
@@ -120,6 +132,8 @@ function spec(overrides: Partial<BootstrapSpecInput> = {}) {
     inspection: EMPTY_REPOSITORY,
     ...overrides,
   });
+  assert.ok(built.ok, "la construction devait aboutir");
+  return built.spec;
 }
 
 describe("le code reserve", () => {

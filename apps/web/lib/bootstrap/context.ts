@@ -27,14 +27,16 @@
  */
 
 import {
-  BOOTSTRAP_SPEC_LIMITS,
+  BOOTSTRAP_PRESENTATION_LIMITS,
   BOOTSTRAP_SPEC_VERSION,
   PROJECT_MEMORY_STATUS,
   TASK_KIND,
   buildBootstrapTaskSpec,
+  summarizeForDisplay,
   type ArchitectPromptBrief,
   type ArchitectPromptMemory,
   type ArchitectPromptV1Plan,
+  type BootstrapSourceRefusal,
   type BootstrapTaskSpec,
   type BootstrapUpcomingTask,
   type DevelopmentTaskSummary,
@@ -84,11 +86,6 @@ export type BootstrapContext = {
   inspectionRevision: string;
 };
 
-function truncate(value: string, limit: number): string {
-  const trimmed = value.trim();
-  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
 /**
  * Memoire **active** seulement.
  *
@@ -127,7 +124,7 @@ function buildMemories(input: BootstrapContextInput): ArchitectPromptMemory[] {
  * applique, et n'ont pas bouge depuis.
  */
 function buildUpcomingTasks(input: BootstrapContextInput): BootstrapUpcomingTask[] {
-  const limits = BOOTSTRAP_SPEC_LIMITS.upcomingTasks;
+  const limits = BOOTSTRAP_PRESENTATION_LIMITS.upcomingTasks;
 
   return input.tasks
     .filter((task) => task.kind !== TASK_KIND.BOOTSTRAP)
@@ -136,8 +133,11 @@ function buildUpcomingTasks(input: BootstrapContextInput): BootstrapUpcomingTask
     .slice(0, limits.max)
     .map((task) => ({
       code: task.code,
-      title: truncate(input.sanitize(task.title), limits.titleLength),
-      objective: truncate(
+      // `summarizeForDisplay` rend un `SummaryText` : le champ ne peut pas
+      // recevoir une valeur canonique par distraction, et ce qui est resume
+      // ici ne peut plus repartir comme une source.
+      title: summarizeForDisplay(input.sanitize(task.title), limits.titleLength),
+      objective: summarizeForDisplay(
         input.sanitize(input.objectives.get(task.id) ?? ""),
         limits.objectiveLength,
       ),
@@ -147,17 +147,32 @@ function buildUpcomingTasks(input: BootstrapContextInput): BootstrapUpcomingTask
 }
 
 /**
+ * Issue de la construction.
+ *
+ * Une union plutot qu'un contexte eventuellement incomplet : un contrat
+ * d'amorcage tronque a l'air complet, et c'est precisement ce qui l'a rendu si
+ * couteux chez le premier pilote reel.
+ */
+export type BootstrapContextOutcome =
+  | { ok: true; context: BootstrapContext }
+  | { ok: false; refusal: BootstrapSourceRefusal };
+
+/**
  * Assemble le contexte, la specification et l'empreinte d'un amorcage.
  *
  * Deterministe de bout en bout : aucun appel, aucune horloge, aucun aleatoire.
  * Deux executions sur le meme etat produisent la meme tache et la meme
  * empreinte — c'est ce qui rend l'apercu digne de confiance.
+ *
+ * Le brief, le plan et la memoire y entrent **entiers**. Si l'etat produit
+ * sortait des bornes qui garantissent cette integralite, la construction refuse
+ * en nommant le champ : NOX ne fabrique pas un contrat qu'il sait incomplet.
  */
-export function buildBootstrapContext(input: BootstrapContextInput): BootstrapContext {
+export function buildBootstrapContext(input: BootstrapContextInput): BootstrapContextOutcome {
   const memories = buildMemories(input);
   const upcomingTasks = buildUpcomingTasks(input);
 
-  const spec = buildBootstrapTaskSpec({
+  const built = buildBootstrapTaskSpec({
     projectName: input.sanitize(input.projectName),
     brief: input.projectBrief,
     v1Plan: input.projectV1Plan,
@@ -166,11 +181,16 @@ export function buildBootstrapContext(input: BootstrapContextInput): BootstrapCo
     inspection: input.inspection,
   });
 
+  if (!built.ok) {
+    return { ok: false, refusal: built.refusal };
+  }
+
+  const spec = built.spec;
   const memoryRevision = bootstrapMemoryRevision(memories);
   const taskInventoryRevision = bootstrapTaskInventoryRevision(upcomingTasks);
   const inspectionRevision = repositoryInspectionRevision(input.inspection);
 
-  return {
+  const context: BootstrapContext = {
     spec,
     memories,
     upcomingTasks,
@@ -189,4 +209,6 @@ export function buildBootstrapContext(input: BootstrapContextInput): BootstrapCo
     taskInventoryRevision,
     inspectionRevision,
   };
+
+  return { ok: true, context };
 }

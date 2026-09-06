@@ -7085,3 +7085,115 @@ cette fois a l'ecran.
 **tient** cette precondition : elle affiche « Legacy Retry left task Ready without starting a run —
 OK ». Lui laisser « Task is in Failed — Blocked » etait faux deux fois, sur son statut et sur son
 verdict.
+
+
+### D-428 — Cinq natures de texte, et une seule qui ne se raccourcit jamais
+
+**Decision.** NOX distingue explicitement cinq natures de texte, et une seule d'entre elles est
+interdite de troncature.
+
+| Nature | Autorite | Peut etre raccourci ? |
+| --- | --- | --- |
+| **Etat canonique du projet** | brief, plan de V1, memoire active en base | non : c'est la source |
+| **Contrat deterministe d'une tache** | `Task.objective`, `context`, criteres | non pour la part canonique qu'il transporte |
+| **Contexte borne d'un fournisseur** | `apps/web/lib/architect/` | oui, et c'est voulu depuis HOTFIX-005 |
+| **Resume de presentation** | cartes, listes, inventaires | oui |
+| **Prompt d'execution historique** | `Run.prompt` | jamais reecrit, ni dans un sens ni dans l'autre |
+
+**Justification.** `bootstrap.ts` melangeait les deux premieres avec les deux suivantes sous une
+seule fonction `truncate`, appliquee champ par champ « pour ne pas recopier des pages de
+specification ». C'etait l'erreur exacte : ce que `TASK-000` doit recopier dans
+`docs/PROJECT_BRIEF.md` et `docs/V1_SCOPE.md`, elle doit d'abord le **recevoir** en entier.
+
+Le premier pilote reel l'a paye trois fois sur la meme tache :
+
+```text
+Direction technique : … et applique u…          ← coupee a 600 sur 653 caracteres
+Perimetre de V1 : 12 elements sur 18            ← six disparus, sans trace
+Memoire : 5 contenus sur 6 coupes a 400         ← MEM-001, 002, 004, 005, 006
+Contexte : 11 999 caracteres sur ~14 000        ← cinq sections de consignes emportees
+```
+
+Claude a recopie ce qu'il avait recu et a **refuse d'inventer la suite**. Il avait raison, et le
+critere « restituer fidelement le brief et le plan valides » est devenu impossible a approuver
+honnetement — sans que personne n'ait mal travaille.
+
+Le troisieme cas est le plus instructif : les six elements de perimetre n'etaient pas tronques,
+ils etaient **absents**. Aucun point de suspension, aucune trace. Une troncature se voit ; une
+liste coupee a son douzieme element ne se voit pas.
+
+**La separation est structurelle, pas conventionnelle.** Le rendu contractuel vit dans
+`packages/shared/src/bootstrap-source.ts`, qui ne contient aucun raccourcisseur — un test lit sa
+source pour le verifier. Ses fonctions ne prennent aucune chaine, seulement les objets canoniques
+eux-memes : il n'y a donc pas de parametre ou glisser un resume. Et `summarizeForDisplay` rend un
+type nominal `SummaryText`, qu'aucune valeur canonique ne satisfait sans conversion explicite.
+
+### D-429 — Une borne se derive des bornes metier, ou elle se remplace par un refus
+
+**Decision.** La borne du contexte d'amorcage n'est plus un chiffre. Elle est la somme de ce qu'un
+etat produit **valide** peut peser — 16 Kio pour le brief et le plan reunis, 48 Kio pour la memoire
+active, plus un majorant calcule du balisage — et de ce que les sections de presentation peuvent
+ajouter. Un projet dans ses bornes tient donc toujours. Un projet hors de ses bornes est **refuse
+en nommant le champ**, jamais coupe.
+
+**Justification.** Elever 12 000 a 40 000 aurait deplace le probleme d'un pilote au suivant, et
+personne n'aurait su dire quand la valeur redeviendrait fausse. Les entites concernees possedent
+deja des bornes metier, appliquees **a l'ecriture** : une donnee valide au sens de ces bornes doit
+survivre a sa materialisation. C'est une garantie, et la borne s'en deduit.
+
+Les deux budgets sont verifies **separement**. Les additionner laisserait passer une memoire hors
+borne compensee par un brief minuscule — c'est-a-dire exactement l'etat que l'ecriture refuse deja.
+
+**Le refus arrive avant la creation.** `buildBootstrapTaskSpec` rend une union, pas une
+specification eventuellement incomplete : un contrat d'amorcage tronque a l'air complet, et c'est
+precisement ce qui l'a rendu si couteux. La fidelite est en outre **prouvee** sur le contexte
+assemble — chaque valeur canonique doit y figurer entiere — plutot que supposee.
+
+### D-430 — Reparer un transport n'est pas rouvrir un contrat
+
+**Decision.** Une tache d'amorcage **non terminee**, dont l'etat produit n'a pas bouge depuis sa
+creation, et dont le contrat porte une source que NOX avait lui-meme tronquee, recoit dans le
+prompt de sa correction humaine un bloc `Authoritative bootstrap source supplement` portant la
+source canonique integrale. La tache n'est pas modifiee, les executions passees non plus.
+
+**Justification.** Le contrat gele est une bonne regle, et elle n'a pas d'exception ici : le
+contrat de TASK-000 n'est pas mauvais, il exige la bonne chose. Ce qui a manque est le **texte**
+qu'il demandait de recopier. Restituer ce texte satisfait le contrat ; le reecrire y substituerait
+un contrat que personne n'a valide.
+
+**La preuve se fait par rejeu, pas par une colonne.** NOX n'enregistre aucun instantane de la
+source d'une `TASK-000`. Ajouter une colonne de provenance aujourd'hui n'aiderait que les taches de
+demain, et laisserait sans recours celle qui a paye le defaut — c'est-a-dire la seule qui en ait
+besoin.
+
+Le generateur etant pur et deterministe, `renderLegacyBootstrapSource` rejoue le rendu de l'epoque
+sur le brief, le plan et la memoire d'**aujourd'hui**, et compare au texte stocke. La comparaison
+accepte qu'un des deux s'arrete plus tot — la troncature des 12 000 caracteres ne retire que des
+caracteres de fin, donc ce qui reste est un vrai prefixe — et refuse au premier caractere de
+difference. C'est plus strict qu'une comparaison de revisions, qui ne dirait rien de ce que la
+tache a reellement recu.
+
+**Les refus sont nommes, et ils ne disent pas la meme chose.** `source_changed` dit que NOX a
+regarde et que le projet a evolue ; `not_generated` dit que ce contexte ne vient pas de ce
+generateur ; `already_complete` dit qu'il n'y a rien a reparer. Les confondre enverrait chercher un
+defaut de NOX la ou le projet a simplement change.
+
+**Le supplement se dit lui-meme.** Il annonce a l'agent que le texte historique est incomplet, ce
+qu'il restitue, et ce qu'il ne change pas — objectif, criteres, perimetre, et le fait qu'aucune
+tache produit ne s'ouvre. Sans cela, l'agent verrait deux versions du meme plan et n'aurait aucune
+raison de preferer la seconde. Il pourrait meme conclure a une contradiction et s'arreter — ce que
+le pilote a fait, a juste titre, quand il a refuse d'inventer la fin d'une phrase.
+
+### D-431 — Le prompt de correction s'assemble a un seul endroit
+
+**Decision.** Les trois pages de preparation et `correction-launch.ts` passent par
+`buildCorrectionPromptFor`. Aucune ne construit ses entrees a la main.
+
+**Justification.** Les pages affichent le prompt **et son empreinte**. Si l'une d'elles oubliait un
+champ, elle montrerait un texte pendant que la session en recevrait un autre, et l'empreinte
+cesserait de prouver quoi que ce soit.
+
+Ce n'est pas une precaution abstraite : HOTFIX-006 a paye exactement cette erreur sur
+`ResumeCandidate`, assemble a la main sur huit surfaces dont une avait oublie `isLatestRun`. Le
+supplement de source est le meme genre de champ — celui qu'on oublie sur trois surfaces sur quatre.
+Un test lit la source des quatre fichiers et verifie qu'aucun n'appelle plus le constructeur brut.

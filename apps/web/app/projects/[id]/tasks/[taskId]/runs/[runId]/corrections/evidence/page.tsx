@@ -18,7 +18,7 @@ import {
 import { buildCorrectionContext } from "@/lib/correction-evidence";
 import { loadProject } from "@/lib/projects";
 import { reviewUrl } from "@/lib/review-display";
-import { buildCorrectionPrompt } from "@/lib/run-prompt";
+import { buildCorrectionPromptFor } from "@/lib/correction-prompt";
 import { claudeCorrectionPreflight } from "@/lib/runner/client";
 import { describeInfrastructureFailure } from "@/lib/runner/errors";
 import { loadRun } from "@/lib/runs";
@@ -123,13 +123,16 @@ export default async function PrepareEvidenceCorrectionPage({
 
   // Le prompt affiche est produit par la meme fonction que la Server Action :
   // ce qui est montre est exactement ce qui sera envoye.
-  const { prompt, sha256 } = buildCorrectionPrompt({
+  const promptBuild = await buildCorrectionPromptFor(db, {
     task,
+    project,
     sourceRunCode: context.runCode,
     feedback: null,
     contract: built.contract,
     evidence: built.evidence,
+    environment: process.env,
   });
+  const { prompt, sha256 } = promptBuild;
 
   const canAsk =
     refusal === null &&
@@ -225,6 +228,38 @@ export default async function PrepareEvidenceCorrectionPage({
             </p>
           ) : null}
         </SectionCard>
+
+        {promptBuild.supplement.ok ? (
+          <SectionCard
+            title="Supplement de source d'amorcage"
+            description="La source canonique que le contrat de cette tache n'avait pas transportee."
+          >
+            <p className="text-sm leading-relaxed text-zinc-400">
+              Le contrat de cette tache a ete genere par une version de NOX qui tronquait le
+              brief, le plan de V1 et la memoire du projet. La source complete est jointe au
+              prompt ci-dessous. Elle ne modifie ni l&apos;objectif, ni les criteres
+              d&apos;acceptation, ni le perimetre.
+            </p>
+            <p className="mt-3 text-xs text-zinc-500">
+              Champs restitues :{" "}
+              <span className="font-mono text-zinc-400">
+                {promptBuild.supplement.missingFields.join(", ")}
+              </span>
+            </p>
+          </SectionCard>
+        ) : promptBuild.supplement.reason === "source_changed" ? (
+          <SectionCard
+            title="Supplement de source refuse"
+            description="L'etat produit a change depuis la creation de cette tache."
+          >
+            <p className="text-sm leading-relaxed text-amber-200">
+              Le brief, le plan de V1 ou la memoire du projet ne sont plus ceux a partir desquels
+              cette tache a ete construite. NOX ne joint donc aucune source : lui substituer
+              l&apos;etat d&apos;aujourd&apos;hui remplacerait son contrat par un contrat que
+              personne n&apos;a valide.
+            </p>
+          </SectionCard>
+        ) : null}
 
         <SectionCard
           title="Preconditions"
